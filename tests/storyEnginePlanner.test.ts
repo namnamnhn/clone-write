@@ -80,6 +80,7 @@ const planFor = (chapter: number, participants?: readonly string[]): InternalCha
             uncertainty: 'The cost of a detour is unclear.',
             expectedConsequence: 'The next move becomes constrained.',
             purposeTags: ['plot'],
+            conflictImportance: 'minor',
         }],
         activeConstraintIds: ['travel-rule'],
         allowedRevealIds: [...context.allowedRevealIds],
@@ -131,12 +132,46 @@ describe('Story Engine V4 planner gates', () => {
         expect(validationCodes(wrongBeat)).toContain('BEAT_MISMATCH');
     });
 
-    it('rejects filler scenes and incomplete important conflicts', async () => {
+    it('rejects filler scenes and enforces the major-conflict contract at runtime', async () => {
         const filler = { ...planFor(33, ['character-a']), scenes: [{ ...planFor(33, ['character-a']).scenes[0], purposeTags: [] }] };
         expect(validationCodes(filler)).toContain('SCENE_PURPOSE_MISSING');
-        const incompleteConflict = { ...planFor(33, ['character-a']), scenes: [{ ...planFor(33, ['character-a']).scenes[0], intelligentConflict: {} }] };
-        const planner = createStructuredPlanner({ async plan() { return incompleteConflict; } });
-        await expect(planner.plan(buildPlannerContext(control, stateFor(33), 33))).rejects.toBeInstanceOf(ChapterPlanValidationError);
+        const majorWithoutDetails = { ...planFor(33, ['character-a']), scenes: [{ ...planFor(33, ['character-a']).scenes[0], conflictImportance: 'major' }] };
+        const partialMajor = { ...planFor(33, ['character-a']), scenes: [{ ...planFor(33, ['character-a']).scenes[0], conflictImportance: 'major', intelligentConflict: {} }] };
+        const context = buildPlannerContext(control, stateFor(33), 33);
+        await expect(createStructuredPlanner({ async plan() { return majorWithoutDetails; } }).plan(context)).rejects.toBeInstanceOf(ChapterPlanValidationError);
+        await expect(createStructuredPlanner({ async plan() { return partialMajor; } }).plan(context)).rejects.toBeInstanceOf(ChapterPlanValidationError);
+
+        const completeMajor = {
+            ...planFor(33, ['character-a']),
+            scenes: [{
+                ...planFor(33, ['character-a']).scenes[0],
+                conflictImportance: 'major' as const,
+                intelligentConflict: {
+                    protagonistObjective: 'Cross the gate district.',
+                    opponentObjective: 'Keep the protagonist away from the gate.',
+                    opponentKnowledge: ['gate-token'],
+                    opponentBeliefs: ['The protagonist lacks a token.'],
+                    rationalCountermove: 'Block the official route.',
+                    uncertainty: 'A hidden passage may exist.',
+                    expectedCostOrTradeoff: 'The opponent exposes a patrol pattern.',
+                },
+            }],
+        };
+        expect(validationCodes(completeMajor)).toEqual([]);
+        expect(validationCodes(planFor(33, ['character-a']))).toEqual([]);
+    });
+
+    it('rejects future gate IDs as active constraints and retains every validated canon constraint', () => {
+        const futureRevealConstraint = { ...planFor(100, ['character-a']), activeConstraintIds: ['mastermind-gate'] };
+        const futureEventConstraint = { ...planFor(100, ['character-a']), activeConstraintIds: ['civil-war-gate'] };
+        expect(validationCodes(futureRevealConstraint)).toContain('UNKNOWN_CONSTRAINT');
+        expect(validationCodes(futureEventConstraint)).toContain('UNKNOWN_CONSTRAINT');
+
+        const plan = planFor(100, ['character-a']);
+        expect(validationCodes(plan)).toEqual([]);
+        expect(sanitizeWriterChapterPlan(plan, control, stateFor(100)).canonConstraints).toEqual([
+            { id: 'travel-rule', text: 'Travel requires a gate token.', scope: 'world' },
+        ]);
     });
 });
 
@@ -184,10 +219,50 @@ describe('Narrative memory selection', () => {
             selectedLongTermMemories: Array.from({ length: 10 }, (_, index) => ({ id: `memory-${index + 1}`, establishedChapter: index + 1, summary: `memory-${index + 1}`, relevance: index + 1 })),
         };
         const original = JSON.stringify(input);
-        const selected = selectNarrativeMemory(input);
+        const selected = selectNarrativeMemory(input, 21);
         expect(selected.recentRawChapters.map(value => value.chapterNumber)).toEqual([17, 18, 19, 20]);
         expect(selected.structuredRecentSummaries.map(value => value.chapterNumber)).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
         expect(selected.selectedLongTermMemories.map(value => value.establishedChapter)).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
         expect(JSON.stringify(input)).toBe(original);
+    });
+
+    it('filters target and future material before selecting windows without mutating input', () => {
+        const input: NarrativeMemoryInput = {
+            recentRawChapters: [
+                { chapterNumber: 99, text: 'raw-past' },
+                { chapterNumber: 100, text: 'raw-target' },
+                { chapterNumber: 580, text: 'raw-future' },
+            ],
+            structuredRecentSummaries: [
+                { chapterNumber: 99, summary: 'summary-past' },
+                { chapterNumber: 100, summary: 'summary-target' },
+                { chapterNumber: 580, summary: 'summary-future' },
+            ],
+            selectedLongTermMemories: [
+                { id: 'past-memory', establishedChapter: 99, summary: 'long-past', relevance: 1 },
+                { id: 'target-memory', establishedChapter: 100, summary: 'long-target', relevance: 99 },
+                { id: 'future-memory', establishedChapter: 580, summary: 'long-future', relevance: 100 },
+            ],
+        };
+        const original = JSON.stringify(input);
+        const selected = buildPlannerContext(control, stateFor(100), 100, input).narrativeMemory;
+        expect(selected.recentRawChapters.map(memory => memory.chapterNumber)).toEqual([99]);
+        expect(selected.structuredRecentSummaries.map(memory => memory.chapterNumber)).toEqual([99]);
+        expect(selected.selectedLongTermMemories.map(memory => memory.id)).toEqual(['past-memory']);
+        expect(JSON.stringify(input)).toBe(original);
+    });
+
+    it('returns no memory when every configured window is zero', () => {
+        const input: NarrativeMemoryInput = {
+            recentRawChapters: [{ chapterNumber: 99, text: 'raw' }],
+            structuredRecentSummaries: [{ chapterNumber: 99, summary: 'summary' }],
+            selectedLongTermMemories: [{ id: 'memory', establishedChapter: 99, summary: 'long' }],
+        };
+        const selected = selectNarrativeMemory(input, 100, {
+            recentRawChapters: 0,
+            structuredSummaryWindow: 0,
+            selectedLongTermMemories: 0,
+        });
+        expect(selected).toEqual({ recentRawChapters: [], structuredRecentSummaries: [], selectedLongTermMemories: [] });
     });
 });

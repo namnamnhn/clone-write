@@ -12,6 +12,8 @@ export const SCENE_PURPOSE_TAGS = [
 ] as const;
 
 export type ScenePurposeTag = typeof SCENE_PURPOSE_TAGS[number];
+export const CONFLICT_IMPORTANCE = ['minor', 'major'] as const;
+export type ConflictImportance = typeof CONFLICT_IMPORTANCE[number];
 export type PlanValidationSeverity = 'error' | 'warning';
 
 export interface PlanValidationIssue {
@@ -54,9 +56,10 @@ export interface PlannerGateStatus {
 
 export interface PlannerHardConstraint {
     readonly id: StoryId;
-    readonly type: 'canon-rule' | 'character-gate' | 'pov-gate' | 'reveal-gate' | 'relationship-gate' | 'story-event-gate';
+    /** Writer-visible active constraints are canon rules only; gates use dedicated status views. */
+    readonly type: 'canon-rule';
     readonly referenceId: StoryId;
-    readonly writerText?: string;
+    readonly writerText: string;
 }
 
 export interface RawChapterMemory {
@@ -130,7 +133,8 @@ export interface PlannerContext {
     readonly allowedRelationshipEvents: readonly { readonly id: StoryId; readonly participantIds: readonly StoryId[] }[];
     /** References only; raw secret values are intentionally never copied into model context. */
     readonly authorOnlySecretReferences: readonly { readonly id: StoryId; readonly revealId?: StoryId }[];
-    readonly hardConstraints: readonly PlannerHardConstraint[];
+    /** Only constraints currently applicable to this chapter; locked gates live in typed status/allow lists. */
+    readonly activeHardConstraints: readonly PlannerHardConstraint[];
     readonly narrativeMemory: SelectedNarrativeMemory;
 }
 
@@ -155,6 +159,7 @@ export interface InternalPlanScene {
     readonly uncertainty: string;
     readonly expectedConsequence: string;
     readonly purposeTags: readonly ScenePurposeTag[];
+    readonly conflictImportance: ConflictImportance;
     readonly intelligentConflict?: IntelligentConflictPlan;
 }
 
@@ -210,6 +215,7 @@ export interface WriterPlanScene {
     readonly uncertainty: string;
     readonly expectedConsequence: string;
     readonly purposeTags: readonly ScenePurposeTag[];
+    readonly conflictImportance: ConflictImportance;
 }
 
 /** Explicitly projected Writer contract. It has no author-only or state-extension fields. */

@@ -39,9 +39,12 @@ const selectNewestChapters = <T extends { readonly chapterNumber: number }>(
     values: readonly T[],
     count: number,
     clone: (value: T) => T,
-): readonly T[] => byChapterThenIndex(values)
-    .slice(count === 0 ? 0 : -count)
-    .map(entry => clone(entry.value));
+): readonly T[] => {
+    if (count === 0) return [];
+    return byChapterThenIndex(values)
+        .slice(-count)
+        .map(entry => clone(entry.value));
+};
 
 const cloneRawMemory = (value: RawChapterMemory): RawChapterMemory => ({
     chapterNumber: value.chapterNumber,
@@ -78,19 +81,29 @@ const normalizePolicy = (policy: NarrativeMemorySelectionPolicy): NarrativeMemor
 };
 
 /**
- * Select bounded memory deterministically. Recent material is selected by recency, while
- * long-term memories are selected by explicit relevance and then presented chronologically.
+ * Select bounded pre-target memory deterministically. Material from the target chapter or later
+ * is filtered out before windowing; recent material is selected by recency, while long-term
+ * memories are selected by explicit relevance and then presented chronologically.
  */
 export const selectNarrativeMemory = (
     input: NarrativeMemoryInput | undefined,
+    targetChapter: number,
     suppliedPolicy: NarrativeMemorySelectionPolicy = DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
 ): SelectedNarrativeMemory => {
+    if (!isValidChapter(targetChapter)) throw new Error('target chapter must be a positive integer');
     const policy = normalizePolicy(suppliedPolicy);
-    const recentRawChapters = selectNewestChapters(input?.recentRawChapters ?? [], policy.recentRawChapters, cloneRawMemory);
+    const recentRawChapters = selectNewestChapters(
+        (input?.recentRawChapters ?? []).filter(memory => isValidChapter(memory.chapterNumber) && memory.chapterNumber < targetChapter),
+        policy.recentRawChapters,
+        cloneRawMemory,
+    );
     const structuredRecentSummaries = selectNewestChapters(
-        input?.structuredRecentSummaries ?? [], policy.structuredSummaryWindow, cloneStructuredMemory,
+        (input?.structuredRecentSummaries ?? []).filter(memory => isValidChapter(memory.chapterNumber) && memory.chapterNumber < targetChapter),
+        policy.structuredSummaryWindow,
+        cloneStructuredMemory,
     );
     const selectedLongTermMemories = (input?.selectedLongTermMemories ?? [])
+        .filter(memory => isValidChapter(memory.establishedChapter) && memory.establishedChapter < targetChapter)
         .map((value, index) => ({ value, index }))
         .sort((left, right) => (right.value.relevance ?? 0) - (left.value.relevance ?? 0)
             || right.value.establishedChapter - left.value.establishedChapter || left.index - right.index)
@@ -209,16 +222,11 @@ export const buildPlannerContext = (
             .filter(event => isRelationshipEventAllowed(control, event.id, targetChapter))
             .map(event => ({ id: event.id, participantIds: [...event.participantIds] })),
         authorOnlySecretReferences: control.authorOnlySecrets.map(secret => ({ id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }) })),
-        hardConstraints: [
+        activeHardConstraints: [
             ...control.canonRules
                 .filter(rule => rule.availableFromChapter <= targetChapter && (rule.expiresAfterChapter === undefined || targetChapter <= rule.expiresAfterChapter))
                 .map(rule => ({ id: rule.id, type: 'canon-rule' as const, referenceId: rule.id, writerText: rule.text })),
-            ...control.gates.characters.map(gate => ({ id: gate.id, type: 'character-gate' as const, referenceId: gate.characterId })),
-            ...control.gates.pov.map(gate => ({ id: gate.id, type: 'pov-gate' as const, referenceId: gate.characterId })),
-            ...control.gates.reveals.map(gate => ({ id: gate.id, type: 'reveal-gate' as const, referenceId: gate.revealId })),
-            ...control.gates.relationships.map(gate => ({ id: gate.id, type: 'relationship-gate' as const, referenceId: gate.eventId })),
-            ...control.gates.events.map(gate => ({ id: gate.id, type: 'story-event-gate' as const, referenceId: gate.eventId })),
         ],
-        narrativeMemory: selectNarrativeMemory(memoryInput, memoryPolicy),
+        narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
     };
 };

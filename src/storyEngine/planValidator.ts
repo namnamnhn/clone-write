@@ -7,6 +7,8 @@ import {
     InternalPlanScene,
     PlannerContext,
     PlanValidationIssue,
+    CONFLICT_IMPORTANCE,
+    ConflictImportance,
     SCENE_PURPOSE_TAGS,
     ScenePurposeTag,
 } from './plannerTypes';
@@ -86,12 +88,21 @@ const parseScene = (value: unknown, path: string, issues: PlanValidationIssue[])
     if (!isIdArray(rawTags) || rawTags.some(tag => !SCENE_PURPOSE_TAGS.includes(tag as ScenePurposeTag))) {
         issue(issues, 'INVALID_PURPOSE_TAGS', `${path}.purposeTags`, 'must contain supported purpose tags');
     }
+    const conflictImportance = value.conflictImportance;
+    if (!isText(conflictImportance) || !CONFLICT_IMPORTANCE.includes(conflictImportance as ConflictImportance)) {
+        issue(issues, 'INVALID_CONFLICT_IMPORTANCE', `${path}.conflictImportance`, 'must be minor or major');
+    }
+    if (conflictImportance === 'major' && value.intelligentConflict === undefined) {
+        issue(issues, 'INTELLIGENT_CONFLICT_REQUIRED', `${path}.intelligentConflict`, 'major conflict requires intelligent conflict details');
+    }
     const intelligentConflict = parseIntelligentConflict(value.intelligentConflict, `${path}.intelligentConflict`, issues);
     if (!id || !goal || !location || !povCharacterId || !participantIds || !conflictOrObstacle || !uncertainty || !expectedConsequence
-        || !Number.isSafeInteger(order) || (order as number) < 1 || !isIdArray(rawTags) || rawTags.some(tag => !SCENE_PURPOSE_TAGS.includes(tag as ScenePurposeTag))) return undefined;
+        || !Number.isSafeInteger(order) || (order as number) < 1 || !isIdArray(rawTags) || rawTags.some(tag => !SCENE_PURPOSE_TAGS.includes(tag as ScenePurposeTag))
+        || !isText(conflictImportance) || !CONFLICT_IMPORTANCE.includes(conflictImportance as ConflictImportance)
+        || (conflictImportance === 'major' && intelligentConflict === undefined)) return undefined;
     return {
         id, order: order as number, goal, location, povCharacterId, participantIds,
-        conflictOrObstacle, uncertainty, expectedConsequence, purposeTags: [...rawTags] as ScenePurposeTag[],
+        conflictOrObstacle, uncertainty, expectedConsequence, purposeTags: [...rawTags] as ScenePurposeTag[], conflictImportance: conflictImportance as ConflictImportance,
         ...(value.intelligentConflict === undefined ? {} : intelligentConflict === undefined ? {} : { intelligentConflict }),
     };
 };
@@ -182,6 +193,15 @@ export const parseInternalChapterPlan = (value: unknown): InternalPlanParseResul
 
 const hasOnlyKnown = (values: readonly string[], allowed: ReadonlySet<string>): boolean => values.every(value => allowed.has(value));
 
+const hasCompleteIntelligentConflict = (conflict: IntelligentConflictPlan | undefined): boolean => conflict !== undefined
+    && isText(conflict.protagonistObjective)
+    && isText(conflict.opponentObjective)
+    && isIdArray(conflict.opponentKnowledge)
+    && isIdArray(conflict.opponentBeliefs)
+    && isText(conflict.rationalCountermove)
+    && isText(conflict.uncertainty)
+    && isText(conflict.expectedCostOrTradeoff);
+
 /** Checks semantic invariants against the freshly built target-chapter context. */
 export const validateInternalChapterPlan = (
     plan: InternalChapterPlan,
@@ -191,7 +211,7 @@ export const validateInternalChapterPlan = (
     const add = (code: string, path: string, message: string) => issue(issues, code, path, message);
     const availableCharacters = new Set(context.availableCharacters.map(character => character.id));
     const allowedPovs = new Set(context.povEligibility.filter(entry => entry.allowed).map(entry => entry.id));
-    const allowedConstraints = new Set(context.hardConstraints.map(constraint => constraint.id));
+    const allowedConstraints = new Set(context.activeHardConstraints.map(constraint => constraint.id));
     const allowedReveals = new Set(context.allowedRevealIds);
     const allowedEvents = new Set(context.allowedStoryEventIds);
     const allowedRelationshipEvents = new Map(context.allowedRelationshipEvents.map(event => [event.id, new Set(event.participantIds)]));
@@ -221,9 +241,10 @@ export const validateInternalChapterPlan = (
         if (!hasOnlyKnown(scene.purposeTags, new Set(SCENE_PURPOSE_TAGS))) add('SCENE_PURPOSE_INVALID', `scenes.${index}.purposeTags`, 'contains an unsupported purpose tag');
         if (!allowedPovs.has(scene.povCharacterId)) add('POV_LOCKED', `scenes.${index}.povCharacterId`, 'scene POV is unavailable');
         if (!hasOnlyKnown(scene.participantIds, availableCharacters) || !scene.participantIds.every(id => plan.participantIds.includes(id))) add('CHARACTER_LOCKED', `scenes.${index}.participantIds`, 'scene includes an unavailable or undeclared participant');
-        if (scene.intelligentConflict) {
-            const conflict = scene.intelligentConflict;
-            if (!conflict.rationalCountermove || !conflict.uncertainty || !conflict.expectedCostOrTradeoff) add('INTELLIGENT_CONFLICT_INCOMPLETE', `scenes.${index}.intelligentConflict`, 'important conflict needs countermove, uncertainty, and cost');
+        if (scene.conflictImportance === 'major' && scene.intelligentConflict === undefined) {
+            add('INTELLIGENT_CONFLICT_REQUIRED', `scenes.${index}.intelligentConflict`, 'major conflict requires intelligent conflict details');
+        } else if (scene.intelligentConflict !== undefined && !hasCompleteIntelligentConflict(scene.intelligentConflict)) {
+            add('INTELLIGENT_CONFLICT_INCOMPLETE', `scenes.${index}.intelligentConflict`, 'intelligent conflict must include all required strategic fields');
         }
     });
     plan.expectedResourceDeltas.forEach((delta, index) => {

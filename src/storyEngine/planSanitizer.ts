@@ -78,11 +78,15 @@ export const sanitizeWriterChapterPlan = (
             uncertainty: scene.uncertainty,
             expectedConsequence: scene.expectedConsequence,
             purposeTags: [...scene.purposeTags],
+            conflictImportance: scene.conflictImportance,
         })),
-        canonConstraints: plan.activeConstraintIds
-            .map(id => canonById.get(id))
-            .filter((rule): rule is NonNullable<typeof rule> => rule !== undefined)
-            .map(rule => ({ id: rule.id, text: rule.text, scope: rule.scope })),
+        canonConstraints: plan.activeConstraintIds.map(id => {
+            const rule = canonById.get(id);
+            // Validation accepts only currently active canon constraints. Keep this defensive
+            // fail-closed assertion so a future schema expansion cannot silently drop one.
+            if (!rule) throw new ChapterPlanValidationError([gateIssue('ACTIVE_CONSTRAINT_UNPROJECTABLE', 'activeConstraintIds', `cannot project active constraint ${id}`)]);
+            return { id: rule.id, text: rule.text, scope: rule.scope };
+        }),
         // Controlled text is resolved only after the ID has passed source-of-truth gates above.
         reveals: plan.plannedRevealIds.map(id => {
             const reveal = revealById.get(id)!;
