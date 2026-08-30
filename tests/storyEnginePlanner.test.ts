@@ -161,17 +161,39 @@ describe('Story Engine V4 planner gates', () => {
         expect(validationCodes(planFor(33, ['character-a']))).toEqual([]);
     });
 
-    it('rejects future gate IDs as active constraints and retains every validated canon constraint', () => {
+    it('requires the exact active hard-constraint set and projects each constraint once', () => {
+        const context = buildPlannerContext(control, stateFor(100), 100);
+        const missingConstraintPlan = { ...planFor(100, ['character-a']), activeConstraintIds: [] };
+        expect(validationCodes(missingConstraintPlan)).toContain('MISSING_ACTIVE_CONSTRAINT');
+        expect(() => sanitizeWriterChapterPlan(missingConstraintPlan, control, stateFor(100))).toThrow(ChapterPlanValidationError);
         const futureRevealConstraint = { ...planFor(100, ['character-a']), activeConstraintIds: ['mastermind-gate'] };
         const futureEventConstraint = { ...planFor(100, ['character-a']), activeConstraintIds: ['civil-war-gate'] };
         expect(validationCodes(futureRevealConstraint)).toContain('UNKNOWN_CONSTRAINT');
         expect(validationCodes(futureEventConstraint)).toContain('UNKNOWN_CONSTRAINT');
+        expect(validationCodes({ ...planFor(100, ['character-a']), activeConstraintIds: ['travel-rule', 'travel-rule'] })).toContain('DUPLICATE_ACTIVE_CONSTRAINT');
 
         const plan = planFor(100, ['character-a']);
         expect(validationCodes(plan)).toEqual([]);
-        expect(sanitizeWriterChapterPlan(plan, control, stateFor(100)).canonConstraints).toEqual([
+        const writerPlan = sanitizeWriterChapterPlan(plan, control, stateFor(100));
+        expect(writerPlan.canonConstraints).toEqual([
             { id: 'travel-rule', text: 'Travel requires a gate token.', scope: 'world' },
         ]);
+        expect(writerPlan.canonConstraints.map(constraint => constraint.id)).toEqual(context.activeHardConstraints.map(constraint => constraint.id));
+
+        const blueprint = makeBlueprint();
+        const twoRuleControl = compileStoryControl({
+            ...blueprint,
+            canonRules: [
+                ...blueprint.canonRules!,
+                { id: 'oath-rule', text: 'An oath must be honored.', availableFromChapter: 1, scope: 'canon' },
+            ],
+        });
+        const twoRuleContext = buildPlannerContext(twoRuleControl, stateFor(100), 100);
+        const partialPlan = { ...planFor(100, ['character-a']), activeConstraintIds: ['travel-rule'] };
+        expect(validateInternalChapterPlan(partialPlan, twoRuleContext).map(issue => issue.code)).toContain('MISSING_ACTIVE_CONSTRAINT');
+        const completePlan = { ...partialPlan, activeConstraintIds: ['oath-rule', 'travel-rule'] };
+        expect(validateInternalChapterPlan(completePlan, twoRuleContext)).toEqual([]);
+        expect(sanitizeWriterChapterPlan(completePlan, twoRuleControl, stateFor(100)).canonConstraints.map(constraint => constraint.id).sort()).toEqual(['oath-rule', 'travel-rule']);
     });
 });
 
@@ -264,5 +286,39 @@ describe('Narrative memory selection', () => {
             selectedLongTermMemories: 0,
         });
         expect(selected).toEqual({ recentRawChapters: [], structuredRecentSummaries: [], selectedLongTermMemories: [] });
+    });
+});
+
+describe('StoryState temporal context safety', () => {
+    it('fails closed for a future state snapshot', () => {
+        expect(() => buildPlannerContext(control, stateFor(500), 100)).toThrow('state current chapter must not be later');
+    });
+
+    it('filters future continuity and fact knowledge without mutating the input state', () => {
+        const state = {
+            ...stateFor(100),
+            facts: [
+                { id: 'past-fact', text: 'Past fact.', establishedChapter: 99, visibility: 'writer' as const },
+                { id: 'future-fact', text: 'Future fact.', establishedChapter: 200, visibility: 'writer' as const },
+            ],
+            characterKnowledge: [{ characterId: 'character-a', factIds: ['past-fact', 'future-fact', 'unknown-fact'] }],
+            continuity: {
+                pendingThreads: [
+                    { text: 'Past continuity.', visibility: 'writer' as const, establishedChapter: 99 },
+                    { text: 'Future continuity.', visibility: 'writer' as const, establishedChapter: 200 },
+                ],
+                notes: [
+                    { text: 'Past note.', visibility: 'writer' as const, establishedChapter: 100 },
+                    { text: 'Future note.', visibility: 'writer' as const, establishedChapter: 200 },
+                ],
+            },
+        };
+        const original = JSON.stringify(state);
+        const context = buildPlannerContext(control, state, 100);
+        expect(context.continuity.pendingThreads.map(entry => entry.text)).toEqual(['Past continuity.']);
+        expect(context.continuity.notes.map(entry => entry.text)).toEqual(['Past note.']);
+        expect(context.characterKnowledge).toEqual([{ characterId: 'character-a', factIds: ['past-fact'] }]);
+        expect(JSON.stringify(state)).toBe(original);
+        expect(Object.isFrozen(state)).toBe(false);
     });
 });

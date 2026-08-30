@@ -123,24 +123,30 @@ const copyResources = (resources: StoryState['resources'], allowedIds: ReadonlyS
     return output;
 };
 
-const copyContinuityEntries = (entries: readonly ContinuityEntry[]): readonly ContinuityEntry[] =>
-    entries.map(entry => ({ text: entry.text, visibility: entry.visibility, establishedChapter: entry.establishedChapter }));
+const copyContinuityEntries = (entries: readonly ContinuityEntry[], chapter: number): readonly ContinuityEntry[] =>
+    entries
+        .filter(entry => entry.establishedChapter <= chapter)
+        .map(entry => ({ text: entry.text, visibility: entry.visibility, establishedChapter: entry.establishedChapter }));
 
-const copyContinuity = (continuity: StoryState['continuity']) => ({
+const copyContinuity = (continuity: StoryState['continuity'], chapter: number) => ({
     ...(continuity.timelinePosition === undefined ? {} : { timelinePosition: continuity.timelinePosition }),
     ...(continuity.lastScene === undefined ? {} : { lastScene: continuity.lastScene }),
     ...(continuity.povCharacterId === undefined ? {} : { povCharacterId: continuity.povCharacterId }),
-    pendingThreads: copyContinuityEntries(continuity.pendingThreads),
-    notes: copyContinuityEntries(continuity.notes),
+    pendingThreads: copyContinuityEntries(continuity.pendingThreads, chapter),
+    notes: copyContinuityEntries(continuity.notes, chapter),
 });
 
 const visibleFacts = (facts: readonly StoryFact[], chapter: number, visibility: StoryFact['visibility']) => facts
     .filter(fact => fact.visibility === visibility && fact.establishedChapter <= chapter)
     .map(fact => ({ id: fact.id, text: fact.text }));
 
-const copyKnowledge = (knowledge: readonly CharacterKnowledge[], allowedIds: ReadonlySet<StoryId>) => knowledge
+const copyKnowledge = (
+    knowledge: readonly CharacterKnowledge[],
+    allowedIds: ReadonlySet<StoryId>,
+    validFactIds: ReadonlySet<StoryId>,
+) => knowledge
     .filter(entry => allowedIds.has(entry.characterId))
-    .map(entry => ({ characterId: entry.characterId, factIds: [...entry.factIds] }));
+    .map(entry => ({ characterId: entry.characterId, factIds: entry.factIds.filter(factId => validFactIds.has(factId)) }));
 
 const currentThreads = (threads: readonly OpenThread[], chapter: number) => threads
     .filter(thread => thread.openedChapter <= chapter)
@@ -160,6 +166,9 @@ export const buildPlannerContext = (
     if (!isValidChapter(targetChapter) || targetChapter > control.engine.plannedChapterCount) {
         throw new Error('target chapter must be within the planned story range');
     }
+    if (!isValidChapter(state.currentChapter) || state.currentChapter > targetChapter) {
+        throw new Error('state current chapter must not be later than the target chapter');
+    }
     const arc = getArcForChapter(control, targetChapter);
     const beat = getBeatForChapter(control, targetChapter);
     if (!arc) throw new Error(`no unique arc resolves for chapter ${targetChapter}`);
@@ -168,6 +177,9 @@ export const buildPlannerContext = (
 
     const availableCharacters = getAllowedCharactersForChapter(control, targetChapter);
     const availableIds = new Set(availableCharacters.map(character => character.id));
+    const validFactIds = new Set(state.facts
+        .filter(fact => fact.establishedChapter <= targetChapter)
+        .map(fact => fact.id));
     const activeIds = state.activeCharacterIds.filter(id => availableIds.has(id));
     const makeGateStatus = (ids: readonly StoryId[], allowed: (id: StoryId) => boolean) => ids
         .map(id => ({ id, allowed: allowed(id) }));
@@ -204,14 +216,14 @@ export const buildPlannerContext = (
         povEligibility: makeGateStatus(availableCharacters.map(character => character.id), id => isPovAllowed(control, id, targetChapter)),
         writerVisibleFacts: visibleFacts(state.facts, targetChapter, 'writer'),
         internalFacts: visibleFacts(state.facts, targetChapter, 'internal'),
-        characterKnowledge: copyKnowledge(state.characterKnowledge, availableIds),
+        characterKnowledge: copyKnowledge(state.characterKnowledge, availableIds, validFactIds),
         relationships: state.relationships
             .filter(relationship => relationship.establishedChapter <= targetChapter && relationship.participantIds.every(id => availableIds.has(id)))
             .map(relationship => ({ id: relationship.id, participantIds: [...relationship.participantIds], state: relationship.state })),
         unresolvedClues: currentThreads(state.unresolvedClues, targetChapter),
         unresolvedPromises: currentThreads(state.unresolvedPromises, targetChapter),
         resources: copyResources(state.resources, availableIds),
-        continuity: copyContinuity(state.continuity),
+        continuity: copyContinuity(state.continuity, targetChapter),
         allowedRevealIds: makeGateStatus(control.reveals.map(reveal => reveal.id), id => isRevealAllowed(control, id, targetChapter)).filter(status => status.allowed).map(status => status.id),
         lockedRevealIds: makeGateStatus(control.reveals.map(reveal => reveal.id), id => isRevealAllowed(control, id, targetChapter)).filter(status => !status.allowed).map(status => status.id),
         allowedStoryEventIds: makeGateStatus(control.storyEvents.map(event => event.id), id => isStoryEventAllowed(control, id, targetChapter)).filter(status => status.allowed).map(status => status.id),

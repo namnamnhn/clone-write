@@ -225,7 +225,11 @@ export const validateInternalChapterPlan = (
     if (!allowedPovs.has(plan.povCharacterId)) add('POV_LOCKED', 'povCharacterId', 'POV is unavailable for this chapter');
     if (!hasOnlyKnown(plan.participantIds, availableCharacters)) add('CHARACTER_LOCKED', 'participantIds', 'contains unavailable character');
     if (!plan.participantIds.includes(plan.povCharacterId)) add('POV_NOT_PARTICIPANT', 'participantIds', 'must include the chapter POV');
+    const activeConstraintIds = new Set(plan.activeConstraintIds);
+    if (activeConstraintIds.size !== plan.activeConstraintIds.length) add('DUPLICATE_ACTIVE_CONSTRAINT', 'activeConstraintIds', 'must not contain duplicate constraint IDs');
     if (!hasOnlyKnown(plan.activeConstraintIds, allowedConstraints)) add('UNKNOWN_CONSTRAINT', 'activeConstraintIds', 'contains a constraint outside the context allow-list');
+    const missingActiveConstraints = [...allowedConstraints].filter(id => !activeConstraintIds.has(id));
+    if (missingActiveConstraints.length > 0) add('MISSING_ACTIVE_CONSTRAINT', 'activeConstraintIds', `must include all active hard constraints: ${missingActiveConstraints.join(', ')}`);
     if (!hasOnlyKnown(plan.allowedRevealIds, allowedReveals)) add('REVEAL_LOCKED', 'allowedRevealIds', 'contains a locked or unknown reveal');
     if (!hasOnlyKnown(plan.plannedRevealIds, allowedReveals) || !plan.plannedRevealIds.every(id => plan.allowedRevealIds.includes(id))) add('REVEAL_LOCKED', 'plannedRevealIds', 'must be both allowed by context and declared allowed by the plan');
     if (!hasOnlyKnown(plan.storyEventIds, allowedEvents)) add('STORY_EVENT_LOCKED', 'storyEventIds', 'contains a locked or unknown story event');
