@@ -1,0 +1,214 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Global custom CSS — chuyển nguyên văn từ khối <style> nội tuyến
+   trong index.html (trước đây dùng kèm Tailwind CDN).
+   ============================================================ */
+
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden; /* Prevent native scroll, force app scroll */
+  overscroll-behavior-y: none; /* Prevent pull-to-refresh/rubber banding */
+  touch-action: pan-x pan-y; /* Allow basic panning */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: #f8fafc;
+  color: #334155;
+  font-size: 16px; /* Tăng size chữ cơ bản lên 16px */
+}
+
+/* Đồng bộ color-scheme với theme đang chọn. */
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+
+/* Mesh Gradient Background - Light. */
+.mesh-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  background-color: #f8fafc;
+  background-image:
+    radial-gradient(at 15% 10%, hsla(234,89%,64%,0.10) 0px, transparent 55%),
+    radial-gradient(at 85% 15%, hsla(199,89%,60%,0.09) 0px, transparent 55%),
+    radial-gradient(at 50% 100%, hsla(255,70%,68%,0.07) 0px, transparent 60%);
+  transition: opacity 0.5s ease, background-color 0.4s ease;
+}
+
+/* Dark Mode Mesh Background - Zen Mode. */
+.dark .mesh-bg {
+  background-color: #050505; /* True Black / Deepest Gray */
+  background-image:
+    radial-gradient(at 20% 0%, hsla(234,80%,60%,0.05) 0px, transparent 45%);
+}
+
+/* Subtle Grid Pattern Overlay */
+.grid-pattern {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2394a3b8' fill-opacity='0.08'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+.dark .grid-pattern {
+  opacity: 0.03; /* Fainter grid for Zen */
+}
+
+/* Custom scrollbar (mặc định cho MỌI phần tử). */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.02);
+}
+.dark ::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.02);
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 99px;
+  border: 2px solid rgba(0,0,0,0);
+  background-clip: padding-box;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #262626; /* Darker thumb */
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  border: 2px solid rgba(0,0,0,0);
+  background-clip: padding-box;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #404040;
+}
+
+/* .no-scrollbar: ẩn hẳn thanh cuộn nhưng vẫn cuộn được — dùng cho các
+   thanh công cụ cuộn ngang. */
+.no-scrollbar {
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* IE/Edge cũ */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Trên PC vẫn hiện thanh cuộn mảnh để bấm-giữ-kéo bằng chuột. */
+@media (hover: hover) and (pointer: fine) {
+  .no-scrollbar {
+    scrollbar-width: thin;
+    -ms-overflow-style: auto;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: block;
+    height: 6px;
+  }
+  .no-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .no-scrollbar::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 99px;
+  }
+  .dark .no-scrollbar::-webkit-scrollbar-thumb {
+    background: #27272a;
+  }
+  .no-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+}
+
+/* .custom-scrollbar: thanh cuộn mảnh cho khu vực nội dung dài. */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 99px;
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #27272a;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Cuộn mượt kiểu momentum trên iOS/Safari + chặn scroll chaining. */
+.custom-scrollbar,
+.no-scrollbar,
+[class*="overflow-y-auto"],
+[class*="overflow-x-auto"] {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* .action-btn: style chuẩn cho các nút trong thanh công cụ dưới cùng. */
+.action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 40px;
+  padding: 4px;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.action-btn:hover {
+  background-color: #f8fafc; /* slate-50 */
+  border-color: #e2e8f0; /* slate-200 */
+}
+.dark .action-btn:hover {
+  background-color: #1e293b; /* slate-800 */
+  border-color: #334155; /* slate-700 */
+}
+.action-btn:active {
+  transform: scale(0.95);
+}
+.action-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #818cf8; /* primary-400 */
+}
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+}
+
+.dark .glass-panel {
+  background: #0a0a0a; /* Solid dark for Zen, less glass */
+  border: 1px solid #1a1a1a;
+}
+
+.safe-pb {
+  padding-bottom: env(safe-area-inset-bottom);
+}

@@ -1,0 +1,35 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Dịch & Biên Tập Truyện AI v11.6.3 (5 Tháng)</title>
+    
+    <!-- Fonts: Outfit for headings, Inter for body, Playfair/Cinzel for Cover Art, Merriweather/Lora for Content -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+
+    <!-- NÂNG CẤP BẢO MẬT: CSP cơ bản - chặn tải tài nguyên/kết nối ra domain lạ,
+         vẫn cho phép Google Fonts + 2 nhà cung cấp AI (Gemini/DeepSeek).
+         'unsafe-inline' cho script là cần thiết vì môi trường AI Studio chèn bootstrap
+         inline; kết nối API liệt kê trắng danh sách trong connect-src. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: data:; connect-src 'self' https://generativelanguage.googleapis.com https://api.deepseek.com blob: data: http://localhost:* ws://localhost:*; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  </head>
+  <body>
+    <div id="local-file-help" style="position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;padding:24px;background:#f8fafc;color:#0f172a;font-family:Arial,sans-serif">
+      <div style="max-width:620px;padding:32px;border:1px solid #cbd5e1;border-radius:18px;background:white;box-shadow:0 20px 50px rgba(15,23,42,.12)">
+        <h1 style="margin:0 0 14px;font-size:24px">Không thể mở app trực tiếp bằng index.html</h1>
+        <p style="margin:0 0 10px;line-height:1.6">Chrome chặn JavaScript module khi trang chạy bằng địa chỉ <code>file:///</code>, nên màn hình sẽ trắng.</p>
+        <p style="margin:0;line-height:1.6">Hãy đóng tab này rồi nhấp đúp <strong>START_APP.bat</strong> trong cùng thư mục. App sẽ tự mở bằng địa chỉ <code>http://127.0.0.1</code>.</p>
+      </div>
+    </div>
+    <script>
+      if (window.location.protocol !== 'file:') document.getElementById('local-file-help')?.remove();
+    </script>
+    <!-- Use h-full here because body is already 100% -->
+    <div id="root" class="h-full w-full relative z-10 flex flex-col"></div>
+  <script type="module" src="/src/index.tsx"></script>
+</body>
+</html>

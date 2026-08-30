@@ -1,0 +1,8 @@
+{
+  "name": "Clone Sáng Tác",
+  "description": "Phiên bản v11.6.3: Tối ưu quy trình phân tích sâu về ngữ cảnh để đảm bảo chất lượng.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
