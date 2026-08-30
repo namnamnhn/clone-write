@@ -1,3 +1,5 @@
+import type { CanonicalLedgers, CanonicalProjections, FactProvenance } from './storyStateTypes';
+
 export type StoryId = string;
 export type ChapterNumber = number;
 
@@ -182,6 +184,9 @@ export interface StoryFact {
     readonly text: string;
     readonly establishedChapter: ChapterNumber;
     readonly visibility: 'writer' | 'internal';
+    /** Present for canonical V4 facts; optional only on the legacy context projection. */
+    readonly status?: 'active' | 'superseded' | 'invalidated';
+    readonly provenance?: FactProvenance;
 }
 
 export interface CharacterKnowledge {
@@ -225,6 +230,11 @@ export interface ContinuityState {
 }
 
 export interface StoryState {
+    readonly kind: 'story-state';
+    readonly schemaVersion: 4;
+    /** Increments exactly once per successful sequential transition. */
+    readonly revision: number;
+    /** Latest canonical chapter whose consequences are reflected by this snapshot. */
     readonly currentChapter: ChapterNumber;
     readonly currentArcId?: StoryId;
     readonly currentBeatId?: StoryId;
@@ -239,6 +249,9 @@ export interface StoryState {
     readonly unresolvedPromises: readonly OpenThread[];
     readonly resources: Readonly<Record<StoryId, readonly CharacterResource[]>>;
     readonly continuity: ContinuityState;
+    /** Authoritative append-only canonical history. Compatibility fields above are bounded projections. */
+    readonly ledgers: CanonicalLedgers;
+    readonly projections: CanonicalProjections;
     /** Extension storage for internal systems. It is never copied to WriterSafeContext. */
     readonly extensions: Readonly<Record<string, unknown>>;
 }
