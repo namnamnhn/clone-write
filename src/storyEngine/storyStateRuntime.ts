@@ -239,6 +239,14 @@ const parseLedgers = (value: unknown, path: string): CanonicalLedgers => {
     unique(resources, entry => entry.id, `${path}.resources`, 'DUPLICATE_ID');
     unique(continuity, entry => entry.id, `${path}.continuity`, 'DUPLICATE_ID');
     unique(events, entry => entry.id, `${path}.events`, 'DUPLICATE_ID');
+    const globalIds = new Set<string>();
+    [
+        ...facts, ...epistemic, ...locations, ...statuses,
+        ...relationships, ...resources, ...continuity, ...events,
+    ].forEach((entry) => {
+        if (globalIds.has(entry.id)) fail('DUPLICATE_ID', 'ledger IDs must be globally unique', path);
+        globalIds.add(entry.id);
+    });
     return { facts, epistemic, locations, statuses, relationships, resources, continuity, events };
 };
 

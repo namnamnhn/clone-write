@@ -150,6 +150,7 @@ describe('StoryState V4 canonical ledgers', () => {
         const valid = stateAt11();
         expect(() => parseStoryState({ ...valid, kind: 'writer-memory' }, control)).toThrowError(expect.objectContaining({ code: 'INVALID_STATE' }));
         expect(() => parseStoryState({ ...valid, ledgers: { ...valid.ledgers, facts: [valid.ledgers.facts[0], valid.ledgers.facts[0]] } }, control)).toThrowError(expect.objectContaining({ code: 'DUPLICATE_ID' }));
+        expect(() => parseStoryState({ ...valid, ledgers: { ...valid.ledgers, locations: [{ ...valid.ledgers.locations[0], id: valid.ledgers.facts[0].id }] } }, control)).toThrowError(expect.objectContaining({ code: 'DUPLICATE_ID' }));
         expect(() => parseStoryState({ ...valid, ledgers: { ...valid.ledgers, epistemic: [{ ...valid.ledgers.epistemic[0], factId: 'missing' }] } }, control)).toThrowError(expect.objectContaining({ code: 'UNKNOWN_FACT' }));
         expect(() => parseStoryState({ ...valid, ledgers: { ...valid.ledgers, facts: [{ ...valid.ledgers.facts[0], establishedChapter: 12 }] } }, control)).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
         expect(() => parseStoryState({ ...valid, unexpected: true }, control)).toThrowError(expect.objectContaining({ code: 'INVALID_STATE' }));
