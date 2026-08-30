@@ -25,9 +25,10 @@ const control: FullStoryControl = {
     characters: {
         a: { id: 'a', name: 'A', initialStatus: 'active', availableFromChapter: 1, writerProfile: {} },
         b: { id: 'b', name: 'B', initialStatus: 'active', availableFromChapter: 1, writerProfile: {} },
+        c: { id: 'c', name: 'C', initialStatus: 'active', availableFromChapter: 1, writerProfile: {} },
         future: { id: 'future', name: 'Future', initialStatus: 'future-locked', availableFromChapter: 50, writerProfile: {} },
     },
-    characterOrder: ['a', 'b', 'future'], arcs: [{ id: 'arc', title: 'Arc', startChapter: 1, endChapter: 600 }], beats: [],
+    characterOrder: ['a', 'b', 'c', 'future'], arcs: [{ id: 'arc', title: 'Arc', startChapter: 1, endChapter: 600 }], beats: [],
     reveals: [], relationshipEvents: [], storyEvents: [], gates: { characters: [], pov: [], reveals: [], relationships: [], events: [] },
     forbiddenEvents: [], forbiddenRelationshipEvents: [], forbiddenReveals: [], authorOnlySecrets: [], canonRules: [],
 };
@@ -61,10 +62,56 @@ const chapter11Delta = (): StoryStateDelta => delta(11, 1, {
     continuityChanges: [{ operation: 'open', entry: { id: 'letter-unopened', kind: 'obligation', text: 'Letter remains unopened.', visibility: 'writer', establishedChapter: 11, status: 'open', provenance: provenance(11, 'chapter-11') }, provenance: provenance(11, 'chapter-11') }],
 });
 
-const stateAt10 = (): StoryState => applyStoryStateDelta(control, createInitialStoryState(9), chapter10Delta());
+const stateAt10 = (): StoryState => applyStoryStateDelta(control, { ...createInitialStoryState(9), currentArcId: 'arc' }, chapter10Delta());
 const stateAt11 = (): StoryState => applyStoryStateDelta(control, stateAt10(), chapter11Delta());
 
 describe('StoryState V4 canonical ledgers', () => {
+    it('uses cursor zero as the empty canonical state and applies Chapter 1', () => {
+        const initial = createInitialStoryState();
+        expect(initial).toMatchObject({ kind: 'story-state', schemaVersion: 4, currentChapter: 0, revision: 0 });
+        expect(parseStoryState(initial, control)).toEqual(initial);
+        const chapter1 = applyStoryStateDelta(control, initial, delta(1, 0));
+        expect(chapter1).toMatchObject({ currentChapter: 1, revision: 1, currentArcId: 'arc' });
+        expect(() => applyStoryStateDelta(control, chapter1, delta(1, 1))).toThrowError(expect.objectContaining({ code: 'CHAPTER_SEQUENCE_VIOLATION' }));
+        expect(() => applyStoryStateDelta(control, initial, delta(2, 0))).toThrowError(expect.objectContaining({ code: 'CHAPTER_SEQUENCE_VIOLATION' }));
+    });
+
+    it('derives canonical arc and beat identifiers on every chapter advance', () => {
+        const boundaryControl: FullStoryControl = {
+            ...control,
+            arcs: [{ id: 'arc-1', title: 'One', startChapter: 1, endChapter: 1 }, { id: 'arc-2', title: 'Two', startChapter: 2, endChapter: 600 }],
+            beats: [{ id: 'beat-1', arcId: 'arc-1', order: 1, startChapter: 1, endChapter: 1 }, { id: 'beat-2', arcId: 'arc-2', order: 1, startChapter: 2, endChapter: 600 }],
+        };
+        const chapter1 = applyStoryStateDelta(boundaryControl, createInitialStoryState(), delta(1, 0));
+        expect(chapter1).toMatchObject({ currentArcId: 'arc-1', currentBeatId: 'beat-1' });
+        const chapter2 = applyStoryStateDelta(boundaryControl, chapter1, delta(2, 1));
+        expect(chapter2).toMatchObject({ currentArcId: 'arc-2', currentBeatId: 'beat-2' });
+    });
+
+    it('accepts chapter zero only for a structurally empty pre-chapter snapshot', () => {
+        const initial = createInitialStoryState();
+        expect(() => parseStoryState({ ...initial, revision: 1 }, control)).toThrowError(expect.objectContaining({ code: 'INVALID_STATE' }));
+        expect(() => parseStoryState({ ...initial, currentArcId: 'arc' }, control)).toThrowError(expect.objectContaining({ code: 'INVALID_STATE' }));
+        expect(() => parseStoryState({ ...initial, projections: { ...initial.projections, characters: [{ characterId: 'a', active: true, lifeStatus: 'alive', activeStatusIds: [] }] } }, control)).toThrow(StoryStateTransitionError);
+    });
+
+    it('never permits chapter zero in canonical records or provenance', () => {
+        const initial = createInitialStoryState();
+        const invalidLedgers: readonly Partial<StoryState['ledgers']>[] = [
+            { facts: [{ id: 'zero-fact', text: 'Invalid', establishedChapter: 0, visibility: 'writer', status: 'active', provenance: provenance(1, 'c1') }] },
+            { epistemic: [{ id: 'zero-knowledge', characterId: 'a', kind: 'believed', claim: 'Invalid', learnedChapter: 0, source: { type: 'witnessed', sourceChapter: 1 }, status: 'active' }] },
+            { locations: [{ id: 'zero-location', characterId: 'a', location: 'Nowhere', sinceChapter: 0, provenance: provenance(1, 'c1') }] },
+            { statuses: [{ id: 'zero-status', characterId: 'a', kind: 'status', state: 'Invalid', establishedChapter: 0, provenance: provenance(1, 'c1') }] },
+            { statuses: [{ id: 'zero-resolution', characterId: 'a', kind: 'status', state: 'Invalid', establishedChapter: 1, resolvedChapter: 0, provenance: provenance(1, 'c1') }] },
+            { relationships: [{ id: 'zero-rel-history', relationshipId: 'rel', participantIds: ['a', 'b'], state: 'Invalid', chapterNumber: 0, provenance: provenance(1, 'c1') }] },
+            { resources: [{ id: 'zero-resource', characterId: 'a', resourceId: 'money', name: 'Money', chapterNumber: 0, quantityDelta: 1, resultingQuantity: 1, provenance: provenance(1, 'c1') }] },
+            { continuity: [{ id: 'zero-continuity', kind: 'obligation', text: 'Invalid', visibility: 'writer', establishedChapter: 0, status: 'open', provenance: provenance(1, 'c1') }] },
+            { facts: [{ id: 'zero-provenance', text: 'Invalid', establishedChapter: 1, visibility: 'writer', status: 'active', provenance: provenance(0, 'c0') }] },
+            { events: [{ id: 'zero-event', chapterNumber: 0, type: 'fact-added', affectedIds: ['x'], provenance: provenance(1, 'c1') }] },
+        ];
+        invalidLedgers.forEach(ledgers => expect(() => parseStoryState({ ...initial, ledgers: { ...initial.ledgers, ...ledgers } }, control)).toThrow(StoryStateTransitionError));
+    });
+
     it('applies a sequential chapter atomically and preserves immutable history', () => {
         const before = stateAt10(); const beforeJson = JSON.stringify(before); const input = chapter11Delta(); const inputJson = JSON.stringify(input);
         const next = applyStoryStateDelta(control, before, input);
@@ -110,6 +157,7 @@ describe('StoryState V4 canonical ledgers', () => {
         ['future character', { epistemicChanges: [{ id: 'bad-k', characterId: 'future', kind: 'known', factId: 'existing', learnedChapter: 11, source: { type: 'witnessed', sourceChapter: 11 }, status: 'active' }], factChanges: [{ id: 'existing', text: 'Existing', establishedChapter: 11, visibility: 'writer', status: 'active', provenance: provenance(11, 'c11') }] }],
         ['unknown teller', { epistemicChanges: [{ id: 'bad-k', characterId: 'a', kind: 'known', factId: 'existing', learnedChapter: 11, source: { type: 'told-by-character', sourceCharacterId: 'missing', sourceChapter: 11 }, status: 'active' }], factChanges: [{ id: 'existing', text: 'Existing', establishedChapter: 11, visibility: 'writer', status: 'active', provenance: provenance(11, 'c11') }] }],
         ['unknown inference basis', { epistemicChanges: [{ id: 'bad-k', characterId: 'a', kind: 'believed', claim: 'Conclusion', learnedChapter: 11, source: { type: 'inference', sourceChapter: 11, basisFactIds: ['missing'] }, status: 'active' }] }],
+        ['basis not known by character', { epistemicChanges: [{ id: 'bad-k', characterId: 'b', kind: 'believed', claim: 'Conclusion', learnedChapter: 11, source: { type: 'inference', sourceChapter: 11, basisFactIds: ['existing'] }, status: 'active' }], factChanges: [{ id: 'existing', text: 'Existing', establishedChapter: 11, visibility: 'writer', status: 'active', provenance: provenance(11, 'c11') }] }],
     ])('rejects unsafe knowledge: %s', (_label, changes) => {
         const original = stateAt10(); const snapshot = JSON.stringify(original);
         expect(() => applyStoryStateDelta(control, original, delta(11, 1, changes as Partial<StoryStateDelta>))).toThrow(StoryStateTransitionError);
@@ -146,6 +194,12 @@ describe('StoryState V4 canonical ledgers', () => {
         expect(() => parseStoryStateDelta(malformed)).toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' }));
     });
 
+    it('rejects globally duplicated new IDs at the delta parser boundary', () => {
+        expect(() => parseStoryStateDelta({ ...chapter11Delta(), factChanges: [{ ...chapter11Delta().factChanges[0], id: 'know-a-letter' }] })).toThrowError(expect.objectContaining({ code: 'DUPLICATE_ID' }));
+        expect(() => parseStoryStateDelta({ ...chapter11Delta(), locationChanges: [{ ...chapter11Delta().locationChanges[0], id: 'money-a-11' }] })).toThrowError(expect.objectContaining({ code: 'DUPLICATE_ID' }));
+        expect(() => parseStoryStateDelta({ ...chapter11Delta(), statusChanges: [{ operation: 'add', record: { id: 'letter-unopened', characterId: 'a', kind: 'status', state: 'marked', establishedChapter: 11, provenance: provenance(11, 'c11') }, provenance: provenance(11, 'c11') }] })).toThrowError(expect.objectContaining({ code: 'DUPLICATE_ID' }));
+    });
+
     it('strictly rejects malformed state identity, duplicate IDs, dangling refs, and future data', () => {
         const valid = stateAt11();
         expect(() => parseStoryState({ ...valid, kind: 'writer-memory' }, control)).toThrowError(expect.objectContaining({ code: 'INVALID_STATE' }));
@@ -154,6 +208,55 @@ describe('StoryState V4 canonical ledgers', () => {
         expect(() => parseStoryState({ ...valid, ledgers: { ...valid.ledgers, epistemic: [{ ...valid.ledgers.epistemic[0], factId: 'missing' }] } }, control)).toThrowError(expect.objectContaining({ code: 'UNKNOWN_FACT' }));
         expect(() => parseStoryState({ ...valid, ledgers: { ...valid.ledgers, facts: [{ ...valid.ledgers.facts[0], establishedChapter: 12 }] } }, control)).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
         expect(() => parseStoryState({ ...valid, unexpected: true }, control)).toThrowError(expect.objectContaining({ code: 'INVALID_STATE' }));
+    });
+
+    it('rejects stale or incomplete character projections in loaded state', () => {
+        const state11 = stateAt11(); const staleLocation = state11.projections.characters.map(value => value.characterId === 'a' ? { ...value, currentLocationRecordId: 'loc-a-10' } : value);
+        expect(() => parseStoryState({ ...state11, projections: { ...state11.projections, characters: staleLocation } }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        const state10 = stateAt10(); const omittedStatus = state10.projections.characters.map(value => value.characterId === 'a' ? { ...value, activeStatusIds: [] } : value);
+        expect(() => parseStoryState({ ...state10, projections: { ...state10.projections, characters: omittedStatus } }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        const sameChapterLocations = state11.ledgers.locations.map((value, index) => index === 1 ? { ...value, sinceChapter: 10, provenance: provenance(10, 'chapter-10') } : value);
+        expect(() => parseStoryState({ ...state11, ledgers: { ...state11.ledgers, locations: sameChapterLocations } }, control)).toThrowError(expect.objectContaining({ code: 'CONFLICTING_OPERATION' }));
+    });
+
+    it('rejects stale, ambiguous, or participant-changing relationship history', () => {
+        const state = stateAt11(); const old = state.ledgers.relationships[0];
+        const stale = state.projections.relationships.map(value => value.id === 'rel-ab' ? { id: value.id, participantIds: old.participantIds, currentState: old.state, lastChangedChapter: old.chapterNumber, currentHistoryId: old.id } : value);
+        expect(() => parseStoryState({ ...state, projections: { ...state.projections, relationships: stale } }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        const changedParticipants = state.ledgers.relationships.map((value, index) => index === 1 ? { ...value, participantIds: ['a', 'c'] } : value);
+        expect(() => parseStoryState({ ...state, ledgers: { ...state.ledgers, relationships: changedParticipants } }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        const sameChapter = state.ledgers.relationships.map((value, index) => index === 1 ? { ...value, chapterNumber: 10, provenance: provenance(10, 'chapter-10') } : value);
+        expect(() => parseStoryState({ ...state, ledgers: { ...state.ledgers, relationships: sameChapter } }, control)).toThrowError(expect.objectContaining({ code: 'CONFLICTING_OPERATION' }));
+    });
+
+    it('rejects stale, mathematically invalid, or broken resource chains', () => {
+        const state = stateAt11(); const old = state.ledgers.resources[0];
+        const stale = state.projections.resources.map(value => value.resourceId === 'money' ? { ...value, quantity: old.resultingQuantity, lastChangedChapter: old.chapterNumber, currentHistoryId: old.id } : value);
+        expect(() => parseStoryState({ ...state, projections: { ...state.projections, resources: stale } }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        const badMath = state.ledgers.resources.map((value, index) => index === 1 ? { ...value, resultingQuantity: 999 } : value);
+        expect(() => parseStoryState({ ...state, ledgers: { ...state.ledgers, resources: badMath } }, control)).toThrowError(expect.objectContaining({ code: 'RESOURCE_VALUE_INVALID' }));
+        const sameChapterResources = state.ledgers.resources.map((value, index) => index === 1 ? { ...value, chapterNumber: 10, provenance: provenance(10, 'chapter-10') } : value);
+        expect(() => parseStoryState({ ...state, ledgers: { ...state.ledgers, resources: sameChapterResources } }, control)).toThrowError(expect.objectContaining({ code: 'CONFLICTING_OPERATION' }));
+        const state12 = applyStoryStateDelta(control, state, delta(12, 2, { resourceChanges: [{ id: 'money-a-12', characterId: 'a', resourceId: 'money', name: 'Money', nextState: 'secured', provenance: provenance(12, 'c12') }] }));
+        const state13 = applyStoryStateDelta(control, state12, delta(13, 3, { resourceChanges: [{ id: 'money-a-13', characterId: 'a', resourceId: 'money', name: 'Money', quantityDelta: -1, provenance: provenance(13, 'c13') }] }));
+        const brokenStateChain = state13.ledgers.resources.map(value => value.id === 'money-a-13' ? { ...value, previousState: 'missing', nextState: undefined } : value);
+        expect(() => parseStoryState({ ...state13, ledgers: { ...state13.ledgers, resources: brokenStateChain } }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+    });
+
+    it('rejects future compatibility notes and stale canonical arc or beat IDs', () => {
+        const state = stateAt11();
+        expect(() => parseStoryState({ ...state, continuity: { ...state.continuity, notes: [{ text: 'Future truth', visibility: 'writer', establishedChapter: 20 }] } }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        expect(() => parseStoryState({ ...state, currentArcId: 'stale-arc' }, control)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        const controlWithBeat: FullStoryControl = { ...control, beats: [{ id: 'beat-1', arcId: 'arc', order: 1, startChapter: 1, endChapter: 600 }] };
+        expect(() => parseStoryState(state, controlWithBeat)).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+    });
+
+    it('applies the same complete epistemic source rules to loaded state', () => {
+        const state = stateAt11(); const knowledge = state.ledgers.epistemic[0];
+        const futureSourceFact = [{ ...knowledge, source: { type: 'witnessed' as const, sourceChapter: 10, sourceFactId: 'fact-letter' } }];
+        expect(() => parseStoryState({ ...state, ledgers: { ...state.ledgers, epistemic: futureSourceFact } }, control)).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
+        const invalidInference = [...state.ledgers.epistemic, { id: 'belief-b-inference', characterId: 'b', kind: 'believed' as const, claim: 'Derived claim', learnedChapter: 11, source: { type: 'inference' as const, sourceChapter: 11, basisFactIds: ['fact-letter'] }, status: 'active' as const }];
+        expect(() => parseStoryState({ ...state, ledgers: { ...state.ledgers, epistemic: invalidInference } }, control)).toThrowError(expect.objectContaining({ code: 'KNOWLEDGE_SOURCE_INVALID' }));
     });
 
     it('returns copy-safe deterministic queries', () => {
@@ -167,13 +270,13 @@ describe('StoryState V4 canonical ledgers', () => {
     });
 
     it('remains deterministic across hundreds of pure synthetic transitions', () => {
-        let state = createInitialStoryState(1);
-        for (let chapter = 2; chapter <= 300; chapter += 1) {
-            state = applyStoryStateDelta(control, state, delta(chapter, chapter - 2, {
+        let state = createInitialStoryState();
+        for (let chapter = 1; chapter <= 300; chapter += 1) {
+            state = applyStoryStateDelta(control, state, delta(chapter, chapter - 1, {
                 factChanges: [{ id: `fact-${chapter}`, text: `Canonical statement ${chapter}`, establishedChapter: chapter, visibility: 'writer', status: 'active', provenance: provenance(chapter, `chapter-${chapter}`) }],
             }));
         }
-        expect(state.currentChapter).toBe(300); expect(state.ledgers.facts).toHaveLength(299);
+        expect(state.currentChapter).toBe(300); expect(state.revision).toBe(300); expect(state.ledgers.facts).toHaveLength(300);
         expect(state.ledgers.facts.map(value => value.id)).toEqual([...state.ledgers.facts].map(value => value.id));
         expect(getFactsKnownByCharacter(state, 'a', 300)).toHaveLength(0);
     });

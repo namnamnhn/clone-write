@@ -1,4 +1,5 @@
 import { FullStoryControl, StoryState } from './types';
+import { getArcForChapter, getBeatForChapter } from './gates';
 import {
     CANONICAL_EVENT_TYPES,
     CanonicalContinuityEntry,
@@ -68,6 +69,11 @@ const deltaText = (value: unknown, path: string): string => {
 
 const chapterValue = (value: unknown, path: string, code: StoryStateTransitionIssueCode = 'INVALID_STATE'): number => {
     if (!Number.isSafeInteger(value) || (value as number) < 1) fail(code, 'expected positive safe integer', path);
+    return value as number;
+};
+
+const chapterCursorValue = (value: unknown, path: string): number => {
+    if (!Number.isSafeInteger(value) || (value as number) < 0) fail('INVALID_STATE', 'expected non-negative chapter cursor', path);
     return value as number;
 };
 
@@ -313,10 +319,6 @@ const cloneLegacyState = (source: UnknownRecord): Omit<StoryState, 'kind' | 'sch
 const validateStateReferences = (state: StoryState, control?: FullStoryControl): void => {
     const chapter = state.currentChapter;
     const facts = new Map(state.ledgers.facts.map(value => [value.id, value]));
-    const locations = new Map(state.ledgers.locations.map(value => [value.id, value]));
-    const statuses = new Map(state.ledgers.statuses.map(value => [value.id, value]));
-    const relationshipHistory = new Map(state.ledgers.relationships.map(value => [value.id, value]));
-    const resourceHistory = new Map(state.ledgers.resources.map(value => [value.id, value]));
     const knownCharacter = (id: string, path: string, atChapter = chapter) => {
         if (!control) return;
         const character = control.characters[id];
@@ -329,8 +331,13 @@ const validateStateReferences = (state: StoryState, control?: FullStoryControl):
         if (entry.learnedChapter > chapter || entry.source.sourceChapter > entry.learnedChapter) fail('TEMPORAL_VIOLATION', 'future knowledge source', path);
         if (entry.kind === 'known') { const fact = facts.get(entry.factId!); if (!fact) fail('UNKNOWN_FACT', 'unknown fact', `${path}.factId`); if (entry.learnedChapter < fact.establishedChapter) fail('TEMPORAL_VIOLATION', 'knowledge predates fact', path); }
         if (entry.source.sourceCharacterId) knownCharacter(entry.source.sourceCharacterId, `${path}.source.sourceCharacterId`, entry.source.sourceChapter);
-        if (entry.source.sourceFactId && !facts.has(entry.source.sourceFactId)) fail('UNKNOWN_FACT', 'unknown source fact', `${path}.source.sourceFactId`);
-        entry.source.basisFactIds?.forEach(id => { const fact = facts.get(id); if (!fact || fact.establishedChapter > entry.source.sourceChapter) fail('KNOWLEDGE_SOURCE_INVALID', 'invalid inference basis', `${path}.source.basisFactIds`); });
+        if (entry.source.sourceFactId) { const sourceFact = facts.get(entry.source.sourceFactId); if (!sourceFact) fail('UNKNOWN_FACT', 'unknown source fact', `${path}.source.sourceFactId`); if (sourceFact.establishedChapter > entry.source.sourceChapter) fail('TEMPORAL_VIOLATION', 'source fact did not yet exist', `${path}.source.sourceFactId`); }
+        entry.source.basisFactIds?.forEach((id) => {
+            const fact = facts.get(id);
+            if (!fact || fact.establishedChapter > entry.source.sourceChapter) fail('KNOWLEDGE_SOURCE_INVALID', 'invalid inference basis', `${path}.source.basisFactIds`);
+            const basisWasKnown = state.ledgers.epistemic.some(candidate => candidate.kind === 'known' && candidate.status === 'active' && candidate.characterId === entry.characterId && candidate.factId === id && candidate.learnedChapter <= entry.source.sourceChapter);
+            if (!basisWasKnown) fail('KNOWLEDGE_SOURCE_INVALID', 'character did not know inference basis', `${path}.source.basisFactIds`);
+        });
     });
     const activeKnowledge = state.ledgers.epistemic.filter(value => value.kind === 'known' && value.status === 'active');
     unique(activeKnowledge, value => `${value.characterId}\u0000${value.factId}`, 'state.ledgers.epistemic', 'DUPLICATE_ID');
@@ -340,16 +347,71 @@ const validateStateReferences = (state: StoryState, control?: FullStoryControl):
     state.ledgers.resources.forEach((entry, index) => { knownCharacter(entry.characterId, `state.ledgers.resources[${index}].characterId`, entry.chapterNumber); if (entry.chapterNumber > chapter || entry.provenance.sourceChapter > entry.chapterNumber) fail('TEMPORAL_VIOLATION', 'invalid resource time', `state.ledgers.resources[${index}]`); });
     state.ledgers.continuity.forEach((entry, index) => { if (entry.establishedChapter > chapter || (entry.resolvedChapter ?? 0) > chapter || entry.provenance.sourceChapter > entry.establishedChapter) fail('TEMPORAL_VIOLATION', 'invalid continuity time', `state.ledgers.continuity[${index}]`); });
     state.ledgers.events.forEach((entry, index) => { if (entry.chapterNumber > chapter || entry.provenance.sourceChapter > entry.chapterNumber) fail('TEMPORAL_VIOLATION', 'invalid event time', `state.ledgers.events[${index}]`); });
-    state.projections.characters.forEach((entry, index) => { knownCharacter(entry.characterId, `state.projections.characters[${index}].characterId`); if (entry.currentLocationRecordId && locations.get(entry.currentLocationRecordId)?.characterId !== entry.characterId) fail('REFERENTIAL_INTEGRITY_FAILURE', 'invalid location projection', `state.projections.characters[${index}]`); entry.activeStatusIds.forEach(id => { const status = statuses.get(id); if (!status || status.characterId !== entry.characterId || status.resolvedChapter !== undefined) fail('REFERENTIAL_INTEGRITY_FAILURE', 'invalid status projection', `state.projections.characters[${index}]`); }); });
-    state.projections.relationships.forEach((entry, index) => { const history = relationshipHistory.get(entry.currentHistoryId); if (!history || history.relationshipId !== entry.id || history.state !== entry.currentState || history.chapterNumber !== entry.lastChangedChapter || JSON.stringify(history.participantIds) !== JSON.stringify(entry.participantIds)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'invalid relationship projection', `state.projections.relationships[${index}]`); });
-    state.projections.resources.forEach((entry, index) => { const history = resourceHistory.get(entry.currentHistoryId); if (!history || history.characterId !== entry.characterId || history.resourceId !== entry.resourceId || history.resultingQuantity !== entry.quantity || history.nextState !== entry.state || history.chapterNumber !== entry.lastChangedChapter) fail('REFERENTIAL_INTEGRITY_FAILURE', 'invalid resource projection', `state.projections.resources[${index}]`); });
+    const characterProjection = new Map(state.projections.characters.map(value => [value.characterId, value]));
+    state.projections.characters.forEach((entry, index) => knownCharacter(entry.characterId, `state.projections.characters[${index}].characterId`));
+    const locationGroups = new Map<string, CharacterLocationRecord[]>();
+    state.ledgers.locations.forEach(value => { const values = locationGroups.get(value.characterId) ?? []; values.push(value); locationGroups.set(value.characterId, values); });
+    locationGroups.forEach((values, characterId) => {
+        const ordered = values.slice().sort((left, right) => left.sinceChapter - right.sinceChapter || left.id.localeCompare(right.id));
+        if (ordered.some((value, index) => index > 0 && ordered[index - 1].sinceChapter === value.sinceChapter)) fail('CONFLICTING_OPERATION', 'ambiguous same-chapter locations', 'state.ledgers.locations');
+        const projection = characterProjection.get(characterId);
+        if (!projection || projection.currentLocationRecordId !== ordered.at(-1)!.id) fail('REFERENTIAL_INTEGRITY_FAILURE', 'location projection is not latest history', 'state.projections.characters');
+    });
+    state.projections.characters.forEach((projection) => {
+        if (!locationGroups.has(projection.characterId) && projection.currentLocationRecordId !== undefined) fail('REFERENTIAL_INTEGRITY_FAILURE', 'location projection invents history', 'state.projections.characters');
+        const expectedStatuses = state.ledgers.statuses.filter(value => value.characterId === projection.characterId && value.resolvedChapter === undefined).map(value => value.id).sort();
+        if (JSON.stringify(projection.activeStatusIds) !== JSON.stringify(expectedStatuses)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'active status projection is incomplete or stale', 'state.projections.characters');
+    });
+    new Set(state.ledgers.statuses.map(value => value.characterId)).forEach((characterId) => { if (!characterProjection.has(characterId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'status history requires character projection', 'state.projections.characters'); });
+
+    const relationshipGroups = new Map<string, RelationshipHistoryRecord[]>();
+    state.ledgers.relationships.forEach(value => { const values = relationshipGroups.get(value.relationshipId) ?? []; values.push(value); relationshipGroups.set(value.relationshipId, values); });
+    const relationshipProjections = new Map(state.projections.relationships.map(value => [value.id, value]));
+    relationshipGroups.forEach((values, relationshipId) => {
+        const ordered = values.slice().sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
+        const participants = JSON.stringify(ordered[0].participantIds);
+        if (ordered.some(value => JSON.stringify(value.participantIds) !== participants)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'relationship participants changed', 'state.ledgers.relationships');
+        if (ordered.some((value, index) => index > 0 && ordered[index - 1].chapterNumber === value.chapterNumber)) fail('CONFLICTING_OPERATION', 'ambiguous same-chapter relationship changes', 'state.ledgers.relationships');
+        const latest = ordered.at(-1)!; const projection = relationshipProjections.get(relationshipId);
+        if (!projection || projection.currentHistoryId !== latest.id || projection.currentState !== latest.state || projection.lastChangedChapter !== latest.chapterNumber || JSON.stringify(projection.participantIds) !== participants) fail('REFERENTIAL_INTEGRITY_FAILURE', 'relationship projection is not latest history', 'state.projections.relationships');
+    });
+    state.projections.relationships.forEach(value => { if (!relationshipGroups.has(value.id)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'relationship projection invents history', 'state.projections.relationships'); });
+
+    const resourceKey = (characterId: string, resourceId: string) => `${characterId}\u0000${resourceId}`;
+    const resourceGroups = new Map<string, ResourceLedgerRecord[]>();
+    state.ledgers.resources.forEach(value => { const key = resourceKey(value.characterId, value.resourceId); const values = resourceGroups.get(key) ?? []; values.push(value); resourceGroups.set(key, values); });
+    const resourceProjections = new Map(state.projections.resources.map(value => [resourceKey(value.characterId, value.resourceId), value]));
+    resourceGroups.forEach((values, key) => {
+        const ordered = values.slice().sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
+        if (ordered.some((value, index) => index > 0 && ordered[index - 1].chapterNumber === value.chapterNumber)) fail('CONFLICTING_OPERATION', 'ambiguous same-chapter resource changes', 'state.ledgers.resources');
+        const name = ordered[0].name; let quantity: number | undefined; let resourceState: string | undefined;
+        ordered.forEach((value) => {
+            if (value.name !== name) fail('REFERENTIAL_INTEGRITY_FAILURE', 'resource name changed', 'state.ledgers.resources');
+            const expectedQuantity = value.quantityDelta === undefined ? quantity : (quantity ?? 0) + value.quantityDelta;
+            if (value.resultingQuantity !== expectedQuantity) fail('RESOURCE_VALUE_INVALID', 'resource quantity chain is inconsistent', 'state.ledgers.resources');
+            if (value.previousState !== resourceState) fail('REFERENTIAL_INTEGRITY_FAILURE', 'resource previousState chain is inconsistent', 'state.ledgers.resources');
+            if (resourceState !== undefined && value.nextState === undefined) fail('REFERENTIAL_INTEGRITY_FAILURE', 'resource nextState drops prior state', 'state.ledgers.resources');
+            quantity = expectedQuantity; resourceState = value.nextState;
+        });
+        const latest = ordered.at(-1)!; const projection = resourceProjections.get(key);
+        if (!projection || projection.currentHistoryId !== latest.id || projection.name !== name || projection.quantity !== quantity || projection.state !== resourceState || projection.lastChangedChapter !== latest.chapterNumber) fail('REFERENTIAL_INTEGRITY_FAILURE', 'resource projection is not latest history', 'state.projections.resources');
+    });
+    state.projections.resources.forEach(value => { if (!resourceGroups.has(resourceKey(value.characterId, value.resourceId))) fail('REFERENTIAL_INTEGRITY_FAILURE', 'resource projection invents history', 'state.projections.resources'); });
+
+    if (chapter === 0) {
+        if (state.revision !== 0 || Object.values(state.ledgers).some(values => values.length > 0) || state.projections.characters.length > 0 || state.projections.relationships.length > 0 || state.projections.resources.length > 0 || state.currentArcId !== undefined || state.currentBeatId !== undefined || state.continuity.timelinePosition !== undefined || state.continuity.lastScene !== undefined || state.continuity.povCharacterId !== undefined) fail('INVALID_STATE', 'chapter zero must be an empty pre-chapter snapshot', 'state');
+    } else if (control) {
+        const expectedArc = getArcForChapter(control, chapter); const expectedBeat = getBeatForChapter(control, chapter);
+        const arcRequiresBeat = expectedArc !== undefined && control.beats.some(value => value.arcId === expectedArc.id);
+        if (!expectedArc || (arcRequiresBeat && !expectedBeat) || state.currentArcId !== expectedArc.id || state.currentBeatId !== expectedBeat?.id) fail('REFERENTIAL_INTEGRITY_FAILURE', 'current arc or beat is stale', 'state');
+    }
 };
 
 /** Strict runtime parser. `currentChapter` is the latest canonical chapter reflected by the snapshot. */
 export const parseStoryState = (value: unknown, control?: FullStoryControl): StoryState => {
     const source = record(value, 'state', ['kind', 'schemaVersion', 'revision', 'currentChapter', 'currentArcId', 'currentBeatId', 'knownCharacterIds', 'activeCharacterIds', 'characterLocations', 'characterStatuses', 'facts', 'characterKnowledge', 'relationships', 'unresolvedClues', 'unresolvedPromises', 'resources', 'continuity', 'ledgers', 'projections', 'extensions']);
     if (source.kind !== 'story-state' || source.schemaVersion !== 4) fail('INVALID_STATE', 'unsupported story state identity', 'state');
-    const currentChapter = chapterValue(source.currentChapter, 'state.currentChapter');
+    const currentChapter = chapterCursorValue(source.currentChapter, 'state.currentChapter');
     const state: StoryState = { kind: 'story-state', schemaVersion: 4, revision: nonNegativeInteger(source.revision, 'state.revision', 'INVALID_STATE'), currentChapter, ...cloneLegacyState(source), ledgers: parseLedgers(source.ledgers, 'state.ledgers'), projections: parseProjections(source.projections, 'state.projections') };
     validateStateReferences(state, control);
     validateCompatibilityProjection(state);
@@ -391,6 +453,14 @@ export const parseStoryStateDelta = (value: unknown): StoryStateDelta => {
     const resourceChanges = deltaArray(source.resourceChanges, 'delta.resourceChanges').map((entry, index) => parseResourceChange(entry, `delta.resourceChanges[${index}]`));
     const continuityChanges = deltaArray(source.continuityChanges, 'delta.continuityChanges').map((entry, index) => parseContinuityChange(entry, `delta.continuityChanges[${index}]`));
     unique(factChanges, entry => entry.id, 'delta.factChanges', 'CONFLICTING_OPERATION'); unique(epistemicChanges, entry => entry.id, 'delta.epistemicChanges', 'CONFLICTING_OPERATION'); unique(locationChanges, entry => entry.characterId, 'delta.locationChanges', 'CONFLICTING_OPERATION'); unique(activationChanges, entry => entry.characterId, 'delta.activationChanges', 'CONFLICTING_OPERATION'); unique(relationshipChanges, entry => entry.relationshipId, 'delta.relationshipChanges', 'CONFLICTING_OPERATION'); unique(resourceChanges, entry => `${entry.characterId}\u0000${entry.resourceId}`, 'delta.resourceChanges', 'CONFLICTING_OPERATION'); unique(statusChanges, entry => entry.operation === 'add' ? entry.record!.id : entry.statusId!, 'delta.statusChanges', 'CONFLICTING_OPERATION'); unique(continuityChanges, entry => entry.operation === 'open' ? entry.entry!.id : entry.continuityId!, 'delta.continuityChanges', 'CONFLICTING_OPERATION');
+    const createdIds = [
+        ...factChanges.map(entry => entry.id), ...epistemicChanges.map(entry => entry.id),
+        ...locationChanges.map(entry => entry.id),
+        ...statusChanges.filter(entry => entry.operation === 'add').map(entry => entry.record!.id),
+        ...relationshipChanges.map(entry => entry.id), ...resourceChanges.map(entry => entry.id),
+        ...continuityChanges.filter(entry => entry.operation === 'open').map(entry => entry.entry!.id),
+    ];
+    if (new Set(createdIds).size !== createdIds.length) fail('DUPLICATE_ID', 'new ledger IDs must be globally unique within delta', 'delta');
     return { kind: 'story-state-delta', schemaVersion: 1, chapterNumber: chapterValue(source.chapterNumber, 'delta.chapterNumber', 'INVALID_DELTA'), expectedRevision: nonNegativeInteger(source.expectedRevision, 'delta.expectedRevision', 'INVALID_DELTA'), factChanges, epistemicChanges, locationChanges, statusChanges, activationChanges, relationshipChanges, resourceChanges, continuityChanges };
 };
 
@@ -409,7 +479,7 @@ const synchronizeCompatibility = (state: StoryState): StoryState => {
     const open = state.ledgers.continuity.filter(value => value.status === 'open').sort(compareChapterId(value => value.establishedChapter));
     const unresolvedClues = open.filter(value => value.kind === 'clue').map(value => ({ id: value.id, text: value.text, openedChapter: value.establishedChapter, visibility: value.visibility })); const unresolvedPromises = open.filter(value => value.kind === 'promise').map(value => ({ id: value.id, text: value.text, openedChapter: value.establishedChapter, visibility: value.visibility }));
     const pendingThreads = open.filter(value => value.kind === 'pending-thread' || value.kind === 'obligation' || value.kind === 'condition').map(value => ({ text: value.text, visibility: value.visibility, establishedChapter: value.establishedChapter }));
-    return { ...state, knownCharacterIds: state.projections.characters.map(value => value.characterId).sort(), activeCharacterIds: state.projections.characters.filter(value => value.active).map(value => value.characterId).sort(), characterLocations, characterStatuses, facts, characterKnowledge, relationships, resources, unresolvedClues, unresolvedPromises, continuity: { ...state.continuity, pendingThreads } };
+    return { ...state, knownCharacterIds: state.projections.characters.map(value => value.characterId).sort(), activeCharacterIds: state.projections.characters.filter(value => value.active).map(value => value.characterId).sort(), characterLocations, characterStatuses, facts, characterKnowledge, relationships, resources, unresolvedClues, unresolvedPromises, continuity: { ...state.continuity, pendingThreads, notes: [] } };
 };
 
 function validateCompatibilityProjection(state: StoryState): void {
@@ -420,6 +490,7 @@ function validateCompatibilityProjection(state: StoryState): void {
         facts: value.facts, characterKnowledge: value.characterKnowledge, relationships: value.relationships,
         resources: value.resources, unresolvedClues: value.unresolvedClues,
         unresolvedPromises: value.unresolvedPromises, pendingThreads: value.continuity.pendingThreads,
+        notes: value.continuity.notes,
     });
     if (JSON.stringify(select(state)) !== JSON.stringify(select(expected))) {
         fail('REFERENTIAL_INTEGRITY_FAILURE', 'compatibility projection does not match canonical ledgers', 'state');
@@ -431,13 +502,17 @@ export const applyStoryStateDelta = (control: FullStoryControl, currentValue: un
     const state = parseStoryState(currentValue, control); const delta = parseStoryStateDelta(deltaValue); const chapter = delta.chapterNumber;
     if (chapter !== state.currentChapter + 1) fail('CHAPTER_SEQUENCE_VIOLATION', 'delta must advance exactly one chapter', 'delta.chapterNumber');
     if (delta.expectedRevision !== state.revision) fail('REVISION_MISMATCH', 'delta revision does not match state', 'delta.expectedRevision');
+    const nextArc = getArcForChapter(control, chapter); const nextBeat = getBeatForChapter(control, chapter);
+    if (!nextArc) fail('REFERENTIAL_INTEGRITY_FAILURE', 'delta chapter has no unique arc', 'delta.chapterNumber');
+    if (control.beats.some(value => value.arcId === nextArc.id) && !nextBeat) fail('REFERENTIAL_INTEGRITY_FAILURE', 'delta chapter has no unique beat', 'delta.chapterNumber');
     const characterExists = (id: string, path: string): void => { const character = control.characters[id]; if (!character) fail('UNKNOWN_CHARACTER', 'unknown character', path); if (character.availableFromChapter > chapter) fail('TEMPORAL_VIOLATION', 'character is not available in this chapter', path); };
     const ids = new Set<string>(); Object.values(state.ledgers).flat().forEach(value => ids.add(value.id));
     const claimId = (id: string, path: string): void => { if (ids.has(id)) fail('DUPLICATE_ID', 'ledger id already exists', path); ids.add(id); };
     delta.factChanges.forEach((value, index) => { claimId(value.id, `delta.factChanges[${index}].id`); if (value.establishedChapter !== chapter) fail('TEMPORAL_VIOLATION', 'fact must be established in delta chapter', `delta.factChanges[${index}]`); ensureChapterProvenance(value.provenance, chapter, `delta.factChanges[${index}].provenance`); });
     const facts = [...state.ledgers.facts, ...delta.factChanges]; const factMap = new Map(facts.map(value => [value.id, value]));
-    const epistemic = [...state.ledgers.epistemic];
-    delta.epistemicChanges.forEach((value, index) => { const path = `delta.epistemicChanges[${index}]`; claimId(value.id, `${path}.id`); characterExists(value.characterId, `${path}.characterId`); if (value.learnedChapter !== chapter || value.source.sourceChapter > chapter) fail('TEMPORAL_VIOLATION', 'knowledge must be learned in delta chapter from non-future source', path); if (value.source.sourceCharacterId) characterExists(value.source.sourceCharacterId, `${path}.source.sourceCharacterId`); if (value.source.sourceFactId && !factMap.has(value.source.sourceFactId)) fail('UNKNOWN_FACT', 'unknown source fact', `${path}.source.sourceFactId`); if (value.kind === 'known') { const fact = factMap.get(value.factId!); if (!fact) fail('UNKNOWN_FACT', 'unknown fact', `${path}.factId`); if (fact.establishedChapter > chapter) fail('TEMPORAL_VIOLATION', 'knowledge predates fact', path); if (epistemic.some(entry => entry.kind === 'known' && entry.status === 'active' && entry.characterId === value.characterId && entry.factId === value.factId)) fail('CONFLICTING_OPERATION', 'duplicate active character knowledge', path); } value.source.basisFactIds?.forEach(id => { const basis = factMap.get(id); if (!basis || basis.establishedChapter > value.source.sourceChapter) fail('KNOWLEDGE_SOURCE_INVALID', 'unknown or future inference basis', `${path}.source.basisFactIds`); const known = epistemic.some(entry => entry.kind === 'known' && entry.status === 'active' && entry.characterId === value.characterId && entry.factId === id && entry.learnedChapter <= value.source.sourceChapter); if (!known) fail('KNOWLEDGE_SOURCE_INVALID', 'character does not know inference basis', `${path}.source.basisFactIds`); }); epistemic.push(value); });
+    const epistemic = [...state.ledgers.epistemic]; const prospectiveEpistemic = [...epistemic, ...delta.epistemicChanges];
+    delta.epistemicChanges.forEach((value, index) => { const path = `delta.epistemicChanges[${index}]`; claimId(value.id, `${path}.id`); characterExists(value.characterId, `${path}.characterId`); if (value.learnedChapter !== chapter || value.source.sourceChapter > chapter) fail('TEMPORAL_VIOLATION', 'knowledge must be learned in delta chapter from non-future source', path); if (value.source.sourceCharacterId) characterExists(value.source.sourceCharacterId, `${path}.source.sourceCharacterId`); if (value.source.sourceFactId) { const sourceFact = factMap.get(value.source.sourceFactId); if (!sourceFact) fail('UNKNOWN_FACT', 'unknown source fact', `${path}.source.sourceFactId`); if (sourceFact.establishedChapter > value.source.sourceChapter) fail('TEMPORAL_VIOLATION', 'source fact did not yet exist', `${path}.source.sourceFactId`); } if (value.kind === 'known') { const fact = factMap.get(value.factId!); if (!fact) fail('UNKNOWN_FACT', 'unknown fact', `${path}.factId`); if (fact.establishedChapter > chapter) fail('TEMPORAL_VIOLATION', 'knowledge predates fact', path); if (prospectiveEpistemic.some(entry => entry.id !== value.id && entry.kind === 'known' && entry.status === 'active' && entry.characterId === value.characterId && entry.factId === value.factId)) fail('CONFLICTING_OPERATION', 'duplicate active character knowledge', path); } value.source.basisFactIds?.forEach(id => { const basis = factMap.get(id); if (!basis || basis.establishedChapter > value.source.sourceChapter) fail('KNOWLEDGE_SOURCE_INVALID', 'unknown or future inference basis', `${path}.source.basisFactIds`); const known = prospectiveEpistemic.some(entry => entry.kind === 'known' && entry.status === 'active' && entry.characterId === value.characterId && entry.factId === id && entry.learnedChapter <= value.source.sourceChapter); if (!known) fail('KNOWLEDGE_SOURCE_INVALID', 'character does not know inference basis', `${path}.source.basisFactIds`); }); });
+    epistemic.push(...delta.epistemicChanges);
     const locations = [...state.ledgers.locations]; const statuses = state.ledgers.statuses.map(value => ({ ...value, provenance: { ...value.provenance } })); const characterProjections = state.projections.characters.map(value => ({ ...value, activeStatusIds: [...value.activeStatusIds] }));
     const projectionFor = (characterId: string): CharacterStateProjection => { let found = characterProjections.find(value => value.characterId === characterId); if (!found) { found = { characterId, active: false, lifeStatus: 'unknown', activeStatusIds: [] }; characterProjections.push(found); } return found; };
     delta.locationChanges.forEach((value, index) => { characterExists(value.characterId, `delta.locationChanges[${index}].characterId`); claimId(value.id, `delta.locationChanges[${index}].id`); if (value.sinceChapter !== chapter) fail('TEMPORAL_VIOLATION', 'location must start in delta chapter', `delta.locationChanges[${index}]`); ensureChapterProvenance(value.provenance, chapter, `delta.locationChanges[${index}].provenance`); locations.push(value); const prior = projectionFor(value.characterId); Object.assign(prior, { currentLocationRecordId: value.id }); });
@@ -451,7 +526,7 @@ export const applyStoryStateDelta = (control: FullStoryControl, currentValue: un
     delta.continuityChanges.forEach((value, index) => { const path = `delta.continuityChanges[${index}]`; ensureChapterProvenance(value.provenance, chapter, `${path}.provenance`); if (value.operation === 'open') { const entry = value.entry!; claimId(entry.id, `${path}.entry.id`); if (entry.establishedChapter !== chapter) fail('TEMPORAL_VIOLATION', 'continuity must open in delta chapter', path); continuity.push(entry); } else { const entryIndex = continuity.findIndex(entry => entry.id === value.continuityId); if (entryIndex < 0) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown continuity item', path); if (continuity[entryIndex].status !== 'open' || value.chapterNumber !== chapter) fail('CONFLICTING_OPERATION', 'continuity item is not open or chapter is invalid', path); continuity[entryIndex] = { ...continuity[entryIndex], status: value.operation === 'resolve' ? 'resolved' : 'superseded', resolvedChapter: chapter }; } });
     const newEvents: CanonicalStateEvent[] = []; delta.factChanges.forEach(value => newEvents.push(eventFor(chapter, 'fact-added', value.id, value.provenance, [value.id]))); delta.epistemicChanges.forEach(value => newEvents.push(eventFor(chapter, value.kind === 'known' ? 'knowledge-added' : 'belief-added', value.id, { sourceChapter: value.source.sourceChapter, sourceType: 'state-transition', sourceId: value.id }, [value.id, value.characterId, ...(value.factId ? [value.factId] : [])]))); delta.locationChanges.forEach(value => newEvents.push(eventFor(chapter, 'character-moved', value.id, value.provenance, [value.id, value.characterId]))); delta.statusChanges.forEach(value => newEvents.push(eventFor(chapter, value.operation === 'add' ? 'status-added' : 'status-resolved', value.operation === 'add' ? value.record!.id : value.statusId!, value.provenance, [value.operation === 'add' ? value.record!.id : value.statusId!]))); delta.relationshipChanges.forEach(value => newEvents.push(eventFor(chapter, 'relationship-changed', value.id, value.provenance, [value.id, value.relationshipId]))); delta.resourceChanges.forEach(value => newEvents.push(eventFor(chapter, 'resource-changed', value.id, value.provenance, [value.id, value.characterId, value.resourceId]))); delta.continuityChanges.forEach(value => { const id = value.operation === 'open' ? value.entry!.id : value.continuityId!; newEvents.push(eventFor(chapter, value.operation === 'open' ? 'continuity-opened' : value.operation === 'resolve' ? 'continuity-resolved' : 'continuity-superseded', id, value.provenance, [id])); });
     newEvents.forEach((value, index) => claimId(value.id, `generatedEvents[${index}]`));
-    const next: StoryState = { ...state, revision: state.revision + 1, currentChapter: chapter, ledgers: { facts: facts.sort(compareChapterId(value => value.establishedChapter)), epistemic: epistemic.sort(compareChapterId(value => value.learnedChapter)), locations: locations.sort(compareChapterId(value => value.sinceChapter)), statuses: statuses.sort(compareChapterId(value => value.establishedChapter)), relationships: relationshipHistory.sort(compareChapterId(value => value.chapterNumber)), resources: resourceHistory.sort(compareChapterId(value => value.chapterNumber)), continuity: continuity.sort(compareChapterId(value => value.establishedChapter)), events: [...state.ledgers.events, ...newEvents].sort(compareChapterId(value => value.chapterNumber)) }, projections: { characters: characterProjections.sort((a, b) => a.characterId.localeCompare(b.characterId)), relationships: relationshipProjections.sort((a, b) => a.id.localeCompare(b.id)), resources: resourceProjections.sort((a, b) => a.characterId.localeCompare(b.characterId) || a.resourceId.localeCompare(b.resourceId)) } };
+    const next: StoryState = { ...state, revision: state.revision + 1, currentChapter: chapter, currentArcId: nextArc.id, currentBeatId: nextBeat?.id, ledgers: { facts: facts.sort(compareChapterId(value => value.establishedChapter)), epistemic: epistemic.sort(compareChapterId(value => value.learnedChapter)), locations: locations.sort(compareChapterId(value => value.sinceChapter)), statuses: statuses.sort(compareChapterId(value => value.establishedChapter)), relationships: relationshipHistory.sort(compareChapterId(value => value.chapterNumber)), resources: resourceHistory.sort(compareChapterId(value => value.chapterNumber)), continuity: continuity.sort(compareChapterId(value => value.establishedChapter)), events: [...state.ledgers.events, ...newEvents].sort(compareChapterId(value => value.chapterNumber)) }, projections: { characters: characterProjections.sort((a, b) => a.characterId.localeCompare(b.characterId)), relationships: relationshipProjections.sort((a, b) => a.id.localeCompare(b.id)), resources: resourceProjections.sort((a, b) => a.characterId.localeCompare(b.characterId) || a.resourceId.localeCompare(b.resourceId)) } };
     const synchronized = synchronizeCompatibility(next); validateStateReferences(synchronized, control); return synchronized;
 };
 

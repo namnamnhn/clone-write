@@ -2,6 +2,8 @@ import type { CanonicalLedgers, CanonicalProjections, FactProvenance } from './s
 
 export type StoryId = string;
 export type ChapterNumber = number;
+/** Canonical snapshot cursor; zero alone means no chapter has been applied yet. */
+export type CanonicalChapterCursor = 0 | ChapterNumber;
 
 export interface EngineSettings {
     readonly schemaVersion: 4;
@@ -235,7 +237,7 @@ export interface StoryState {
     /** Increments exactly once per successful sequential transition. */
     readonly revision: number;
     /** Latest canonical chapter whose consequences are reflected by this snapshot. */
-    readonly currentChapter: ChapterNumber;
+    readonly currentChapter: CanonicalChapterCursor;
     readonly currentArcId?: StoryId;
     readonly currentBeatId?: StoryId;
     readonly knownCharacterIds: readonly StoryId[];

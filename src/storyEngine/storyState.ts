@@ -1,8 +1,8 @@
-import { ChapterNumber, StoryState } from './types';
+import { CanonicalChapterCursor, ChapterNumber, StoryState } from './types';
 import { isValidChapter } from './storyControl';
 
-export const createInitialStoryState = (currentChapter: ChapterNumber = 1): StoryState => {
-    if (!isValidChapter(currentChapter)) throw new Error('currentChapter must be a positive integer');
+export const createInitialStoryState = (currentChapter: CanonicalChapterCursor = 0): StoryState => {
+    if (currentChapter !== 0 && !isValidChapter(currentChapter)) throw new Error('currentChapter must be zero or a positive integer');
     return {
         kind: 'story-state',
         schemaVersion: 4,
