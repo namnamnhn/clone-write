@@ -2,13 +2,33 @@ import { parseWriterChapterDraft } from './writerDraft';
 import { WriterDraftValidationError, WriterChapterDraft } from './writerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { WriterChapterPlan } from './plannerTypes';
-import { buildValidatorContext, ValidatorContext } from './validatorContext';
+import { buildValidatorContext, ValidatorContext, ValidatorContextCapacityError, ValidatorContextSelectionPolicy } from './validatorContext';
 import { buildSemanticValidatorPrompt, parseSemanticValidationResult, SemanticValidatorModel } from './semanticValidator';
 import { buildValidationReport, createValidationIssue, ValidationIssue, ValidationIssueCode, ValidationReport } from './validationTypes';
 
 const controlMarkup = /<\/?(?:CHAPTER|STORY_SUMMARY|NEW_CHARACTER|WRITER_CONTEXT|WRITER_CHAPTER_PLAN|PLANNER_CONTEXT|FULL_STORY_CONTROL|STORY_STATE)\b[^>]*>/i;
 const metadataAssignment = /\b(?:STORY_SUMMARY|NEW_CHARACTER)\b\s*[:=]/i;
 const internalName = /\b(?:FullStoryControl|StoryControl|StoryState|WriterContext|WriterChapterPlan|PlannerContext)\b/;
+
+export interface RepairCandidateSnapshot {
+    readonly kind: 'repair-candidate-snapshot';
+    readonly chapterNumber: number;
+    readonly title?: string;
+    readonly prose: string;
+}
+
+/** Projects runtime candidate data through an explicit primitive-field allow-list. */
+const buildRepairCandidateSnapshot = (value: unknown, targetChapter: number): RepairCandidateSnapshot | undefined => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    if (typeof record.prose !== 'string' || !record.prose.trim()) return undefined;
+    const title = typeof record.title === 'string' && record.title.trim() && !/[<>]/.test(record.title)
+        ? record.title.trim() : undefined;
+    return {
+        kind: 'repair-candidate-snapshot', chapterNumber: targetChapter,
+        ...(title === undefined ? {} : { title }), prose: record.prose.trim(),
+    };
+};
 
 const parserCode = (code: string): ValidationIssueCode => {
     if (code === 'CHAPTER_MISMATCH') return 'WRONG_CHAPTER';
@@ -22,8 +42,8 @@ const deterministicIssues = (draft: WriterChapterDraft, context: ValidatorContex
     if (controlMarkup.test(draft.prose)) issues.push(createValidationIssue('CONTROL_PROTOCOL_LEAK', 'critical', 'deterministic'));
     if (metadataAssignment.test(draft.prose)) issues.push(createValidationIssue('METADATA_LEAK', 'critical', 'deterministic'));
     if (internalName.test(draft.prose)) issues.push(createValidationIssue('INTERNAL_ID_LEAK', 'error', 'deterministic'));
-    const lowerProse = draft.prose.toLocaleLowerCase();
-    if (context.secretValidation.some(secret => !secret.revealAllowed && lowerProse.includes(secret.rawValue.toLocaleLowerCase()))) {
+    const normalizedProse = draft.prose.normalize('NFKC').toLowerCase();
+    if (context.secretValidation.some(secret => !secret.revealAllowed && normalizedProse.includes(secret.rawValue.normalize('NFKC').toLowerCase()))) {
         issues.push(createValidationIssue('AUTHOR_SECRET_LEAK', 'critical', 'deterministic'));
     }
     return issues;
@@ -36,12 +56,14 @@ export interface ValidateWriterChapterRequest {
     readonly draft: WriterChapterDraft;
     readonly semanticModel: SemanticValidatorModel;
     readonly validationPass?: number;
+    readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
 }
 
 export interface WriterChapterValidationResult {
     readonly draft: WriterChapterDraft;
     readonly report: ValidationReport;
     readonly context?: ValidatorContext;
+    readonly repairCandidate?: RepairCandidateSnapshot;
 }
 
 /** Production-grade validation: a semantic model is mandatory and every boundary fails closed. */
@@ -49,9 +71,10 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
     const validationPass = request.validationPass ?? 1;
     let context: ValidatorContext;
     try {
-        context = buildValidatorContext(request.control, request.state, request.plan);
-    } catch {
-        return { draft: request.draft, report: buildValidationReport(request.plan.chapterNumber, validationPass, [createValidationIssue('INVALID_SOURCE_PLAN', 'critical', 'infrastructure')]) };
+        context = buildValidatorContext(request.control, request.state, request.plan, request.validatorContextSelectionPolicy);
+    } catch (error) {
+        const code = error instanceof ValidatorContextCapacityError ? 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED' : 'INVALID_SOURCE_PLAN';
+        return { draft: request.draft, report: buildValidationReport(request.plan.chapterNumber, validationPass, [createValidationIssue(code, 'critical', 'infrastructure')]) };
     }
     let draft: WriterChapterDraft;
     try {
@@ -60,7 +83,11 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
         const issues = error instanceof WriterDraftValidationError
             ? error.issues.map(entry => createValidationIssue(parserCode(entry.code), 'critical', 'deterministic'))
             : [createValidationIssue('INVALID_DRAFT_PROTOCOL', 'critical', 'deterministic')];
-        return { draft: request.draft, context, report: buildValidationReport(context.targetChapter, validationPass, issues) };
+        const repairCandidate = buildRepairCandidateSnapshot(request.draft, context.targetChapter);
+        return {
+            draft: request.draft, context, ...(repairCandidate === undefined ? {} : { repairCandidate }),
+            report: buildValidationReport(context.targetChapter, validationPass, issues),
+        };
     }
     const issues = [...deterministicIssues(draft, context)];
     try {
@@ -72,5 +99,8 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
     } catch {
         issues.push(createValidationIssue('VALIDATOR_PROTOCOL_FAILURE', 'critical', 'infrastructure'));
     }
-    return { draft, context, report: buildValidationReport(context.targetChapter, validationPass, issues) };
+    return {
+        draft, context, repairCandidate: buildRepairCandidateSnapshot(draft, context.targetChapter),
+        report: buildValidationReport(context.targetChapter, validationPass, issues),
+    };
 };

@@ -4,6 +4,39 @@ import { FullStoryControl, StoryState } from './types';
 import { buildWriterContext } from './writerContext';
 import { WriterContext } from './writerTypes';
 
+export interface ValidatorContextSelectionPolicy {
+    readonly maxLockedCharacters: number;
+    readonly maxLockedReveals: number;
+    readonly maxLockedRelationshipEvents: number;
+    readonly maxLockedStoryEvents: number;
+    readonly maxSecretValidationItems: number;
+}
+
+export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelectionPolicy = {
+    maxLockedCharacters: 64,
+    maxLockedReveals: 128,
+    maxLockedRelationshipEvents: 128,
+    maxLockedStoryEvents: 128,
+    maxSecretValidationItems: 128,
+};
+
+export class ValidatorContextCapacityError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'ValidatorContextCapacityError';
+    }
+}
+
+export interface LockedCharacterDescriptor { readonly id: string; readonly name: string; }
+export interface LockedRevealDescriptor { readonly id: string; readonly validationText: string; }
+export interface LockedRelationshipEventDescriptor {
+    readonly id: string;
+    readonly eventType: string;
+    readonly participantIds: readonly string[];
+    readonly validationText?: string;
+}
+export interface LockedStoryEventDescriptor { readonly id: string; readonly eventType: string; readonly validationText?: string; }
+
 export interface ValidatorSecretDatum {
     readonly id: string;
     readonly revealId?: string;
@@ -21,17 +54,42 @@ export interface ValidatorContext {
     readonly writerContext: WriterContext;
     readonly gates: {
         readonly allowedCharacterIds: readonly string[];
-        readonly lockedCharacterIds: readonly string[];
+        readonly lockedCharacters: readonly LockedCharacterDescriptor[];
         readonly allowedPovIds: readonly string[];
-        readonly lockedRevealIds: readonly string[];
-        readonly lockedRelationshipEventIds: readonly string[];
-        readonly lockedStoryEventIds: readonly string[];
+        readonly lockedReveals: readonly LockedRevealDescriptor[];
+        readonly lockedRelationshipEvents: readonly LockedRelationshipEventDescriptor[];
+        readonly lockedStoryEvents: readonly LockedStoryEventDescriptor[];
     };
     readonly secretValidation: readonly ValidatorSecretDatum[];
 }
 
 /** Builds a target-scoped allow-list. It never spreads either source object or includes future arc prose. */
-export const buildValidatorContext = (control: FullStoryControl, state: StoryState, plan: WriterChapterPlan): ValidatorContext => {
+const compareIds = (left: { readonly id: string }, right: { readonly id: string }): number => left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+
+const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): ValidatorContextSelectionPolicy => {
+    const keys: readonly (keyof ValidatorContextSelectionPolicy)[] = [
+        'maxLockedCharacters', 'maxLockedReveals', 'maxLockedRelationshipEvents',
+        'maxLockedStoryEvents', 'maxSecretValidationItems',
+    ];
+    keys.forEach((key) => {
+        if (!Number.isSafeInteger(policy[key]) || policy[key] < 0) {
+            throw new ValidatorContextCapacityError(`validator context selection policy ${key} must be a non-negative safe integer`);
+        }
+    });
+    return { ...policy };
+};
+
+const requireCapacity = (label: string, count: number, maximum: number): void => {
+    if (count > maximum) throw new ValidatorContextCapacityError(`${label} requires ${count} items but capacity is ${maximum}`);
+};
+
+export const buildValidatorContext = (
+    control: FullStoryControl,
+    state: StoryState,
+    plan: WriterChapterPlan,
+    selectionPolicy: ValidatorContextSelectionPolicy = DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
+): ValidatorContext => {
+    const policy = normalizeSelectionPolicy(selectionPolicy);
     const writerContext = buildWriterContext(control, state, plan);
     const chapter = writerContext.targetChapter;
     const arc = getArcForChapter(control, chapter);
@@ -39,22 +97,46 @@ export const buildValidatorContext = (control: FullStoryControl, state: StorySta
     if (!arc) throw new Error('target chapter has no unambiguous source arc');
     const characterIds = control.characterOrder.slice();
     const allowedCharacterIds = characterIds.filter(id => isCharacterDirectAppearanceAllowed(control, id, chapter));
+    const lockedCharacters = characterIds
+        .filter(id => !isCharacterDirectAppearanceAllowed(control, id, chapter))
+        .map(id => ({ id, name: control.characters[id].name }))
+        .sort(compareIds);
+    const lockedReveals = control.reveals
+        .filter(value => !isRevealAllowed(control, value.id, chapter))
+        .map(value => ({ id: value.id, validationText: value.writerText }))
+        .sort(compareIds);
+    const lockedRelationshipEvents = control.relationshipEvents
+        .filter(value => !isRelationshipEventAllowed(control, value.id, chapter))
+        .map(value => ({
+            id: value.id, eventType: value.eventType, participantIds: value.participantIds.slice(),
+            ...(value.writerText === undefined ? {} : { validationText: value.writerText }),
+        }))
+        .sort(compareIds);
+    const lockedStoryEvents = control.storyEvents
+        .filter(value => !isStoryEventAllowed(control, value.id, chapter))
+        .map(value => ({ id: value.id, eventType: value.eventType, ...(value.writerText === undefined ? {} : { validationText: value.writerText }) }))
+        .sort(compareIds);
+    const secretValidation = control.authorOnlySecrets
+        .filter(secret => secret.revealId === undefined || !isRevealAllowed(control, secret.revealId, chapter))
+        .map(secret => ({
+            id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }),
+            revealAllowed: false as const, rawValue: secret.value,
+        }))
+        .sort(compareIds);
+    requireCapacity('locked characters', lockedCharacters.length, policy.maxLockedCharacters);
+    requireCapacity('locked reveals', lockedReveals.length, policy.maxLockedReveals);
+    requireCapacity('locked relationship events', lockedRelationshipEvents.length, policy.maxLockedRelationshipEvents);
+    requireCapacity('locked story events', lockedStoryEvents.length, policy.maxLockedStoryEvents);
+    requireCapacity('secret validation', secretValidation.length, policy.maxSecretValidationItems);
     return {
         kind: 'validator-context', targetChapter: chapter, currentArc: { id: arc.id, title: arc.title },
         ...(beat === undefined ? {} : { currentBeat: { id: beat.id, order: beat.order } }),
         chapterPlan: writerContext.chapterPlan, writerContext,
         gates: {
-            allowedCharacterIds, lockedCharacterIds: characterIds.filter(id => !isCharacterDirectAppearanceAllowed(control, id, chapter)),
+            allowedCharacterIds, lockedCharacters,
             allowedPovIds: characterIds.filter(id => isPovAllowed(control, id, chapter)),
-            lockedRevealIds: control.reveals.filter(value => !isRevealAllowed(control, value.id, chapter)).map(value => value.id),
-            lockedRelationshipEventIds: control.relationshipEvents.filter(value => !isRelationshipEventAllowed(control, value.id, chapter)).map(value => value.id),
-            lockedStoryEventIds: control.storyEvents.filter(value => !isStoryEventAllowed(control, value.id, chapter)).map(value => value.id),
+            lockedReveals, lockedRelationshipEvents, lockedStoryEvents,
         },
-        secretValidation: control.authorOnlySecrets
-            .filter(secret => secret.revealId === undefined || !isRevealAllowed(control, secret.revealId, chapter))
-            .map(secret => ({
-            id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }),
-            revealAllowed: false, rawValue: secret.value,
-        })),
+        secretValidation,
     };
 };

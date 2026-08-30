@@ -8,6 +8,7 @@ export const VALIDATION_ISSUE_CODES = [
     'CANON_CONTRADICTION', 'CONTINUITY_CONTRADICTION', 'REQUIRED_EVENT_MISSING',
     'FORBIDDEN_EVENT_OCCURRED', 'OPPONENT_IRRATIONALITY', 'CONSEQUENCE_MISSING', 'FILLER_SCENE',
     'INTERNAL_ID_LEAK', 'VALIDATOR_PROTOCOL_FAILURE', 'REPAIR_PROTOCOL_FAILURE',
+    'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED',
 ] as const;
 
 export type ValidationIssueCode = typeof VALIDATION_ISSUE_CODES[number];
@@ -56,13 +57,17 @@ export type ValidationPipelineResult = ValidationApprovedCandidate | RejectedVal
 const categoryByCode: Readonly<Record<ValidationIssueCode, ValidationCategory>> = {
     CONTROL_PROTOCOL_LEAK: 'protocol', METADATA_LEAK: 'protocol', WRONG_CHAPTER: 'protocol', MULTI_CHAPTER_OUTPUT: 'protocol',
     INVALID_DRAFT_PROTOCOL: 'protocol', INVALID_SOURCE_PLAN: 'protocol', VALIDATOR_PROTOCOL_FAILURE: 'protocol', REPAIR_PROTOCOL_FAILURE: 'protocol',
+    VALIDATOR_CONTEXT_CAPACITY_EXCEEDED: 'protocol',
     PLAN_DRIFT: 'plan-adherence', POV_VIOLATION: 'pov', CHARACTER_GATE_VIOLATION: 'character', PREMATURE_REVEAL: 'gate',
     AUTHOR_SECRET_LEAK: 'secret', FUTURE_PLOT_LEAK: 'gate', CANON_CONTRADICTION: 'canon', CONTINUITY_CONTRADICTION: 'continuity',
     REQUIRED_EVENT_MISSING: 'plan-adherence', FORBIDDEN_EVENT_OCCURRED: 'gate', OPPONENT_IRRATIONALITY: 'conflict',
     CONSEQUENCE_MISSING: 'consequence', FILLER_SCENE: 'filler', INTERNAL_ID_LEAK: 'prose',
 };
 
-const nonRepairable = new Set<ValidationIssueCode>(['INVALID_SOURCE_PLAN', 'VALIDATOR_PROTOCOL_FAILURE', 'REPAIR_PROTOCOL_FAILURE']);
+const nonRepairable = new Set<ValidationIssueCode>([
+    'INVALID_SOURCE_PLAN', 'VALIDATOR_PROTOCOL_FAILURE', 'REPAIR_PROTOCOL_FAILURE',
+    'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED',
+]);
 
 export const createValidationIssue = (
     code: ValidationIssueCode,

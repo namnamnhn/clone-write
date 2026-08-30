@@ -3,7 +3,8 @@ import { FullStoryControl, StoryState } from './types';
 import { parseWriterChapterDraft } from './writerDraft';
 import { WriterChapterDraft, WriterContext } from './writerTypes';
 import { SemanticValidatorModel } from './semanticValidator';
-import { validateWriterChapter } from './validator';
+import { RepairCandidateSnapshot, validateWriterChapter } from './validator';
+import { ValidatorContextSelectionPolicy } from './validatorContext';
 import { buildValidationReport, createValidationIssue, ValidationIssueCode, ValidationPipelineResult, ValidationReport } from './validationTypes';
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
@@ -42,16 +43,20 @@ export interface RepairContext {
     readonly targetChapter: number;
     readonly writerContext: WriterContext;
     readonly chapterPlan: WriterChapterPlan;
-    readonly candidate: WriterChapterDraft;
+    readonly candidate: RepairCandidateSnapshot;
     readonly issues: readonly SafeRepairIssue[];
 }
 
 export interface RepairModelRequest { readonly kind: 'repair-model-request'; readonly context: RepairContext; readonly prompt: string; }
 export interface RepairModel { repair(request: RepairModelRequest): Promise<unknown>; }
 
-export const buildRepairContext = (writerContext: WriterContext, draft: WriterChapterDraft, report: ValidationReport): RepairContext => ({
+export const buildRepairContext = (writerContext: WriterContext, candidate: RepairCandidateSnapshot, report: ValidationReport): RepairContext => ({
     kind: 'repair-context', targetChapter: writerContext.targetChapter, writerContext,
-    chapterPlan: writerContext.chapterPlan, candidate: { ...draft },
+    chapterPlan: writerContext.chapterPlan,
+    candidate: {
+        kind: 'repair-candidate-snapshot', chapterNumber: writerContext.targetChapter,
+        ...(candidate.title === undefined ? {} : { title: candidate.title }), prose: candidate.prose,
+    },
     issues: report.issues.filter(issue => issue.blocking && issue.repairable).map(issue => ({
         code: issue.code, scope: issue.scope, ...(issue.sceneId === undefined ? {} : { sceneId: issue.sceneId }),
         instruction: repairInstruction[issue.code] ?? 'Rewrite the candidate to satisfy the supplied chapter plan.',
@@ -74,6 +79,7 @@ export interface ValidateAndRepairRequest {
     readonly semanticModel: SemanticValidatorModel;
     readonly repairModel: RepairModel;
     readonly maxRepairAttempts?: number;
+    readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
 }
 
 /** Finite repair orchestration. Initial validation is pass 1 and never counts as a repair attempt. */
@@ -88,10 +94,11 @@ export const validateAndRepairWriterChapter = async (request: ValidateAndRepairR
         if (validation.report.blockingIssueCount === 0) {
             return { status: 'approved-not-canon', draft: candidate, report: validation.report, repairAttempts: attempts };
         }
-        if (validation.report.issues.some(issue => issue.blocking && !issue.repairable) || attempts >= maximum || !validation.context) {
+        if (validation.report.issues.some(issue => issue.blocking && !issue.repairable)
+            || attempts >= maximum || !validation.context || !validation.repairCandidate) {
             return { status: 'rejected', draft: candidate, report: validation.report, repairAttempts: attempts };
         }
-        const repairContext = buildRepairContext(validation.context.writerContext, candidate, validation.report);
+        const repairContext = buildRepairContext(validation.context.writerContext, validation.repairCandidate, validation.report);
         attempts += 1;
         try {
             const output = await request.repairModel.repair({ kind: 'repair-model-request', context: repairContext, prompt: buildRepairPrompt(repairContext) });

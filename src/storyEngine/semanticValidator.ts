@@ -5,6 +5,7 @@ import { createValidationIssue, VALIDATION_ISSUE_CODES, ValidationIssue, Validat
 const semanticCodes = new Set<ValidationIssueCode>(VALIDATION_ISSUE_CODES.filter(code => ![
     'CONTROL_PROTOCOL_LEAK', 'METADATA_LEAK', 'WRONG_CHAPTER', 'MULTI_CHAPTER_OUTPUT', 'INVALID_DRAFT_PROTOCOL',
     'INVALID_SOURCE_PLAN', 'VALIDATOR_PROTOCOL_FAILURE', 'REPAIR_PROTOCOL_FAILURE',
+    'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED',
 ].includes(code)));
 const severities = new Set<ValidationSeverity>(['critical', 'error', 'warning']);
 const scopes = new Set<ValidationScope>(['chapter', 'scene']);

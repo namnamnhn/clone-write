@@ -3,6 +3,7 @@ import {
     buildValidatorContext,
     compileStoryControl,
     createInitialStoryState,
+    DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
     parseSemanticValidationResult,
     RepairModelRequest,
     SemanticValidatorModel,
@@ -64,16 +65,163 @@ const semanticResult = (chapterNumber: number, issues: readonly Record<string, u
 const passingModel: SemanticValidatorModel = { async validate(request) { return semanticResult(request.chapterNumber); } };
 const unusedRepair = { async repair() { throw new Error('repair must not be called'); } };
 
+const opaqueControl = () => compileStoryControl({
+    ...blueprint(),
+    characters: [
+        blueprint().characters[0],
+        { id: 'char-opaque-99', name: 'Thẩm Dao', availableFromChapter: 291, writerProfile: { role: 'late witness' }, authorNotes: 'private identity note' },
+    ],
+    reveals: [{ id: 'reveal-opaque-77', writerText: 'Vương miện giấu một bản đồ bí mật.', authorNotes: 'private reveal note' }],
+    relationshipEvents: [{
+        id: 'relationship-opaque-77', relationshipId: 'relationship-a-dao', eventType: 'first-meeting',
+        participantIds: ['a', 'char-opaque-99'], writerText: 'A và Thẩm Dao gặp nhau lần đầu.', authorNotes: 'private relationship plan',
+    }],
+    storyEvents: [{ id: 'event-opaque-77', eventType: 'palace-coup', writerText: 'Cuộc chính biến trong đại điện bắt đầu.', authorNotes: 'private event plan' }],
+    gates: {
+        characters: [
+            { id: 'a-character', characterId: 'a', allowedFromChapter: 1 },
+            { id: 'opaque-character-gate', characterId: 'char-opaque-99', allowedFromChapter: 291 },
+        ],
+        pov: [{ id: 'a-pov', characterId: 'a', allowedFromChapter: 1 }],
+        reveals: [{ id: 'opaque-reveal-gate', revealId: 'reveal-opaque-77', allowedFromChapter: 291 }],
+        relationships: [{ id: 'opaque-relationship-gate', eventId: 'relationship-opaque-77', allowedFromChapter: 291 }],
+        events: [{ id: 'opaque-event-gate', eventId: 'event-opaque-77', allowedFromChapter: 291 }],
+    },
+    forbiddenEvents: [{ id: 'opaque-event-forbidden', eventId: 'event-opaque-77', forbiddenThroughChapter: 290, authorReason: 'private timing' }],
+    authorOnlySecrets: [{ id: 'opaque-secret', value: RAW_SECRET, revealId: 'reveal-opaque-77', notes: 'private secret note' }],
+});
+
+const oversizedControl = () => {
+    const source = blueprint();
+    const indexes = [0, 1, 2];
+    return compileStoryControl({
+        ...source,
+        characters: [
+            ...source.characters,
+            ...indexes.map(index => ({ id: `capacity-character-${index}`, name: `Capacity Character ${index}`, availableFromChapter: 590, writerProfile: { role: 'future' } })),
+        ],
+        reveals: [
+            ...(source.reveals ?? []),
+            ...indexes.map(index => ({ id: `capacity-reveal-${index}`, writerText: `Capacity reveal ${index}.` })),
+        ],
+        relationshipEvents: indexes.map(index => ({
+            id: `capacity-relationship-${index}`, relationshipId: `capacity-pair-${index}`, eventType: 'meeting',
+            participantIds: ['a', `capacity-character-${index}`], writerText: `Capacity relationship ${index}.`,
+        })),
+        storyEvents: [
+            ...(source.storyEvents ?? []),
+            ...indexes.map(index => ({ id: `capacity-event-${index}`, eventType: 'future-event', writerText: `Capacity event ${index}.` })),
+        ],
+        gates: {
+            characters: [
+                ...(source.gates?.characters ?? []),
+                ...indexes.map(index => ({ id: `capacity-character-gate-${index}`, characterId: `capacity-character-${index}`, allowedFromChapter: 590 })),
+            ],
+            pov: source.gates?.pov,
+            reveals: [
+                ...(source.gates?.reveals ?? []),
+                ...indexes.map(index => ({ id: `capacity-reveal-gate-${index}`, revealId: `capacity-reveal-${index}`, allowedFromChapter: 590 })),
+            ],
+            relationships: indexes.map(index => ({ id: `capacity-relationship-gate-${index}`, eventId: `capacity-relationship-${index}`, allowedFromChapter: 590 })),
+            events: [
+                ...(source.gates?.events ?? []),
+                ...indexes.map(index => ({ id: `capacity-event-gate-${index}`, eventId: `capacity-event-${index}`, allowedFromChapter: 590 })),
+            ],
+        },
+        authorOnlySecrets: [
+            ...(source.authorOnlySecrets ?? []),
+            ...indexes.map(index => ({ id: `capacity-secret-${index}`, value: `Capacity secret ${index}.`, revealId: `capacity-reveal-${index}` })),
+        ],
+    });
+};
+
 describe('Validator context and deterministic safety net', () => {
     it('builds a bounded privileged context without future arc prose or whole source objects', () => {
         const context = buildValidatorContext(control, stateFor(560), planFor(560));
         const serialized = JSON.stringify(context);
         expect(context.secretValidation).toEqual([{ id: 'omega-secret', revealId: 'omega-reveal', revealAllowed: false, rawValue: RAW_SECRET }]);
-        expect(context.gates.lockedRevealIds).toContain('omega-reveal');
+        expect(context.gates.lockedReveals).toContainEqual({ id: 'omega-reveal', validationText: 'Omega owns a second key.' });
+        expect(context.gates.lockedCharacters).toContainEqual({ id: 'future', name: 'Future' });
+        expect(context.gates.lockedCharacters.length).toBeLessThanOrEqual(DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxLockedCharacters);
         expect(serialized).not.toContain('hidden arc outcome');
         expect(serialized).not.toContain('hidden dossier');
         expect(serialized).not.toContain('authorOnlySecrets');
         expect(serialized).not.toContain('extensions');
+    });
+
+    it('gives semantic validation bounded opaque-ID descriptors that never cross into repair', async () => {
+        const sourceControl = opaqueControl();
+        let repairRequest: RepairModelRequest | undefined;
+        let validationPass = 0;
+        const validate = vi.fn(async (request: Parameters<SemanticValidatorModel['validate']>[0]) => {
+            validationPass += 1;
+            if (validationPass === 1) {
+                expect(request.context.gates.lockedCharacters).toContainEqual({ id: 'char-opaque-99', name: 'Thẩm Dao' });
+                expect(request.context.gates.lockedReveals).toContainEqual({ id: 'reveal-opaque-77', validationText: 'Vương miện giấu một bản đồ bí mật.' });
+                expect(request.context.gates.lockedRelationshipEvents).toContainEqual({
+                    id: 'relationship-opaque-77', eventType: 'first-meeting', participantIds: ['a', 'char-opaque-99'],
+                    validationText: 'A và Thẩm Dao gặp nhau lần đầu.',
+                });
+                expect(request.context.gates.lockedStoryEvents).toContainEqual({ id: 'event-opaque-77', eventType: 'palace-coup', validationText: 'Cuộc chính biến trong đại điện bắt đầu.' });
+                return semanticResult(request.chapterNumber, [{ code: 'CHARACTER_GATE_VIOLATION', severity: 'critical', scope: 'chapter' }]);
+            }
+            return semanticResult(request.chapterNumber);
+        });
+        const result = await validateAndRepairWriterChapter({
+            control: sourceControl, state: stateFor(290), plan: planFor(290), draft: draftFor(290, 'Thẩm Dao bước vào phòng.'),
+            semanticModel: { validate }, repairModel: { async repair(request) { repairRequest = request; return draftFor(290); } },
+        });
+        expect(result.status).toBe('approved-not-canon');
+        expect(repairRequest?.context.candidate.prose).toContain('Thẩm Dao');
+        const serializedRepair = JSON.stringify(repairRequest === undefined ? undefined : {
+            ...repairRequest,
+            context: { ...repairRequest.context, candidate: { ...repairRequest.context.candidate, prose: '[candidate prose removed]' } },
+        });
+        ['Thẩm Dao', 'Vương miện giấu', 'A và Thẩm Dao', 'Cuộc chính biến', 'lockedCharacters', 'lockedReveals', 'lockedRelationshipEvents', 'lockedStoryEvents', 'secretValidation']
+            .forEach(value => expect(serializedRepair).not.toContain(value));
+    });
+
+    it.each([
+        ['locked characters', { maxLockedCharacters: 3, maxLockedReveals: 10, maxLockedRelationshipEvents: 10, maxLockedStoryEvents: 10, maxSecretValidationItems: 10 }],
+        ['locked reveals', { maxLockedCharacters: 10, maxLockedReveals: 3, maxLockedRelationshipEvents: 10, maxLockedStoryEvents: 10, maxSecretValidationItems: 10 }],
+        ['locked relationship events', { maxLockedCharacters: 10, maxLockedReveals: 10, maxLockedRelationshipEvents: 2, maxLockedStoryEvents: 10, maxSecretValidationItems: 10 }],
+        ['locked story events', { maxLockedCharacters: 10, maxLockedReveals: 10, maxLockedRelationshipEvents: 10, maxLockedStoryEvents: 2, maxSecretValidationItems: 10 }],
+        ['secret validation', { maxLockedCharacters: 10, maxLockedReveals: 10, maxLockedRelationshipEvents: 10, maxLockedStoryEvents: 10, maxSecretValidationItems: 3 }],
+    ])('fails closed before semantic validation or repair when %s exceed capacity', async (_label, validatorContextSelectionPolicy) => {
+        const compiled = oversizedControl();
+        const sourceControl = structuredClone(compiled);
+        const state = stateFor(560);
+        const before = [sourceControl, state].map(value => JSON.stringify(value));
+        const validate = vi.fn();
+        const repair = vi.fn();
+        const result = await validateAndRepairWriterChapter({
+            control: sourceControl, state, plan: planFor(560), draft: draftFor(560), semanticModel: { validate }, repairModel: { repair },
+            validatorContextSelectionPolicy,
+        });
+        expect(result.status).toBe('rejected');
+        expect(result.report.issues).toEqual([expect.objectContaining({
+            code: 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED', severity: 'critical', repairable: false,
+        })]);
+        expect(validate).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
+        expect([sourceControl, state].map(value => JSON.stringify(value))).toEqual(before);
+        expect(Object.isFrozen(sourceControl)).toBe(false);
+        expect(Object.isFrozen(state)).toBe(false);
+    });
+
+    it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid validator capacities without calling either model: %s', async (invalidCapacity) => {
+        const validate = vi.fn();
+        const repair = vi.fn();
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), semanticModel: { validate }, repairModel: { repair },
+            validatorContextSelectionPolicy: {
+                ...DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
+                maxLockedCharacters: invalidCapacity,
+            },
+        });
+        expect(result.report.issues).toEqual([expect.objectContaining({ code: 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED', repairable: false })]);
+        expect(validate).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
     });
 
     it('blocks a chapter 560 raw secret leak without echoing the secret in its report', async () => {
@@ -125,6 +273,7 @@ describe('Untrusted semantic validator protocol', () => {
 
     it.each([
         ['unknown code', (chapter: number) => semanticResult(chapter, [{ code: 'MODEL_INVENTED_CODE', severity: 'error', scope: 'chapter' }])],
+        ['infrastructure-only code', (chapter: number) => semanticResult(chapter, [{ code: 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED', severity: 'critical', scope: 'chapter' }])],
         ['malformed envelope', () => ({ kind: 'wrong', issues: [] })],
         ['duplicate issue', (chapter: number) => semanticResult(chapter, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }, { code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }])],
         ['unsafe evidence field', (chapter: number) => semanticResult(chapter, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter', evidence: RAW_SECRET }])],
@@ -169,6 +318,30 @@ describe('Untrusted semantic validator protocol', () => {
 });
 
 describe('Bounded auto repair and non-canon result', () => {
+    it.each([
+        ['flat hidden field', { hiddenTruth: 'EXTRA_FIELD_SECRET' }, 'hiddenTruth', 'EXTRA_FIELD_SECRET'],
+        ['nested arbitrary object', { arbitraryInternalPayload: { secret: 'NESTED_FIELD_SECRET' } }, 'arbitraryInternalPayload', 'NESTED_FIELD_SECRET'],
+        ['author secret field name', { authorOnlySecrets: 'AUTHOR_ONLY_FIELD_SECRET' }, 'authorOnlySecrets', 'AUTHOR_ONLY_FIELD_SECRET'],
+    ])('projects a malformed wrong-chapter candidate through the repair allow-list: %s', async (_label, extra, forbiddenKey, forbiddenValue) => {
+        let captured: RepairModelRequest | undefined;
+        const runtimeDraft = {
+            kind: 'writer-chapter-draft', validationStatus: 'unvalidated', chapterNumber: 559,
+            prose: 'Candidate prose remains available for rewriting.', ...extra,
+        } as unknown as WriterChapterDraft;
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: runtimeDraft, semanticModel: passingModel,
+            repairModel: { async repair(request) { captured = request; return draftFor(560); } },
+        });
+        expect(result.status).toBe('approved-not-canon');
+        expect(captured?.context.candidate).toEqual({
+            kind: 'repair-candidate-snapshot', chapterNumber: 560,
+            prose: 'Candidate prose remains available for rewriting.',
+        });
+        const serialized = JSON.stringify(captured);
+        expect(serialized).not.toContain(forbiddenKey);
+        expect(serialized).not.toContain(forbiddenValue);
+    });
+
     it('repairs once, fully revalidates, and returns approved-not-canon without state mutation', async () => {
         const state = stateFor(560);
         const before = JSON.stringify(state);
@@ -227,6 +400,12 @@ describe('Bounded auto repair and non-canon result', () => {
         const repair = vi.fn(async (request: RepairModelRequest) => {
             captured = JSON.stringify(request);
             expect(request.context.issues).toEqual([expect.objectContaining({ code: 'AUTHOR_SECRET_LEAK', instruction: expect.not.stringContaining(RAW_SECRET) })]);
+            expect(request.context.candidate.prose).toContain(RAW_SECRET);
+            const withoutCandidateProse = JSON.stringify({
+                ...request,
+                context: { ...request.context, candidate: { ...request.context.candidate, prose: '[candidate prose removed]' } },
+            });
+            expect(withoutCandidateProse).not.toContain(RAW_SECRET);
             return draftFor(560, 'A pays with the map and crosses the gate.');
         });
         const validate = vi.fn(async (request: { chapterNumber: number }) => semanticResult(request.chapterNumber));
