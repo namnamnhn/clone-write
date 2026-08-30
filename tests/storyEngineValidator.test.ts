@@ -135,6 +135,33 @@ const oversizedControl = () => {
     });
 };
 
+const longRunControl = () => {
+    const source = blueprint();
+    const historical = Array.from({ length: 150 }, (_, index) => ({
+        id: `historical-character-${index}`, name: `Historical Character ${index}`, availableFromChapter: 1,
+        writerProfile: { role: 'historical cast member' },
+    }));
+    const future = [0, 1].map(index => ({
+        id: `future-character-${index}`, name: `Future Character ${index}`, availableFromChapter: 590,
+        writerProfile: { role: 'future cast member' },
+    }));
+    return compileStoryControl({
+        ...source,
+        characters: [source.characters[0], ...historical, ...future],
+        gates: {
+            characters: [
+                { id: 'a-character', characterId: 'a', allowedFromChapter: 1 },
+                ...historical.map((character, index) => ({ id: `historical-gate-${index}`, characterId: character.id, allowedFromChapter: 1 })),
+                ...future.map((character, index) => ({ id: `future-gate-${index}`, characterId: character.id, allowedFromChapter: 590 })),
+            ],
+            pov: [{ id: 'a-pov', characterId: 'a', allowedFromChapter: 1 }],
+            reveals: source.gates?.reveals,
+            relationships: source.gates?.relationships,
+            events: source.gates?.events,
+        },
+    });
+};
+
 describe('Validator context and deterministic safety net', () => {
     it('builds a bounded privileged context without future arc prose or whole source objects', () => {
         const context = buildValidatorContext(control, stateFor(560), planFor(560));
@@ -147,6 +174,35 @@ describe('Validator context and deterministic safety net', () => {
         expect(serialized).not.toContain('hidden dossier');
         expect(serialized).not.toContain('authorOnlySecrets');
         expect(serialized).not.toContain('extensions');
+    });
+
+    it('keeps a 150-character historical cast out of validator context while retaining verified plan references', async () => {
+        const compiled = longRunControl();
+        const sourceControl = structuredClone(compiled);
+        const state = stateFor(500);
+        const plan = planFor(500);
+        const before = [sourceControl, state].map(value => JSON.stringify(value));
+        const context = buildValidatorContext(sourceControl, state, plan);
+        expect(context.chapterPlan.povCharacterId).toBe('a');
+        expect(context.chapterPlan.participantIds).toEqual(['a']);
+        expect(context.writerContext.characters.map(character => character.id)).toContain('a');
+        expect(context.writerContext.characters.length).toBeLessThanOrEqual(24);
+        expect(context.gates.lockedCharacters.map(character => character.id)).toEqual(['future-character-0', 'future-character-1']);
+        expect(JSON.stringify(context)).not.toContain('historical-character-149');
+        expect(JSON.stringify(context)).not.toContain('allowedCharacterIds');
+        expect(JSON.stringify(context)).not.toContain('allowedPovIds');
+        let captured = '';
+        const result = await validateWriterChapter({
+            control: sourceControl, state, plan, draft: draftFor(500),
+            semanticModel: { async validate(request) { captured = JSON.stringify(request); return semanticResult(request.chapterNumber); } },
+        });
+        expect(result.candidateStatus).toBe('parsed');
+        expect(captured).not.toContain('historical-character-149');
+        expect(captured).not.toContain('allowedCharacterIds');
+        expect(captured).not.toContain('allowedPovIds');
+        expect([sourceControl, state].map(value => JSON.stringify(value))).toEqual(before);
+        expect(Object.isFrozen(sourceControl)).toBe(false);
+        expect(Object.isFrozen(state)).toBe(false);
     });
 
     it('gives semantic validation bounded opaque-ID descriptors that never cross into repair', async () => {
@@ -318,6 +374,74 @@ describe('Untrusted semantic validator protocol', () => {
 });
 
 describe('Bounded auto repair and non-canon result', () => {
+    it('returns no WriterChapterDraft for a malformed wrong-kind runtime candidate', async () => {
+        const runtimeDraft = { kind: 'wrong', chapterNumber: 999, prose: 'x', hiddenTruth: 'MUST NOT RETURN' };
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: runtimeDraft, maxRepairAttempts: 0,
+            semanticModel: passingModel, repairModel: unusedRepair,
+        });
+        expect(result.status).toBe('rejected');
+        expect(result).not.toHaveProperty('draft');
+        expect(result).toHaveProperty('candidate');
+        expect(JSON.stringify(result)).not.toContain('hiddenTruth');
+        expect(JSON.stringify(result)).not.toContain('MUST NOT RETURN');
+    });
+
+    it('returns only a safe snapshot for malformed wrong-chapter objects with arbitrary fields', async () => {
+        const runtimeDraft = {
+            kind: 'writer-chapter-draft', validationStatus: 'unvalidated', chapterNumber: 559, title: 'Safe title', prose: 'Repairable prose.',
+            hiddenTruth: 'EXTRA_FIELD_SECRET', arbitraryObject: { nested: 'NESTED_FIELD_SECRET' },
+        };
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: runtimeDraft, maxRepairAttempts: 0,
+            semanticModel: passingModel, repairModel: unusedRepair,
+        });
+        expect(result.status).toBe('rejected');
+        expect(result).not.toHaveProperty('draft');
+        expect(result).toMatchObject({ candidate: {
+            kind: 'repair-candidate-snapshot', chapterNumber: 560, title: 'Safe title', prose: 'Repairable prose.',
+        } });
+        const serialized = JSON.stringify(result);
+        ['hiddenTruth', 'EXTRA_FIELD_SECRET', 'arbitraryObject', 'NESTED_FIELD_SECRET'].forEach(value => expect(serialized).not.toContain(value));
+    });
+
+    it('keeps capacity failures runtime-safe before parsing malformed input', async () => {
+        const runtimeDraft = { kind: 'wrong', chapterNumber: 999, prose: 'Safe prose only.', hiddenTruth: 'CAPACITY_SECRET' };
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: runtimeDraft, semanticModel: passingModel, repairModel: unusedRepair,
+            validatorContextSelectionPolicy: {
+                maxLockedCharacters: 0, maxLockedReveals: 10, maxLockedRelationshipEvents: 10,
+                maxLockedStoryEvents: 10, maxSecretValidationItems: 10,
+            },
+        });
+        expect(result.status).toBe('rejected');
+        expect(result.report.issues).toContainEqual(expect.objectContaining({ code: 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED' }));
+        expect(result).not.toHaveProperty('draft');
+        expect(result).toMatchObject({ candidate: { kind: 'repair-candidate-snapshot', chapterNumber: 560, prose: 'Safe prose only.' } });
+        expect(JSON.stringify(result)).not.toContain('CAPACITY_SECRET');
+    });
+
+    it('retains a parsed WriterChapterDraft on a valid rejected candidate', async () => {
+        const draft = draftFor(560);
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft, maxRepairAttempts: 0,
+            semanticModel: { async validate(request) { return semanticResult(request.chapterNumber, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }]); } },
+            repairModel: unusedRepair,
+        });
+        expect(result.status).toBe('rejected');
+        expect(result).toMatchObject({ draft });
+        expect(result).not.toHaveProperty('candidate');
+    });
+
+    it('returns a parsed WriterChapterDraft for every approved-not-canon result', async () => {
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), semanticModel: passingModel, repairModel: unusedRepair,
+        });
+        expect(result.status).toBe('approved-not-canon');
+        expect(result.draft).toEqual(draftFor(560));
+        expect(result.draft.validationStatus).toBe('unvalidated');
+    });
+
     it.each([
         ['flat hidden field', { hiddenTruth: 'EXTRA_FIELD_SECRET' }, 'hiddenTruth', 'EXTRA_FIELD_SECRET'],
         ['nested arbitrary object', { arbitraryInternalPayload: { secret: 'NESTED_FIELD_SECRET' } }, 'arbitraryInternalPayload', 'NESTED_FIELD_SECRET'],

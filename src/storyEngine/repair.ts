@@ -1,11 +1,11 @@
 import { WriterChapterPlan } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { parseWriterChapterDraft } from './writerDraft';
-import { WriterChapterDraft, WriterContext } from './writerTypes';
+import { WriterContext } from './writerTypes';
 import { SemanticValidatorModel } from './semanticValidator';
-import { RepairCandidateSnapshot, validateWriterChapter } from './validator';
+import { validateWriterChapter, WriterChapterValidationResult } from './validator';
 import { ValidatorContextSelectionPolicy } from './validatorContext';
-import { buildValidationReport, createValidationIssue, ValidationIssueCode, ValidationPipelineResult, ValidationReport } from './validationTypes';
+import { buildValidationReport, createValidationIssue, RepairCandidateSnapshot, ValidationIssueCode, ValidationPipelineResult, ValidationReport } from './validationTypes';
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
 
@@ -75,37 +75,49 @@ export interface ValidateAndRepairRequest {
     readonly control: FullStoryControl;
     readonly state: StoryState;
     readonly plan: WriterChapterPlan;
-    readonly draft: WriterChapterDraft;
+    readonly draft: unknown;
     readonly semanticModel: SemanticValidatorModel;
     readonly repairModel: RepairModel;
     readonly maxRepairAttempts?: number;
     readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
 }
 
+const rejectValidation = (
+    validation: WriterChapterValidationResult,
+    repairAttempts: number,
+    report: ValidationReport = validation.report,
+): ValidationPipelineResult => validation.candidateStatus === 'parsed'
+    ? { status: 'rejected', draft: validation.draft, report, repairAttempts }
+    : {
+        status: 'rejected', ...(validation.candidate === undefined ? {} : { candidate: validation.candidate }),
+        report, repairAttempts,
+    };
+
 /** Finite repair orchestration. Initial validation is pass 1 and never counts as a repair attempt. */
 export const validateAndRepairWriterChapter = async (request: ValidateAndRepairRequest): Promise<ValidationPipelineResult> => {
     const maximum = request.maxRepairAttempts ?? DEFAULT_MAX_REPAIR_ATTEMPTS;
     if (!Number.isSafeInteger(maximum) || maximum < 0) throw new Error('maxRepairAttempts must be a non-negative safe integer');
     let attempts = 0;
-    let candidate = request.draft;
+    let candidate: unknown = request.draft;
     while (true) {
         const validation = await validateWriterChapter({ ...request, draft: candidate, validationPass: attempts + 1 });
-        candidate = validation.draft;
-        if (validation.report.blockingIssueCount === 0) {
-            return { status: 'approved-not-canon', draft: candidate, report: validation.report, repairAttempts: attempts };
+        if (validation.candidateStatus === 'parsed') candidate = validation.draft;
+        if (validation.report.blockingIssueCount === 0 && validation.candidateStatus === 'parsed') {
+            return { status: 'approved-not-canon', draft: validation.draft, report: validation.report, repairAttempts: attempts };
         }
+        const repairCandidate = validation.candidateStatus === 'parsed' ? validation.repairCandidate : validation.candidate;
         if (validation.report.issues.some(issue => issue.blocking && !issue.repairable)
-            || attempts >= maximum || !validation.context || !validation.repairCandidate) {
-            return { status: 'rejected', draft: candidate, report: validation.report, repairAttempts: attempts };
+            || attempts >= maximum || !validation.context || !repairCandidate) {
+            return rejectValidation(validation, attempts);
         }
-        const repairContext = buildRepairContext(validation.context.writerContext, validation.repairCandidate, validation.report);
+        const repairContext = buildRepairContext(validation.context.writerContext, repairCandidate, validation.report);
         attempts += 1;
         try {
             const output = await request.repairModel.repair({ kind: 'repair-model-request', context: repairContext, prompt: buildRepairPrompt(repairContext) });
             candidate = parseWriterChapterDraft(output, request.plan.chapterNumber);
         } catch {
             const failure = createValidationIssue('REPAIR_PROTOCOL_FAILURE', 'critical', 'infrastructure');
-            return { status: 'rejected', draft: candidate, report: buildValidationReport(request.plan.chapterNumber, attempts + 1, [...validation.report.issues, failure]), repairAttempts: attempts };
+            return rejectValidation(validation, attempts, buildValidationReport(request.plan.chapterNumber, attempts + 1, [...validation.report.issues, failure]));
         }
     }
 };

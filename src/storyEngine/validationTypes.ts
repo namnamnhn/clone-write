@@ -38,6 +38,14 @@ export interface ValidationReport {
     readonly warningCount: number;
 }
 
+/** Explicit primitive allow-list for unparsed runtime candidates. */
+export interface RepairCandidateSnapshot {
+    readonly kind: 'repair-candidate-snapshot';
+    readonly chapterNumber: ChapterNumber;
+    readonly title?: string;
+    readonly prose: string;
+}
+
 export interface ValidationApprovedCandidate {
     readonly status: 'approved-not-canon';
     readonly draft: WriterChapterDraft;
@@ -45,13 +53,24 @@ export interface ValidationApprovedCandidate {
     readonly repairAttempts: number;
 }
 
-export interface RejectedValidationCandidate {
+export interface RejectedParsedValidationCandidate {
     readonly status: 'rejected';
     readonly draft: WriterChapterDraft;
+    readonly candidate?: never;
     readonly report: ValidationReport;
     readonly repairAttempts: number;
 }
 
+export interface RejectedUnparsedValidationCandidate {
+    readonly status: 'rejected';
+    /** Safe primitive-only projection, if runtime prose was available. */
+    readonly candidate?: RepairCandidateSnapshot;
+    readonly draft?: never;
+    readonly report: ValidationReport;
+    readonly repairAttempts: number;
+}
+
+export type RejectedValidationCandidate = RejectedParsedValidationCandidate | RejectedUnparsedValidationCandidate;
 export type ValidationPipelineResult = ValidationApprovedCandidate | RejectedValidationCandidate;
 
 const categoryByCode: Readonly<Record<ValidationIssueCode, ValidationCategory>> = {

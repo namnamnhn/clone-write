@@ -4,18 +4,11 @@ import { FullStoryControl, StoryState } from './types';
 import { WriterChapterPlan } from './plannerTypes';
 import { buildValidatorContext, ValidatorContext, ValidatorContextCapacityError, ValidatorContextSelectionPolicy } from './validatorContext';
 import { buildSemanticValidatorPrompt, parseSemanticValidationResult, SemanticValidatorModel } from './semanticValidator';
-import { buildValidationReport, createValidationIssue, ValidationIssue, ValidationIssueCode, ValidationReport } from './validationTypes';
+import { buildValidationReport, createValidationIssue, RepairCandidateSnapshot, ValidationIssue, ValidationIssueCode, ValidationReport } from './validationTypes';
 
 const controlMarkup = /<\/?(?:CHAPTER|STORY_SUMMARY|NEW_CHARACTER|WRITER_CONTEXT|WRITER_CHAPTER_PLAN|PLANNER_CONTEXT|FULL_STORY_CONTROL|STORY_STATE)\b[^>]*>/i;
 const metadataAssignment = /\b(?:STORY_SUMMARY|NEW_CHARACTER)\b\s*[:=]/i;
 const internalName = /\b(?:FullStoryControl|StoryControl|StoryState|WriterContext|WriterChapterPlan|PlannerContext)\b/;
-
-export interface RepairCandidateSnapshot {
-    readonly kind: 'repair-candidate-snapshot';
-    readonly chapterNumber: number;
-    readonly title?: string;
-    readonly prose: string;
-}
 
 /** Projects runtime candidate data through an explicit primitive-field allow-list. */
 const buildRepairCandidateSnapshot = (value: unknown, targetChapter: number): RepairCandidateSnapshot | undefined => {
@@ -28,6 +21,12 @@ const buildRepairCandidateSnapshot = (value: unknown, targetChapter: number): Re
         kind: 'repair-candidate-snapshot', chapterNumber: targetChapter,
         ...(title === undefined ? {} : { title }), prose: record.prose.trim(),
     };
+};
+
+const planTargetChapter = (plan: unknown): number | undefined => {
+    if (typeof plan !== 'object' || plan === null || Array.isArray(plan)) return undefined;
+    const value = (plan as Record<string, unknown>).chapterNumber;
+    return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
 };
 
 const parserCode = (code: string): ValidationIssueCode => {
@@ -53,18 +52,28 @@ export interface ValidateWriterChapterRequest {
     readonly control: FullStoryControl;
     readonly state: StoryState;
     readonly plan: WriterChapterPlan;
-    readonly draft: WriterChapterDraft;
+    readonly draft: unknown;
     readonly semanticModel: SemanticValidatorModel;
     readonly validationPass?: number;
     readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
 }
 
-export interface WriterChapterValidationResult {
+export interface ParsedWriterChapterValidationResult {
+    readonly candidateStatus: 'parsed';
     readonly draft: WriterChapterDraft;
     readonly report: ValidationReport;
     readonly context?: ValidatorContext;
     readonly repairCandidate?: RepairCandidateSnapshot;
 }
+
+export interface UnparsedWriterChapterValidationResult {
+    readonly candidateStatus: 'unparsed';
+    readonly candidate?: RepairCandidateSnapshot;
+    readonly report: ValidationReport;
+    readonly context?: ValidatorContext;
+}
+
+export type WriterChapterValidationResult = ParsedWriterChapterValidationResult | UnparsedWriterChapterValidationResult;
 
 /** Production-grade validation: a semantic model is mandatory and every boundary fails closed. */
 export const validateWriterChapter = async (request: ValidateWriterChapterRequest): Promise<WriterChapterValidationResult> => {
@@ -74,7 +83,12 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
         context = buildValidatorContext(request.control, request.state, request.plan, request.validatorContextSelectionPolicy);
     } catch (error) {
         const code = error instanceof ValidatorContextCapacityError ? 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED' : 'INVALID_SOURCE_PLAN';
-        return { draft: request.draft, report: buildValidationReport(request.plan.chapterNumber, validationPass, [createValidationIssue(code, 'critical', 'infrastructure')]) };
+        const targetChapter = planTargetChapter(request.plan);
+        const candidate = targetChapter === undefined ? undefined : buildRepairCandidateSnapshot(request.draft, targetChapter);
+        return {
+            candidateStatus: 'unparsed', ...(candidate === undefined ? {} : { candidate }),
+            report: buildValidationReport(targetChapter ?? 0, validationPass, [createValidationIssue(code, 'critical', 'infrastructure')]),
+        };
     }
     let draft: WriterChapterDraft;
     try {
@@ -85,7 +99,7 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
             : [createValidationIssue('INVALID_DRAFT_PROTOCOL', 'critical', 'deterministic')];
         const repairCandidate = buildRepairCandidateSnapshot(request.draft, context.targetChapter);
         return {
-            draft: request.draft, context, ...(repairCandidate === undefined ? {} : { repairCandidate }),
+            candidateStatus: 'unparsed', context, ...(repairCandidate === undefined ? {} : { candidate: repairCandidate }),
             report: buildValidationReport(context.targetChapter, validationPass, issues),
         };
     }
@@ -100,7 +114,7 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
         issues.push(createValidationIssue('VALIDATOR_PROTOCOL_FAILURE', 'critical', 'infrastructure'));
     }
     return {
-        draft, context, repairCandidate: buildRepairCandidateSnapshot(draft, context.targetChapter),
+        candidateStatus: 'parsed', draft, context, repairCandidate: buildRepairCandidateSnapshot(draft, context.targetChapter),
         report: buildValidationReport(context.targetChapter, validationPass, issues),
     };
 };

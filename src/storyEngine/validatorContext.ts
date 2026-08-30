@@ -1,4 +1,4 @@
-import { getArcForChapter, getBeatForChapter, isCharacterDirectAppearanceAllowed, isPovAllowed, isRelationshipEventAllowed, isRevealAllowed, isStoryEventAllowed } from './gates';
+import { getArcForChapter, getBeatForChapter, isCharacterDirectAppearanceAllowed, isRelationshipEventAllowed, isRevealAllowed, isStoryEventAllowed } from './gates';
 import { WriterChapterPlan } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { buildWriterContext } from './writerContext';
@@ -53,9 +53,7 @@ export interface ValidatorContext {
     readonly chapterPlan: WriterChapterPlan;
     readonly writerContext: WriterContext;
     readonly gates: {
-        readonly allowedCharacterIds: readonly string[];
         readonly lockedCharacters: readonly LockedCharacterDescriptor[];
-        readonly allowedPovIds: readonly string[];
         readonly lockedReveals: readonly LockedRevealDescriptor[];
         readonly lockedRelationshipEvents: readonly LockedRelationshipEventDescriptor[];
         readonly lockedStoryEvents: readonly LockedStoryEventDescriptor[];
@@ -96,7 +94,6 @@ export const buildValidatorContext = (
     const beat = getBeatForChapter(control, chapter);
     if (!arc) throw new Error('target chapter has no unambiguous source arc');
     const characterIds = control.characterOrder.slice();
-    const allowedCharacterIds = characterIds.filter(id => isCharacterDirectAppearanceAllowed(control, id, chapter));
     const lockedCharacters = characterIds
         .filter(id => !isCharacterDirectAppearanceAllowed(control, id, chapter))
         .map(id => ({ id, name: control.characters[id].name }))
@@ -133,8 +130,7 @@ export const buildValidatorContext = (
         ...(beat === undefined ? {} : { currentBeat: { id: beat.id, order: beat.order } }),
         chapterPlan: writerContext.chapterPlan, writerContext,
         gates: {
-            allowedCharacterIds, lockedCharacters,
-            allowedPovIds: characterIds.filter(id => isPovAllowed(control, id, chapter)),
+            lockedCharacters,
             lockedReveals, lockedRelationshipEvents, lockedStoryEvents,
         },
         secretValidation,
