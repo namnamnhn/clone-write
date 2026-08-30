@@ -9,6 +9,30 @@ import {
 } from './types';
 import { NarrativeMemorySelectionPolicy, SelectedNarrativeMemory, WriterChapterPlan } from './plannerTypes';
 
+/**
+ * Bounded selection for non-memory Writer state. Mandatory plan-derived material is never
+ * truncated: a context that cannot fit it fails closed instead of silently dropping it.
+ */
+export interface WriterContextSelectionPolicy {
+    readonly maxCharacters: number;
+    readonly maxRelationships: number;
+    readonly maxFacts: number;
+    readonly maxUnresolvedClues: number;
+    readonly maxUnresolvedPromises: number;
+    readonly maxContinuityEntries: number;
+    readonly maxResourcesPerCharacter: number;
+}
+
+export const DEFAULT_WRITER_CONTEXT_SELECTION_POLICY: WriterContextSelectionPolicy = {
+    maxCharacters: 24,
+    maxRelationships: 32,
+    maxFacts: 64,
+    maxUnresolvedClues: 24,
+    maxUnresolvedPromises: 24,
+    maxContinuityEntries: 24,
+    maxResourcesPerCharacter: 16,
+};
+
 /** The only deterministic, writer-facing state projection used by the V4 prose layer. */
 export interface WriterContext {
     readonly kind: 'writer-context';
@@ -50,6 +74,7 @@ export interface GenerateWriterDraftRequest {
     readonly plan: WriterChapterPlan;
     readonly memoryInput?: import('./plannerTypes').NarrativeMemoryInput;
     readonly memoryPolicy?: NarrativeMemorySelectionPolicy;
+    readonly contextSelectionPolicy?: WriterContextSelectionPolicy;
     readonly model: WriterModel;
 }
 

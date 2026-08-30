@@ -8,7 +8,7 @@ import { GenerateWriterDraftRequest, WriterChapterDraft, WriterModelRequest } fr
  * controls, state, plans, or memory, and deliberately does not make canon or update state.
  */
 export const generateWriterDraft = async (request: GenerateWriterDraftRequest): Promise<WriterChapterDraft> => {
-    const context = buildWriterContext(request.control, request.state, request.plan, request.memoryInput, request.memoryPolicy);
+    const context = buildWriterContext(request.control, request.state, request.plan, request.memoryInput, request.memoryPolicy, request.contextSelectionPolicy);
     const modelRequest: WriterModelRequest = { kind: 'writer-model-request', context, prompt: buildWriterPrompt(context) };
     const output = await request.model.write(modelRequest);
     return parseWriterChapterDraft(output, context.targetChapter);
