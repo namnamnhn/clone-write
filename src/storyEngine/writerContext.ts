@@ -176,6 +176,9 @@ const clonePlan = (
         if (!allowedCharacters.has(delta.characterId) || !chapterParticipants.includes(delta.characterId)) {
             throw new WriterContextError(`expectedResourceDeltas.${index}.characterId must be available and declared`);
         }
+        if (delta.quantityDelta !== undefined && (typeof delta.quantityDelta !== 'number' || !Number.isFinite(delta.quantityDelta))) {
+            throw new WriterContextError(`expectedResourceDeltas.${index}.quantityDelta must be a finite number when supplied`);
+        }
         return { characterId: delta.characterId, resourceId: delta.resourceId, ...(delta.quantityDelta === undefined ? {} : { quantityDelta: delta.quantityDelta }), ...(delta.nextState === undefined ? {} : { nextState: text(delta.nextState, `expectedResourceDeltas.${index}.nextState`) }) };
     });
     const relationshipDeltas = plan.expectedRelationshipDeltas.map((delta, index) => {
@@ -236,7 +239,6 @@ export const buildWriterContext = (
     const chapterPlan = clonePlan(plan, safe, control);
     const characters = selectCharacters(safe, chapterPlan, selectionPolicy);
     const selectedIds = new Set(characters.map(character => character.id));
-    const requiredIds = new Set(chapterPlan.participantIds);
     const cloneStatus = (status: { readonly status?: string; readonly injuries: readonly string[]; readonly conditions: readonly string[] }) => ({ ...(status.status === undefined ? {} : { status: status.status }), injuries: status.injuries.map(injury => injury), conditions: status.conditions.map(condition => condition) });
     const cloneSelectedRecord = <T>(source: Readonly<Record<string, T>>, clone: (value: T) => T): Record<string, T> => {
         const output: Record<string, T> = {};
@@ -251,11 +253,23 @@ export const buildWriterContext = (
         .map(fact => ({ id: fact.id, text: fact.text, establishedChapter: fact.establishedChapter }));
     const retainedFactIds = new Set(facts.map(fact => fact.id));
     const characterKnowledge = selectedKnowledge.map(entry => ({ characterId: entry.characterId, factIds: entry.factIds.filter(id => retainedFactIds.has(id)) }));
-    const relationships = safe.state.relationships
-        .filter(entry => entry.participantIds.some(id => selectedIds.has(id)))
-        .map((entry, index) => ({ entry, index, required: entry.participantIds.some(id => requiredIds.has(id)) }))
-        .sort((left, right) => Number(right.required) - Number(left.required) || right.entry.establishedChapter - left.entry.establishedChapter || left.entry.id.localeCompare(right.entry.id) || left.index - right.index)
-        .slice(0, selectionPolicy.maxRelationships)
+    const requiredRelationshipIds = new Set([
+        ...chapterPlan.relationshipEvents.map(event => event.relationshipId),
+        ...chapterPlan.expectedRelationshipDeltas.map(delta => delta.relationshipId),
+    ]);
+    const eligibleRelationships = safe.state.relationships
+        .filter(entry => entry.participantIds.every(id => selectedIds.has(id)));
+    const requiredRelationships = eligibleRelationships.filter(entry => requiredRelationshipIds.has(entry.id));
+    requireCapacity(requiredRelationships.length, selectionPolicy.maxRelationships, 'relationships');
+    const requiredRelationshipSet = new Set(requiredRelationships.map(entry => entry.id));
+    const relationships = [...requiredRelationships, ...eligibleRelationships
+        .filter(entry => !requiredRelationshipSet.has(entry.id))
+        .map((entry, index) => ({ entry, index }))
+        .sort((left, right) => right.entry.establishedChapter - left.entry.establishedChapter || left.entry.id.localeCompare(right.entry.id) || left.index - right.index)
+        .slice(0, selectionPolicy.maxRelationships - requiredRelationships.length)
+        .map(item => item.entry)]
+        .map((entry, index) => ({ entry, index }))
+        .sort((left, right) => left.entry.establishedChapter - right.entry.establishedChapter || left.entry.id.localeCompare(right.entry.id) || left.index - right.index)
         .map(({ entry }) => ({ id: entry.id, participantIds: entry.participantIds.map(id => id), state: entry.state }));
     const planClueIds = new Set([...chapterPlan.cluesPlantedIds, ...chapterPlan.cluesPaidOffIds]);
     const unresolvedClues = selectRequiredThenRecent(safe.state.unresolvedClues, planClueIds, selectionPolicy.maxUnresolvedClues, 'unresolvedClues')

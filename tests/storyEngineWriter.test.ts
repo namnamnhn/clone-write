@@ -99,6 +99,19 @@ describe('WriterChapterPlan runtime validation', () => {
         rejects({ ...planFor(100), expectedRelationshipDeltas: [{ relationshipId: 'a-b', participantIds: ['a', 'b'], expectedState: 'allies' }] });
     });
 
+    it('reconstructs finite resource quantity deltas and rejects invalid runtime values', () => {
+        const valid = { ...planFor(100), expectedResourceDeltas: [{ characterId: 'a', resourceId: 'key', quantityDelta: 2 }] };
+        expect(buildWriterContext(control, stateFor(100), valid).chapterPlan.expectedResourceDeltas).toEqual([{ characterId: 'a', resourceId: 'key', quantityDelta: 2 }]);
+        rejects({ ...planFor(100), expectedResourceDeltas: [{ characterId: 'a', resourceId: 'key', quantityDelta: Number.NaN }] });
+        rejects({ ...planFor(100), expectedResourceDeltas: [{ characterId: 'a', resourceId: 'key', quantityDelta: Number.POSITIVE_INFINITY }] });
+        const asString = { ...planFor(100), expectedResourceDeltas: [{ characterId: 'a', resourceId: 'key' }] };
+        Object.assign(asString.expectedResourceDeltas[0], { quantityDelta: '2' });
+        rejects(asString);
+        const asNull = { ...planFor(100), expectedResourceDeltas: [{ characterId: 'a', resourceId: 'key' }] };
+        Object.assign(asNull.expectedResourceDeltas[0], { quantityDelta: null });
+        rejects(asNull);
+    });
+
     it('accepts the WORK 02 sanitized WriterChapterPlan and projects every active canon rule exactly once', () => {
         const sanitized = sanitizeWriterChapterPlan(internalPlanFor(100), control, stateFor(100));
         const context = buildWriterContext(control, stateFor(100), sanitized);
@@ -149,6 +162,52 @@ describe('Story Engine V4 Writer privilege boundary', () => {
 });
 
 describe('WriterContext bounded non-memory selection', () => {
+    it('keeps only relationships whose participants are selected and prioritizes required existing state', () => {
+        const source = blueprint();
+        const relationshipControl = compileStoryControl({
+            ...source,
+            characters: [...source.characters, { id: 'x', name: 'X', availableFromChapter: 1, writerProfile: { role: 'extra' } }],
+            gates: { ...source.gates, characters: [...(source.gates?.characters ?? []), { id: 'x-gate', characterId: 'x', allowedFromChapter: 1 }] },
+        });
+        const state = {
+            ...stateFor(100), knownCharacterIds: ['a', 'b', 'x'], activeCharacterIds: ['a', 'b', 'x'],
+            relationships: [
+                { id: 'a-b', participantIds: ['a', 'b'], state: 'allies', establishedChapter: 2 },
+                { id: 'a-x', participantIds: ['a', 'x'], state: 'acquaintances', establishedChapter: 3 },
+            ],
+        };
+        const base = planFor(100);
+        const plan: WriterChapterPlan = {
+            ...base, participantIds: ['a', 'b'], scenes: [{ ...base.scenes[0], participantIds: ['a', 'b'] }],
+            relationshipEvents: [{ id: 'a-b-meeting', relationshipId: 'a-b', eventType: 'meeting', participantIds: ['a', 'b'], text: 'A and B may meet.' }],
+        };
+        const policy = { maxCharacters: 2, maxRelationships: 1, maxFacts: 8, maxUnresolvedClues: 2, maxUnresolvedPromises: 2, maxContinuityEntries: 2, maxResourcesPerCharacter: 2 };
+        const context = buildWriterContext(relationshipControl, state, plan, undefined, undefined, policy);
+        expect(context.characters.map(character => character.id)).toEqual(['a', 'b']);
+        expect(context.relationships.map(relationship => relationship.id)).toEqual(['a-b']);
+        const characterIds = new Set(context.characters.map(character => character.id));
+        expect(context.relationships.every(relationship => relationship.participantIds.every(id => characterIds.has(id)))).toBe(true);
+    });
+
+    it('fails closed when required existing relationships exceed the configured capacity', () => {
+        const state = {
+            ...stateFor(100),
+            relationships: [
+                { id: 'a-b', participantIds: ['a', 'b'], state: 'allies', establishedChapter: 1 },
+                { id: 'a-b-2', participantIds: ['a', 'b'], state: 'allies', establishedChapter: 2 },
+            ],
+        };
+        const base = planFor(100);
+        const plan: WriterChapterPlan = {
+            ...base, participantIds: ['a', 'b'], scenes: [{ ...base.scenes[0], participantIds: ['a', 'b'] }],
+            expectedRelationshipDeltas: [
+                { relationshipId: 'a-b', participantIds: ['a', 'b'], expectedState: 'allies' },
+                { relationshipId: 'a-b-2', participantIds: ['a', 'b'], expectedState: 'allies' },
+            ],
+        };
+        expect(() => buildWriterContext(control, state, plan, undefined, undefined, { maxCharacters: 2, maxRelationships: 1, maxFacts: 8, maxUnresolvedClues: 2, maxUnresolvedPromises: 2, maxContinuityEntries: 2, maxResourcesPerCharacter: 2 })).toThrow(WriterContextError);
+    });
+
     it('deterministically bounds long-run state while retaining mandatory plan material', () => {
         const extras = Array.from({ length: 110 }, (_, index) => ({ id: `extra-${String(index).padStart(3, '0')}`, name: `Extra ${index}`, availableFromChapter: 1, writerProfile: { role: 'support' } }));
         const source = blueprint();
@@ -189,6 +248,8 @@ describe('WriterContext bounded non-memory selection', () => {
         expect(first.characters).toHaveLength(4);
         expect(first.characters.map(character => character.id)).toEqual(expect.arrayContaining(['a', 'b']));
         expect(first.relationships.length).toBeLessThanOrEqual(policy.maxRelationships);
+        const selectedCharacterIds = new Set(first.characters.map(character => character.id));
+        expect(first.relationships.every(relationship => relationship.participantIds.every(id => selectedCharacterIds.has(id)))).toBe(true);
         expect(first.writerVisibleFacts.length).toBeLessThanOrEqual(policy.maxFacts);
         expect(first.unresolvedClues.length).toBeLessThanOrEqual(policy.maxUnresolvedClues);
         expect(first.unresolvedPromises.length).toBeLessThanOrEqual(policy.maxUnresolvedPromises);
