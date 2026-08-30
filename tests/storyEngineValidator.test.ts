@@ -1,0 +1,278 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+    buildValidatorContext,
+    compileStoryControl,
+    createInitialStoryState,
+    parseSemanticValidationResult,
+    RepairModelRequest,
+    SemanticValidatorModel,
+    StoryBlueprint,
+    validateAndRepairWriterChapter,
+    validateWriterChapter,
+    WriterChapterDraft,
+    WriterChapterPlan,
+} from '../src/storyEngine';
+
+const RAW_SECRET = 'Omega keeps the obsidian duplicate key.';
+
+const blueprint = (): StoryBlueprint => ({
+    id: 'validator-story', engine: { plannedChapterCount: 600 },
+    characters: [
+        { id: 'a', name: 'A', availableFromChapter: 1, writerProfile: { role: 'traveler' }, authorNotes: 'hidden dossier' },
+        { id: 'future', name: 'Future', availableFromChapter: 580, writerProfile: { role: 'late arrival' }, authorNotes: 'future truth' },
+    ],
+    arcs: [{ id: 'arc', title: 'Long Arc', startChapter: 1, endChapter: 600, writerBrief: 'Cross the guarded gate.', authorPlan: 'hidden arc outcome' }],
+    beats: [{ id: 'beat', arcId: 'arc', order: 1, startChapter: 1, endChapter: 600, writerBrief: 'Gate struggle.', authorPlan: 'hidden beat truth' }],
+    reveals: [{ id: 'omega-reveal', writerText: 'Omega owns a second key.', authorNotes: 'hidden reveal notes' }],
+    relationshipEvents: [],
+    storyEvents: [{ id: 'gate-opens', eventType: 'opening', writerText: 'The gate may open.' }],
+    gates: {
+        characters: [
+            { id: 'a-character', characterId: 'a', allowedFromChapter: 1 },
+            { id: 'future-character', characterId: 'future', allowedFromChapter: 580 },
+        ],
+        pov: [{ id: 'a-pov', characterId: 'a', allowedFromChapter: 1 }],
+        reveals: [{ id: 'omega-gate', revealId: 'omega-reveal', allowedFromChapter: 561 }],
+        relationships: [], events: [{ id: 'opening-gate', eventId: 'gate-opens', allowedFromChapter: 1 }],
+    },
+    forbiddenEvents: [{ id: 'no-opening', eventId: 'gate-opens', forbiddenThroughChapter: 559, authorReason: 'hidden timing' }],
+    authorOnlySecrets: [{ id: 'omega-secret', value: RAW_SECRET, revealId: 'omega-reveal', notes: 'vault notes' }],
+    canonRules: [{ id: 'token-rule', text: 'The gate opens only with a token.', availableFromChapter: 1, scope: 'world', authorNotes: 'hidden origin' }],
+});
+
+const control = compileStoryControl(blueprint());
+const stateFor = (chapter: number) => ({
+    ...createInitialStoryState(chapter), knownCharacterIds: ['a'], activeCharacterIds: ['a'],
+    characterLocations: { a: 'Gate district' },
+    facts: [{ id: 'token-fact', text: 'A carries a token.', establishedChapter: 1, visibility: 'writer' as const }],
+    extensions: { authorOnly: RAW_SECRET, futureArcTruth: 'never repair with this' },
+});
+const planFor = (chapter: number, reveal = false): WriterChapterPlan => ({
+    kind: 'writer-chapter-plan', chapterNumber: chapter, arc: { id: 'arc', title: 'Long Arc', writerBrief: 'Cross the guarded gate.' },
+    beat: { id: 'beat', order: 1, writerBrief: 'Gate struggle.' }, primaryGoal: 'Get through the guarded gate.',
+    povCharacterId: 'a', participantIds: ['a'],
+    scenes: [{ id: `scene-${chapter}`, order: 1, goal: 'Pass the guard.', location: 'Gate district', povCharacterId: 'a', participantIds: ['a'], conflictOrObstacle: 'The guard refuses entry.', uncertainty: 'The token may be rejected.', expectedConsequence: 'A must pay a price.', purposeTags: ['plot', 'consequence'], conflictImportance: 'major' }],
+    canonConstraints: [{ id: 'token-rule', text: 'The gate opens only with a token.', scope: 'world' }],
+    reveals: reveal ? [{ id: 'omega-reveal', text: 'Omega owns a second key.' }] : [], relationshipEvents: [],
+    storyEvents: [], cluesPlantedIds: [], cluesPaidOffIds: [], expectedResourceDeltas: [], expectedRelationshipDeltas: [],
+    expectedContinuityConsequences: [{ id: 'price', text: 'A pays a price.' }], endStateIntent: 'End after entry at a meaningful cost.',
+});
+const draftFor = (chapter: number, prose = 'A offers the token. The guard permits entry only after A surrenders a treasured map.'): WriterChapterDraft => ({
+    kind: 'writer-chapter-draft', validationStatus: 'unvalidated', chapterNumber: chapter, prose,
+});
+const semanticResult = (chapterNumber: number, issues: readonly Record<string, unknown>[] = []) => ({ kind: 'semantic-validation-result', chapterNumber, issues });
+const passingModel: SemanticValidatorModel = { async validate(request) { return semanticResult(request.chapterNumber); } };
+const unusedRepair = { async repair() { throw new Error('repair must not be called'); } };
+
+describe('Validator context and deterministic safety net', () => {
+    it('builds a bounded privileged context without future arc prose or whole source objects', () => {
+        const context = buildValidatorContext(control, stateFor(560), planFor(560));
+        const serialized = JSON.stringify(context);
+        expect(context.secretValidation).toEqual([{ id: 'omega-secret', revealId: 'omega-reveal', revealAllowed: false, rawValue: RAW_SECRET }]);
+        expect(context.gates.lockedRevealIds).toContain('omega-reveal');
+        expect(serialized).not.toContain('hidden arc outcome');
+        expect(serialized).not.toContain('hidden dossier');
+        expect(serialized).not.toContain('authorOnlySecrets');
+        expect(serialized).not.toContain('extensions');
+    });
+
+    it('blocks a chapter 560 raw secret leak without echoing the secret in its report', async () => {
+        const result = await validateWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: draftFor(560, `A realizes: ${RAW_SECRET}`), semanticModel: passingModel });
+        expect(result.report.status).toBe('blocked');
+        expect(result.report.issues).toContainEqual(expect.objectContaining({ code: 'AUTHOR_SECRET_LEAK', severity: 'critical', blocking: true }));
+        expect(JSON.stringify(result.report)).not.toContain(RAW_SECRET);
+        expect(JSON.stringify(result.report)).not.toContain('omega-secret');
+    });
+
+    it('allows the planned writer-facing reveal at chapter 561 without exposing the raw source secret', async () => {
+        expect(buildValidatorContext(control, stateFor(561), planFor(561, true)).secretValidation).toEqual([]);
+        const result = await validateWriterChapter({ control, state: stateFor(561), plan: planFor(561, true), draft: draftFor(561, 'At the price of the map, A learns that Omega owns a second key.'), semanticModel: passingModel });
+        expect(result.report.status).toBe('passed');
+        expect(result.report.issues.map(issue => issue.code)).not.toContain('AUTHOR_SECRET_LEAK');
+        expect(JSON.stringify(result.report)).not.toContain(RAW_SECRET);
+    });
+
+    it('re-parses runtime drafts and blocks wrong chapter and control metadata', async () => {
+        const wrong = { ...draftFor(560), chapterNumber: 559 } as WriterChapterDraft;
+        const wrongResult = await validateWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: wrong, semanticModel: passingModel });
+        expect(wrongResult.report.issues.map(issue => issue.code)).toContain('WRONG_CHAPTER');
+        const metadata = draftFor(560, '<STORY_SUMMARY>engine data</STORY_SUMMARY>');
+        const metadataResult = await validateWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: metadata, semanticModel: passingModel });
+        expect(metadataResult.report.issues.map(issue => issue.code)).toContain('CONTROL_PROTOCOL_LEAK');
+    });
+
+    it('fails closed when the source plan no longer matches its arc or gates', async () => {
+        const invalid = { ...planFor(560), arc: { id: 'wrong', title: 'Wrong' } };
+        const result = await validateWriterChapter({ control, state: stateFor(560), plan: invalid, draft: draftFor(560), semanticModel: passingModel });
+        expect(result.report.issues).toContainEqual(expect.objectContaining({ code: 'INVALID_SOURCE_PLAN', repairable: false }));
+    });
+});
+
+describe('Untrusted semantic validator protocol', () => {
+    it.each([
+        ['no issues', [], 'passed'],
+        ['warning only', [{ code: 'FILLER_SCENE', severity: 'warning', scope: 'chapter' }], 'passed'],
+        ['plan drift', [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }], 'blocked'],
+        ['premature reveal', [{ code: 'PREMATURE_REVEAL', severity: 'critical', scope: 'chapter' }], 'blocked'],
+    ])('handles %s with explicit approval semantics', async (_label, issues, expected) => {
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), maxRepairAttempts: 0,
+            semanticModel: { async validate(request) { return semanticResult(request.chapterNumber, issues); } }, repairModel: unusedRepair,
+        });
+        expect(result.status).toBe(expected === 'passed' ? 'approved-not-canon' : 'rejected');
+        expect(result.report.status).toBe(expected);
+    });
+
+    it.each([
+        ['unknown code', (chapter: number) => semanticResult(chapter, [{ code: 'MODEL_INVENTED_CODE', severity: 'error', scope: 'chapter' }])],
+        ['malformed envelope', () => ({ kind: 'wrong', issues: [] })],
+        ['duplicate issue', (chapter: number) => semanticResult(chapter, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }, { code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }])],
+        ['unsafe evidence field', (chapter: number) => semanticResult(chapter, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter', evidence: RAW_SECRET }])],
+        ['invalid scene', (chapter: number) => semanticResult(chapter, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'scene', sceneId: 'not-in-plan' }])],
+        ['understated severity', (chapter: number) => semanticResult(chapter, [{ code: 'PREMATURE_REVEAL', severity: 'warning', scope: 'chapter' }])],
+    ])('fails closed for %s', async (_label, output) => {
+        const repair = vi.fn();
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560),
+            semanticModel: { async validate(request) { return output(request.chapterNumber); } }, repairModel: { repair },
+        });
+        expect(result.status).toBe('rejected');
+        expect(result.report.issues).toContainEqual(expect.objectContaining({ code: 'VALIDATOR_PROTOCOL_FAILURE', repairable: false }));
+        expect(repair).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the validator throws', async () => {
+        const repair = vi.fn();
+        const result = await validateAndRepairWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), semanticModel: { async validate() { throw new Error('offline'); } }, repairModel: { repair } });
+        expect(result.status).toBe('rejected');
+        expect(result.report.issues.map(issue => issue.code)).toContain('VALIDATOR_PROTOCOL_FAILURE');
+        expect(repair).not.toHaveBeenCalled();
+    });
+
+    it('parses only registered semantic fields and derives repairability from trusted policy', () => {
+        const context = buildValidatorContext(control, stateFor(560), planFor(560));
+        const parsed = parseSemanticValidationResult(semanticResult(560, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'scene', sceneId: 'scene-560' }]), context);
+        expect(parsed).toEqual([expect.objectContaining({ code: 'PLAN_DRIFT', repairable: true, source: 'semantic-validator' })]);
+    });
+
+    it('orders normalized reports deterministically by trusted severity and category', async () => {
+        const issues = [
+            { code: 'FILLER_SCENE', severity: 'warning', scope: 'chapter' },
+            { code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' },
+            { code: 'PREMATURE_REVEAL', severity: 'critical', scope: 'chapter' },
+        ];
+        const first = await validateWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), semanticModel: { async validate(request) { return semanticResult(request.chapterNumber, issues); } } });
+        const second = await validateWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), semanticModel: { async validate(request) { return semanticResult(request.chapterNumber, issues.slice().reverse()); } } });
+        expect(first.report).toEqual(second.report);
+        expect(first.report.issues.map(issue => issue.code)).toEqual(['PREMATURE_REVEAL', 'PLAN_DRIFT', 'FILLER_SCENE']);
+    });
+});
+
+describe('Bounded auto repair and non-canon result', () => {
+    it('repairs once, fully revalidates, and returns approved-not-canon without state mutation', async () => {
+        const state = stateFor(560);
+        const before = JSON.stringify(state);
+        const validate = vi.fn(async (request: { chapterNumber: number; candidate: WriterChapterDraft }) => semanticResult(request.chapterNumber,
+            request.candidate.prose.includes('drifts away') ? [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }] : []));
+        const repaired = draftFor(560, 'A pays with the map and crosses the gate.');
+        const repair = vi.fn(async () => repaired);
+        const result = await validateAndRepairWriterChapter({ control, state, plan: planFor(560), draft: draftFor(560, 'A drifts away from the gate.'), semanticModel: { validate }, repairModel: { repair } });
+        expect(result.status).toBe('approved-not-canon');
+        expect(result.repairAttempts).toBe(1);
+        expect(result.draft).toEqual(repaired);
+        expect(validate).toHaveBeenCalledTimes(2);
+        expect(repair).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(state)).toBe(before);
+        expect(state.currentChapter).toBe(560);
+        expect(result.status).not.toBe('canon');
+    });
+
+    it('uses exactly two repair calls and three validations at the default maximum', async () => {
+        const validate = vi.fn(async (request: { chapterNumber: number }) => semanticResult(request.chapterNumber, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }]));
+        const repair = vi.fn(async () => draftFor(560, 'Still drifting.'));
+        const result = await validateAndRepairWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), semanticModel: { validate }, repairModel: { repair } });
+        expect(result.status).toBe('rejected');
+        expect(result.repairAttempts).toBe(2);
+        expect(repair).toHaveBeenCalledTimes(2);
+        expect(validate).toHaveBeenCalledTimes(3);
+    });
+
+    it('makes zero repair calls when the configured maximum is zero', async () => {
+        const repair = vi.fn();
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560), maxRepairAttempts: 0,
+            semanticModel: { async validate(request) { return semanticResult(request.chapterNumber, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }]); } }, repairModel: { repair },
+        });
+        expect(result.status).toBe('rejected');
+        expect(result.repairAttempts).toBe(0);
+        expect(repair).not.toHaveBeenCalled();
+    });
+
+    it('keeps unrelated author secrets and privileged source fields out of repair requests', async () => {
+        let captured: RepairModelRequest | undefined;
+        let validation = 0;
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560, 'A walks away from the plan.'),
+            semanticModel: { async validate(request) { validation += 1; return semanticResult(request.chapterNumber, validation === 1 ? [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }] : []); } },
+            repairModel: { async repair(request) { captured = request; return draftFor(560); } },
+        });
+        expect(result.status).toBe('approved-not-canon');
+        const serialized = JSON.stringify(captured);
+        [RAW_SECRET, 'authorOnlySecrets', 'authorOnlySecretReferences', 'authorNotes', 'authorPlan', 'futureArcTruth', 'secretValidation'].forEach(value => expect(serialized).not.toContain(value));
+        expect(serialized).toContain('Return to the supplied chapter plan');
+    });
+
+    it('passes a leaked secret only once as candidate data, removes it, and revalidates from scratch', async () => {
+        let captured = '';
+        const repair = vi.fn(async (request: RepairModelRequest) => {
+            captured = JSON.stringify(request);
+            expect(request.context.issues).toEqual([expect.objectContaining({ code: 'AUTHOR_SECRET_LEAK', instruction: expect.not.stringContaining(RAW_SECRET) })]);
+            return draftFor(560, 'A pays with the map and crosses the gate.');
+        });
+        const validate = vi.fn(async (request: { chapterNumber: number }) => semanticResult(request.chapterNumber));
+        const result = await validateAndRepairWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: draftFor(560, `A thinks ${RAW_SECRET}`), semanticModel: { validate }, repairModel: { repair } });
+        expect(result.status).toBe('approved-not-canon');
+        expect(captured.split(RAW_SECRET)).toHaveLength(2);
+        expect(JSON.stringify(result.draft)).not.toContain(RAW_SECRET);
+        expect(repair).toHaveBeenCalledTimes(1);
+        expect(validate).toHaveBeenCalledTimes(2);
+    });
+
+    it('rejects malformed repair output and counts the attempted repair call', async () => {
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560),
+            semanticModel: { async validate(request) { return semanticResult(request.chapterNumber, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }]); } },
+            repairModel: { async repair() { return { kind: 'wrong', chapterNumber: 560, prose: '' }; } },
+        });
+        expect(result.status).toBe('rejected');
+        expect(result.repairAttempts).toBe(1);
+        expect(result.report.issues).toContainEqual(expect.objectContaining({ code: 'REPAIR_PROTOCOL_FAILURE', repairable: false }));
+    });
+
+    it('fails closed when the repair model throws and never approves the original draft', async () => {
+        const repair = vi.fn(async () => { throw new Error('repair provider unavailable'); });
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(560), plan: planFor(560), draft: draftFor(560),
+            semanticModel: { async validate(request) { return semanticResult(request.chapterNumber, [{ code: 'PLAN_DRIFT', severity: 'error', scope: 'chapter' }]); } },
+            repairModel: { repair },
+        });
+        expect(result.status).toBe('rejected');
+        expect(result.repairAttempts).toBe(1);
+        expect(result.report.issues.map(issue => issue.code)).toContain('REPAIR_PROTOCOL_FAILURE');
+        expect(repair).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not mutate or freeze any caller-owned source', async () => {
+        const mutableControl = compileStoryControl(blueprint());
+        const state = stateFor(560);
+        const plan = planFor(560);
+        const draft = draftFor(560);
+        const before = [mutableControl, state, plan, draft].map(value => JSON.stringify(value));
+        const result = await validateAndRepairWriterChapter({ control: mutableControl, state, plan, draft, semanticModel: passingModel, repairModel: unusedRepair });
+        expect(result.status).toBe('approved-not-canon');
+        expect([mutableControl, state, plan, draft].map(value => JSON.stringify(value))).toEqual(before);
+        expect(Object.isFrozen(state)).toBe(false);
+        expect(Object.isFrozen(plan)).toBe(false);
+        expect(Object.isFrozen(draft)).toBe(false);
+    });
+});
