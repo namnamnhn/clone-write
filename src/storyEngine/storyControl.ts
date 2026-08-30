@@ -39,6 +39,7 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
     if (control.engine.schemaVersion !== 4) issue('engine.schemaVersion', 'must be 4');
     if (control.engine.failClosed !== true) issue('engine.failClosed', 'must remain enabled');
     if (!isValidChapter(control.engine.plannedChapterCount)) issue('engine.plannedChapterCount', 'must be a positive integer');
+    if (control.engine.beatPolicy !== 'required-for-arcs-with-beats') issue('engine.beatPolicy', 'must be required-for-arcs-with-beats');
 
     const characterIds = new Set(Object.keys(control.characters));
     for (const id of control.characterOrder) {
@@ -48,6 +49,9 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         if (character.id !== id) issue(`characters.${id}.id`, 'must match registry key');
         if (!character.name.trim()) issue(`characters.${id}.name`, 'must not be empty');
         if (!isValidChapter(character.availableFromChapter)) issue(`characters.${id}.availableFromChapter`, 'must be a positive integer');
+        if (character.initialStatus !== (character.availableFromChapter === 1 ? 'active' : 'future-locked')) {
+            issue(`characters.${id}.initialStatus`, 'must match effective availableFromChapter');
+        }
     }
 
     const arcIds = new Set<string>();
@@ -62,6 +66,19 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
             if (rangesOverlap(arc, control.arcs[other])) issue(`arcs.${index}`, `overlaps arc ${control.arcs[other].id}`);
         }
     });
+    if (control.arcs.length === 0) {
+        issue('arcs', 'must cover every planned chapter');
+    } else {
+        const orderedArcs = [...control.arcs].sort((left, right) => left.startChapter - right.startChapter || left.id.localeCompare(right.id));
+        let nextChapter = 1;
+        orderedArcs.forEach((arc, index) => {
+            if (arc.startChapter !== nextChapter) issue(`arcs.${index}`, `must begin at coverage chapter ${nextChapter}`);
+            nextChapter = Math.max(nextChapter, arc.endChapter + 1);
+        });
+        if (nextChapter !== control.engine.plannedChapterCount + 1) {
+            issue('arcs', `must cover through chapter ${control.engine.plannedChapterCount}`);
+        }
+    }
 
     const beatIds = new Set<string>();
     control.beats.forEach((beat, index) => {
@@ -80,9 +97,24 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
             if (candidate.arcId === beat.arcId && rangesOverlap(beat, candidate)) issue(`beats.${index}`, `overlaps beat ${candidate.id}`);
         }
     });
+    control.arcs.forEach((arc) => {
+        const beatsForArc = control.beats
+            .filter(beat => beat.arcId === arc.id)
+            .sort((left, right) => left.startChapter - right.startChapter || left.order - right.order || left.id.localeCompare(right.id));
+        // Explicit policy: no beats means the arc is intentionally beat-optional; once beats exist, coverage is total.
+        if (beatsForArc.length === 0) return;
+        let nextChapter = arc.startChapter;
+        beatsForArc.forEach((beat, index) => {
+            if (beat.startChapter !== nextChapter) issue(`beats.${beat.id}`, `must begin at coverage chapter ${nextChapter} within arc ${arc.id}`);
+            nextChapter = Math.max(nextChapter, beat.endChapter + 1);
+            if (index > 0 && beat.order <= beatsForArc[index - 1].order) issue(`beats.${beat.id}.order`, 'must increase within an arc');
+        });
+        if (nextChapter !== arc.endChapter + 1) issue(`beats.${arc.id}`, `must cover through chapter ${arc.endChapter}`);
+    });
 
     const revealIds = new Set(control.reveals.map(reveal => reveal.id));
-    const eventIds = new Set(control.relationshipEvents.map(event => event.id));
+    const relationshipEventIds = new Set(control.relationshipEvents.map(event => event.id));
+    const storyEventIds = new Set(control.storyEvents.map(event => event.id));
     const checkAllowedFrom = (path: string, chapter: number) => {
         if (!isValidChapter(chapter)) issue(path, 'must be a positive first-allowed chapter');
     };
@@ -90,6 +122,11 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         if (!characterIds.has(gate.characterId)) issue(`gates.characters.${index}.characterId`, `references unknown character ${gate.characterId}`);
         checkAllowedFrom(`gates.characters.${index}.allowedFromChapter`, gate.allowedFromChapter);
     });
+    for (const [id] of Object.entries(control.characters)) {
+        if (!control.gates.characters.some(gate => gate.characterId === id)) {
+            issue(`gates.characters`, `is missing a direct-appearance gate for ${id}`);
+        }
+    }
     control.gates.pov.forEach((gate, index) => {
         if (!characterIds.has(gate.characterId)) issue(`gates.pov.${index}.characterId`, `references unknown character ${gate.characterId}`);
         checkAllowedFrom(`gates.pov.${index}.allowedFromChapter`, gate.allowedFromChapter);
@@ -99,12 +136,20 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         checkAllowedFrom(`gates.reveals.${index}.allowedFromChapter`, gate.allowedFromChapter);
     });
     control.gates.relationships.forEach((gate, index) => {
-        if (!eventIds.has(gate.eventId)) issue(`gates.relationships.${index}.eventId`, `references unknown event ${gate.eventId}`);
+        if (!relationshipEventIds.has(gate.eventId)) issue(`gates.relationships.${index}.eventId`, `references unknown relationship event ${gate.eventId}`);
         checkAllowedFrom(`gates.relationships.${index}.allowedFromChapter`, gate.allowedFromChapter);
     });
+    control.gates.events.forEach((gate, index) => {
+        if (!storyEventIds.has(gate.eventId)) issue(`gates.events.${index}.eventId`, `references unknown story event ${gate.eventId}`);
+        checkAllowedFrom(`gates.events.${index}.allowedFromChapter`, gate.allowedFromChapter);
+    });
     control.forbiddenEvents.forEach((entry, index) => {
-        if (!eventIds.has(entry.eventId)) issue(`forbiddenEvents.${index}.eventId`, `references unknown event ${entry.eventId}`);
+        if (!storyEventIds.has(entry.eventId)) issue(`forbiddenEvents.${index}.eventId`, `references unknown story event ${entry.eventId}`);
         if (!Number.isSafeInteger(entry.forbiddenThroughChapter) || entry.forbiddenThroughChapter < 0) issue(`forbiddenEvents.${index}.forbiddenThroughChapter`, 'must be a non-negative integer');
+    });
+    control.forbiddenRelationshipEvents.forEach((entry, index) => {
+        if (!relationshipEventIds.has(entry.eventId)) issue(`forbiddenRelationshipEvents.${index}.eventId`, `references unknown relationship event ${entry.eventId}`);
+        if (!Number.isSafeInteger(entry.forbiddenThroughChapter) || entry.forbiddenThroughChapter < 0) issue(`forbiddenRelationshipEvents.${index}.forbiddenThroughChapter`, 'must be a non-negative integer');
     });
     control.forbiddenReveals.forEach((entry, index) => {
         if (!revealIds.has(entry.revealId)) issue(`forbiddenReveals.${index}.revealId`, `references unknown reveal ${entry.revealId}`);
@@ -119,6 +164,12 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         event.participantIds.forEach(id => {
             if (!characterIds.has(id)) issue(`relationshipEvents.${index}.participantIds`, `references unknown character ${id}`);
         });
+    });
+    const definedStoryEvents = new Set<string>();
+    control.storyEvents.forEach((event, index) => {
+        if (!event.id.trim() || definedStoryEvents.has(event.id)) issue(`storyEvents.${index}.id`, 'must be non-empty and unique');
+        definedStoryEvents.add(event.id);
+        if (!event.eventType.trim()) issue(`storyEvents.${index}.eventType`, 'must not be empty');
     });
     control.canonRules.forEach((rule, index) => {
         if (!isValidChapter(rule.availableFromChapter)) issue(`canonRules.${index}.availableFromChapter`, 'must be a positive integer');

@@ -3,12 +3,14 @@ import {
     CanonRule,
     ControlledCharacter,
     ForbiddenEvent,
+    ForbiddenRelationshipEvent,
     ForbiddenReveal,
     FullStoryControl,
     RelationshipEventDefinition,
     RevealDefinition,
     StoryArc,
     StoryBeat,
+    StoryEventDefinition,
     WriterCharacterProfile,
 } from './types';
 import {
@@ -54,6 +56,11 @@ export interface RelationshipGateBlueprint extends GateTimingInput {
     readonly eventId: string;
 }
 
+export interface StoryEventGateBlueprint extends GateTimingInput {
+    readonly id: string;
+    readonly eventId: string;
+}
+
 export interface StoryBlueprint {
     readonly id: string;
     readonly engine: {
@@ -64,13 +71,16 @@ export interface StoryBlueprint {
     readonly beats?: readonly StoryBeat[];
     readonly reveals?: readonly RevealDefinition[];
     readonly relationshipEvents?: readonly RelationshipEventDefinition[];
+    readonly storyEvents?: readonly StoryEventDefinition[];
     readonly gates?: {
         readonly characters?: readonly CharacterGateBlueprint[];
         readonly pov?: readonly PovGateBlueprint[];
         readonly reveals?: readonly RevealGateBlueprint[];
         readonly relationships?: readonly RelationshipGateBlueprint[];
+        readonly events?: readonly StoryEventGateBlueprint[];
     };
     readonly forbiddenEvents?: readonly ForbiddenEvent[];
+    readonly forbiddenRelationshipEvents?: readonly ForbiddenRelationshipEvent[];
     readonly forbiddenReveals?: readonly ForbiddenReveal[];
     readonly authorOnlySecrets?: readonly AuthorOnlySecret[];
     readonly canonRules?: readonly CanonRule[];
@@ -120,6 +130,32 @@ const byChapterThenId = <T extends { readonly id: string; readonly startChapter:
 const byAllowedThenId = <T extends { readonly id: string; readonly allowedFromChapter: number }>(left: T, right: T) =>
     left.allowedFromChapter - right.allowedFromChapter || left.id.localeCompare(right.id);
 
+const cloneWriterProfile = (profile: WriterCharacterProfile | undefined): WriterCharacterProfile => ({
+    ...(profile?.role === undefined ? {} : { role: profile.role }),
+    ...(profile?.appearance === undefined ? {} : { appearance: profile.appearance }),
+    ...(profile?.personality === undefined ? {} : { personality: profile.personality }),
+    ...(profile?.publicFacts === undefined ? {} : { publicFacts: [...profile.publicFacts] }),
+});
+
+const cloneArc = (arc: StoryArc): StoryArc => ({
+    id: arc.id,
+    title: arc.title,
+    startChapter: arc.startChapter,
+    endChapter: arc.endChapter,
+    ...(arc.writerBrief === undefined ? {} : { writerBrief: arc.writerBrief }),
+    ...(arc.authorPlan === undefined ? {} : { authorPlan: arc.authorPlan }),
+});
+
+const cloneBeat = (beat: StoryBeat): StoryBeat => ({
+    id: beat.id,
+    arcId: beat.arcId,
+    order: beat.order,
+    startChapter: beat.startChapter,
+    endChapter: beat.endChapter,
+    ...(beat.writerBrief === undefined ? {} : { writerBrief: beat.writerBrief }),
+    ...(beat.authorPlan === undefined ? {} : { authorPlan: beat.authorPlan }),
+});
+
 /**
  * Compile a serializable author blueprint into deterministic, immutable StoryControl data.
  * No model call, current time, random id, or story-specific rule participates in compilation.
@@ -131,40 +167,27 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
     }
     assertUniqueIds(blueprint.characters, 'characters');
 
-    const characters: Record<string, ControlledCharacter> = {};
-    const compiledCharacters = blueprint.characters.map((input, index): ControlledCharacter => {
-        const availableFromChapter = compileAllowedFrom({
+    const configuredCharacterBoundaries = new Map<string, number>();
+    blueprint.characters.forEach((input, index) => {
+        configuredCharacterBoundaries.set(input.id, compileAllowedFrom({
             allowedFromChapter: input.availableFromChapter === undefined
                 ? input.allowedFromChapter
                 : Math.max(input.availableFromChapter, input.allowedFromChapter ?? 1),
             lockedThroughChapter: input.lockedThroughChapter,
-        }, `characters.${index}`);
-        const character: ControlledCharacter = {
-            id: requireId(input.id, `characters.${index}.id`),
-            name: requireId(input.name, `characters.${index}.name`),
-            initialStatus: availableFromChapter === 1 ? 'active' : 'future-locked',
-            availableFromChapter,
-            writerProfile: { ...(input.writerProfile ?? {}) },
-            ...(input.authorNotes === undefined ? {} : { authorNotes: input.authorNotes }),
-        };
-        characters[character.id] = character;
-        return character;
-    }).sort((left, right) => left.id.localeCompare(right.id));
+        }, `characters.${index}`));
+    });
 
-    const arcs = [...(blueprint.arcs ?? [])].sort(byChapterThenId);
-    const beats = [...(blueprint.beats ?? [])].sort((left, right) =>
-        left.startChapter - right.startChapter || left.order - right.order || left.id.localeCompare(right.id));
-    const reveals = [...(blueprint.reveals ?? [])].sort((left, right) => left.id.localeCompare(right.id));
-    const relationshipEvents = [...(blueprint.relationshipEvents ?? [])].sort((left, right) => left.id.localeCompare(right.id));
-
-    [arcs, beats, reveals, relationshipEvents, blueprint.forbiddenEvents ?? [], blueprint.forbiddenReveals ?? [], blueprint.authorOnlySecrets ?? [], blueprint.canonRules ?? []]
-        .forEach((values, index) => assertUniqueIds(values, ['arcs', 'beats', 'reveals', 'relationshipEvents', 'forbiddenEvents', 'forbiddenReveals', 'authorOnlySecrets', 'canonRules'][index]));
-
-    const characterGates = (blueprint.gates?.characters ?? []).map((gate, index) => ({
+    const explicitCharacterGates = (blueprint.gates?.characters ?? []).map((gate, index) => ({
         id: requireId(gate.id, `gates.characters.${index}.id`),
         characterId: requireId(gate.characterId, `gates.characters.${index}.characterId`),
         allowedFromChapter: compileAllowedFrom(gate, `gates.characters.${index}`),
     })).sort(byAllowedThenId);
+    const materializedCharacterGates = blueprint.characters.map((character, index) => ({
+        id: `character-timing:${requireId(character.id, `characters.${index}.id`)}`,
+        characterId: requireId(character.id, `characters.${index}.id`),
+        allowedFromChapter: configuredCharacterBoundaries.get(character.id)!,
+    }));
+    const characterGates = [...materializedCharacterGates, ...explicitCharacterGates].sort(byAllowedThenId);
     const povGates = (blueprint.gates?.pov ?? []).map((gate, index) => ({
         id: requireId(gate.id, `gates.pov.${index}.id`),
         characterId: requireId(gate.characterId, `gates.pov.${index}.characterId`),
@@ -180,8 +203,92 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
         eventId: requireId(gate.eventId, `gates.relationships.${index}.eventId`),
         allowedFromChapter: compileAllowedFrom(gate, `gates.relationships.${index}`),
     })).sort(byAllowedThenId);
-    [characterGates, povGates, revealGates, relationshipGates].forEach((values, index) =>
-        assertUniqueIds(values, ['gates.characters', 'gates.pov', 'gates.reveals', 'gates.relationships'][index]));
+    const eventGates = (blueprint.gates?.events ?? []).map((gate, index) => ({
+        id: requireId(gate.id, `gates.events.${index}.id`),
+        eventId: requireId(gate.eventId, `gates.events.${index}.eventId`),
+        allowedFromChapter: compileAllowedFrom(gate, `gates.events.${index}`),
+    })).sort(byAllowedThenId);
+    [characterGates, povGates, revealGates, relationshipGates, eventGates].forEach((values, index) =>
+        assertUniqueIds(values, ['gates.characters', 'gates.pov', 'gates.reveals', 'gates.relationships', 'gates.events'][index]));
+
+    const effectiveCharacterBoundaries = new Map<string, number>();
+    blueprint.characters.forEach((character) => {
+        const boundaries = characterGates
+            .filter(gate => gate.characterId === character.id)
+            .map(gate => gate.allowedFromChapter);
+        effectiveCharacterBoundaries.set(character.id, Math.max(...boundaries));
+    });
+    const compiledCharacters = blueprint.characters.map((input, index): ControlledCharacter => {
+        const availableFromChapter = effectiveCharacterBoundaries.get(input.id)!;
+        return {
+            id: requireId(input.id, `characters.${index}.id`),
+            name: requireId(input.name, `characters.${index}.name`),
+            initialStatus: availableFromChapter === 1 ? 'active' : 'future-locked',
+            availableFromChapter,
+            writerProfile: cloneWriterProfile(input.writerProfile),
+            ...(input.authorNotes === undefined ? {} : { authorNotes: input.authorNotes }),
+        };
+    }).sort((left, right) => left.id.localeCompare(right.id));
+    const characters: Record<string, ControlledCharacter> = {};
+    compiledCharacters.forEach(character => { characters[character.id] = character; });
+
+    const arcs = (blueprint.arcs ?? []).map(cloneArc).sort(byChapterThenId);
+    const beats = (blueprint.beats ?? []).map(cloneBeat).sort((left, right) =>
+        left.startChapter - right.startChapter || left.order - right.order || left.id.localeCompare(right.id));
+    const reveals = (blueprint.reveals ?? []).map(reveal => ({
+        id: reveal.id,
+        writerText: reveal.writerText,
+        ...(reveal.authorNotes === undefined ? {} : { authorNotes: reveal.authorNotes }),
+    })).sort((left, right) => left.id.localeCompare(right.id));
+    const relationshipEvents = (blueprint.relationshipEvents ?? []).map(event => ({
+        id: event.id,
+        relationshipId: event.relationshipId,
+        eventType: event.eventType,
+        participantIds: [...event.participantIds],
+        ...(event.writerText === undefined ? {} : { writerText: event.writerText }),
+        ...(event.authorNotes === undefined ? {} : { authorNotes: event.authorNotes }),
+    })).sort((left, right) => left.id.localeCompare(right.id));
+    const storyEvents = (blueprint.storyEvents ?? []).map(event => ({
+        id: event.id,
+        eventType: event.eventType,
+        ...(event.writerText === undefined ? {} : { writerText: event.writerText }),
+        ...(event.authorNotes === undefined ? {} : { authorNotes: event.authorNotes }),
+    })).sort((left, right) => left.id.localeCompare(right.id));
+    const forbiddenEvents = (blueprint.forbiddenEvents ?? []).map(event => ({
+        id: event.id,
+        eventId: event.eventId,
+        forbiddenThroughChapter: event.forbiddenThroughChapter,
+        ...(event.authorReason === undefined ? {} : { authorReason: event.authorReason }),
+    })).sort((left, right) => left.forbiddenThroughChapter - right.forbiddenThroughChapter || left.id.localeCompare(right.id));
+    const forbiddenRelationshipEvents = (blueprint.forbiddenRelationshipEvents ?? []).map(event => ({
+        id: event.id,
+        eventId: event.eventId,
+        forbiddenThroughChapter: event.forbiddenThroughChapter,
+        ...(event.authorReason === undefined ? {} : { authorReason: event.authorReason }),
+    })).sort((left, right) => left.forbiddenThroughChapter - right.forbiddenThroughChapter || left.id.localeCompare(right.id));
+    const forbiddenReveals = (blueprint.forbiddenReveals ?? []).map(reveal => ({
+        id: reveal.id,
+        revealId: reveal.revealId,
+        forbiddenThroughChapter: reveal.forbiddenThroughChapter,
+        ...(reveal.authorReason === undefined ? {} : { authorReason: reveal.authorReason }),
+    })).sort((left, right) => left.forbiddenThroughChapter - right.forbiddenThroughChapter || left.id.localeCompare(right.id));
+    const authorOnlySecrets = (blueprint.authorOnlySecrets ?? []).map(secret => ({
+        id: secret.id,
+        value: secret.value,
+        ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }),
+        ...(secret.notes === undefined ? {} : { notes: secret.notes }),
+    })).sort((left, right) => left.id.localeCompare(right.id));
+    const canonRules = (blueprint.canonRules ?? []).map(rule => ({
+        id: rule.id,
+        text: rule.text,
+        availableFromChapter: rule.availableFromChapter,
+        ...(rule.expiresAfterChapter === undefined ? {} : { expiresAfterChapter: rule.expiresAfterChapter }),
+        scope: rule.scope,
+        ...(rule.authorNotes === undefined ? {} : { authorNotes: rule.authorNotes }),
+    })).sort((left, right) => left.availableFromChapter - right.availableFromChapter || left.id.localeCompare(right.id));
+
+    [arcs, beats, reveals, relationshipEvents, storyEvents, forbiddenEvents, forbiddenRelationshipEvents, forbiddenReveals, authorOnlySecrets, canonRules]
+        .forEach((values, index) => assertUniqueIds(values, ['arcs', 'beats', 'reveals', 'relationshipEvents', 'storyEvents', 'forbiddenEvents', 'forbiddenRelationshipEvents', 'forbiddenReveals', 'authorOnlySecrets', 'canonRules'][index]));
 
     const control: FullStoryControl = {
         kind: 'full-story-control',
@@ -192,6 +299,7 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
             failClosed: true,
             unknownCharacterPolicy: 'deny',
             missingGatePolicy: 'deny',
+            beatPolicy: 'required-for-arcs-with-beats',
         },
         characters,
         characterOrder: compiledCharacters.map(character => character.id),
@@ -199,16 +307,19 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
         beats,
         reveals,
         relationshipEvents,
+        storyEvents,
         gates: {
             characters: characterGates,
             pov: povGates,
             reveals: revealGates,
             relationships: relationshipGates,
+            events: eventGates,
         },
-        forbiddenEvents: [...(blueprint.forbiddenEvents ?? [])].sort((left, right) => left.forbiddenThroughChapter - right.forbiddenThroughChapter || left.id.localeCompare(right.id)),
-        forbiddenReveals: [...(blueprint.forbiddenReveals ?? [])].sort((left, right) => left.forbiddenThroughChapter - right.forbiddenThroughChapter || left.id.localeCompare(right.id)),
-        authorOnlySecrets: [...(blueprint.authorOnlySecrets ?? [])].sort((left, right) => left.id.localeCompare(right.id)),
-        canonRules: [...(blueprint.canonRules ?? [])].sort((left, right) => left.availableFromChapter - right.availableFromChapter || left.id.localeCompare(right.id)),
+        forbiddenEvents,
+        forbiddenRelationshipEvents,
+        forbiddenReveals,
+        authorOnlySecrets,
+        canonRules,
     };
 
     const issues = validateFullStoryControl(control);

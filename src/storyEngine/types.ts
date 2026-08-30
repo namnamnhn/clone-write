@@ -7,6 +7,8 @@ export interface EngineSettings {
     readonly failClosed: true;
     readonly unknownCharacterPolicy: 'deny';
     readonly missingGatePolicy: 'deny';
+    /** Beats are optional only for arcs that define no beats at all. */
+    readonly beatPolicy: 'required-for-arcs-with-beats';
 }
 
 export interface WriterCharacterProfile {
@@ -87,7 +89,29 @@ export interface RelationshipGate {
     readonly allowedFromChapter: ChapterNumber;
 }
 
+/** A hard story event independent from relationships (war, coup, coronation, etc.). */
+export interface StoryEventDefinition {
+    readonly id: StoryId;
+    readonly eventType: string;
+    readonly writerText?: string;
+    readonly authorNotes?: string;
+}
+
+export interface StoryEventGate {
+    readonly id: StoryId;
+    readonly eventId: StoryId;
+    readonly allowedFromChapter: ChapterNumber;
+}
+
 export interface ForbiddenEvent {
+    readonly id: StoryId;
+    readonly eventId: StoryId;
+    readonly forbiddenThroughChapter: ChapterNumber;
+    readonly authorReason?: string;
+}
+
+/** Relationship restrictions stay in their own control plane. */
+export interface ForbiddenRelationshipEvent {
     readonly id: StoryId;
     readonly eventId: StoryId;
     readonly forbiddenThroughChapter: ChapterNumber;
@@ -124,6 +148,7 @@ export interface StoryGates {
     readonly pov: readonly PovGate[];
     readonly reveals: readonly RevealGate[];
     readonly relationships: readonly RelationshipGate[];
+    readonly events: readonly StoryEventGate[];
 }
 
 /** Complete control plane. It is intentionally unsafe to give to a Writer model. */
@@ -137,8 +162,10 @@ export interface FullStoryControl {
     readonly beats: readonly StoryBeat[];
     readonly reveals: readonly RevealDefinition[];
     readonly relationshipEvents: readonly RelationshipEventDefinition[];
+    readonly storyEvents: readonly StoryEventDefinition[];
     readonly gates: StoryGates;
     readonly forbiddenEvents: readonly ForbiddenEvent[];
+    readonly forbiddenRelationshipEvents: readonly ForbiddenRelationshipEvent[];
     readonly forbiddenReveals: readonly ForbiddenReveal[];
     readonly authorOnlySecrets: readonly AuthorOnlySecret[];
     readonly canonRules: readonly CanonRule[];
@@ -267,7 +294,7 @@ export interface WriterSafeContext {
     readonly kind: 'writer-safe-context';
     readonly storyControlId: StoryId;
     readonly chapter: ChapterNumber;
-    readonly arc?: WriterSafeArc;
+    readonly arc: WriterSafeArc;
     readonly beat?: WriterSafeBeat;
     readonly characters: readonly WriterSafeCharacter[];
     readonly canonRules: readonly Pick<CanonRule, 'id' | 'text' | 'scope'>[];

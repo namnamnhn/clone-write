@@ -56,6 +56,24 @@ export const isRelationshipEventAllowed = (
     if (!event.participantIds.every(characterId => isCharacterDirectAppearanceAllowed(control, characterId, chapter))) return false;
     const gates = control.gates.relationships.filter(gate => gate.eventId === eventId);
     if (gates.length === 0) return false;
+    const forbidden = control.forbiddenRelationshipEvents.filter(entry => entry.eventId === eventId);
+    const allowedFrom = maxRestrictionChapter([
+        ...gates.map(gate => gate.allowedFromChapter),
+        ...forbidden.map(entry => entry.forbiddenThroughChapter + 1),
+    ]);
+    return allowedFrom !== undefined && chapter >= allowedFrom;
+};
+
+/** Generic hard-event gate; intentionally independent of relationship event semantics. */
+export const isStoryEventAllowed = (
+    control: FullStoryControl,
+    eventId: string,
+    chapter: number,
+): boolean => {
+    if (!controlIsFailClosed(control) || !isValidChapter(chapter)) return false;
+    if (!control.storyEvents.some(event => event.id === eventId)) return false;
+    const gates = control.gates.events.filter(gate => gate.eventId === eventId);
+    if (gates.length === 0) return false;
     const forbidden = control.forbiddenEvents.filter(entry => entry.eventId === eventId);
     const allowedFrom = maxRestrictionChapter([
         ...gates.map(gate => gate.allowedFromChapter),
@@ -65,7 +83,7 @@ export const isRelationshipEventAllowed = (
 };
 
 export const getArcForChapter = (control: FullStoryControl, chapter: number): StoryArc | undefined => {
-    if (!controlIsFailClosed(control) || !isValidChapter(chapter)) return undefined;
+    if (!controlIsFailClosed(control) || !isValidChapter(chapter) || chapter > control.engine.plannedChapterCount) return undefined;
     const matches = control.arcs.filter(arc =>
         isValidChapter(arc.startChapter) &&
         isValidChapter(arc.endChapter) &&
@@ -83,7 +101,9 @@ export const getBeatForChapter = (control: FullStoryControl, chapter: number): S
         isValidChapter(beat.endChapter) &&
         beat.startChapter <= beat.endChapter &&
         chapter >= beat.startChapter && chapter <= beat.endChapter);
-    return matches.length === 1 ? matches[0] : undefined;
+    if (matches.length === 1) return matches[0];
+    // Policy is explicit: an arc with zero beats is beat-optional; otherwise a missing/ambiguous beat is denied.
+    return undefined;
 };
 
 export const getAllowedCharactersForChapter = (control: FullStoryControl, chapter: number) =>

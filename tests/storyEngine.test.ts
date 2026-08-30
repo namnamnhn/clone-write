@@ -9,6 +9,7 @@ import {
     isPovAllowed,
     isRelationshipEventAllowed,
     isRevealAllowed,
+    isStoryEventAllowed,
     StoryBlueprint,
     StoryControlValidationError,
 } from '../src/storyEngine';
@@ -87,6 +88,14 @@ const makeBlueprint = (): StoryBlueprint => ({
             authorNotes: 'The meeting has a hidden author-only purpose.',
         },
     ],
+    storyEvents: [
+        {
+            id: 'palace-civil-war',
+            eventType: 'civil-war',
+            writerText: 'The palace civil war may begin.',
+            authorNotes: 'Do not accelerate the political crisis.',
+        },
+    ],
     gates: {
         characters: [
             { id: 'a-lock', characterId: 'character-a', lockedThroughChapter: 32 },
@@ -102,13 +111,24 @@ const makeBlueprint = (): StoryBlueprint => ({
         relationships: [
             { id: 'meeting-base-gate', eventId: 'first-meeting', allowedFromChapter: 200 },
         ],
+        events: [
+            { id: 'civil-war-base-gate', eventId: 'palace-civil-war', allowedFromChapter: 400 },
+        ],
     },
-    forbiddenEvents: [
+    forbiddenRelationshipEvents: [
         {
             id: 'meeting-hard-lock',
             eventId: 'first-meeting',
             forbiddenThroughChapter: 218,
             authorReason: 'hard plot boundary',
+        },
+    ],
+    forbiddenEvents: [
+        {
+            id: 'civil-war-hard-lock',
+            eventId: 'palace-civil-war',
+            forbiddenThroughChapter: 500,
+            authorReason: 'hard political escalation boundary',
         },
     ],
     forbiddenReveals: [
@@ -168,6 +188,21 @@ describe('Story Engine V4 deterministic hard gates', () => {
     it('forbids a relationship/meeting event through 218 and allows it from 219', () => {
         expect(isRelationshipEventAllowed(control, 'first-meeting', 218)).toBe(false);
         expect(isRelationshipEventAllowed(control, 'first-meeting', 219)).toBe(true);
+    });
+
+    it('forbids a generic palace civil war through 500 and allows it from 501', () => {
+        expect(isStoryEventAllowed(control, 'palace-civil-war', 500)).toBe(false);
+        expect(isStoryEventAllowed(control, 'palace-civil-war', 501)).toBe(true);
+        expect(isStoryEventAllowed(control, 'unknown-story-event', 999)).toBe(false);
+    });
+
+    it('fails closed for a known generic story event with no critical gate', () => {
+        const blueprint = makeBlueprint();
+        const withoutEventGate = compileStoryControl({
+            ...blueprint,
+            gates: { ...blueprint.gates, events: [] },
+        });
+        expect(isStoryEventAllowed(withoutEventGate, 'palace-civil-war', 600)).toBe(false);
     });
 
     it('forbids the mastermind reveal through 560 and allows it from 561', () => {
@@ -250,11 +285,34 @@ describe('StoryControl compiler and arc lookup', () => {
     it('supports a 600-chapter blueprint, normalizes locks, sorts deterministically, and freezes output', () => {
         const control = compileStoryControl(makeBlueprint());
         expect(control.engine.plannedChapterCount).toBe(600);
-        expect(control.gates.characters.find(gate => gate.characterId === 'character-a')?.allowedFromChapter).toBe(33);
-        expect(control.gates.characters.find(gate => gate.characterId === 'character-b')?.allowedFromChapter).toBe(47);
+        expect(control.gates.characters.find(gate => gate.id === 'a-lock')?.allowedFromChapter).toBe(33);
+        expect(control.gates.characters.find(gate => gate.id === 'b-lock')?.allowedFromChapter).toBe(47);
+        expect(control.characters['character-a'].availableFromChapter).toBe(33);
+        expect(control.characters['character-b'].availableFromChapter).toBe(47);
         expect(Object.isFrozen(control)).toBe(true);
         expect(Object.isFrozen(control.authorOnlySecrets)).toBe(true);
         expect(compileStoryControl(makeBlueprint())).toEqual(control);
+    });
+
+    it('does not freeze or mutate the caller blueprint graph', () => {
+        const blueprint = makeBlueprint();
+        const originalJson = JSON.stringify(blueprint);
+        const originalCharacter = blueprint.characters[0];
+        const originalProfile = originalCharacter.writerProfile;
+        const originalRelationship = blueprint.relationshipEvents![0];
+        const originalParticipants = originalRelationship.participantIds;
+
+        const control = compileStoryControl(blueprint);
+
+        expect(Object.isFrozen(control)).toBe(true);
+        expect(Object.isFrozen(control.relationshipEvents[0].participantIds)).toBe(true);
+        expect(Object.isFrozen(blueprint)).toBe(false);
+        expect(Object.isFrozen(blueprint.characters)).toBe(false);
+        expect(Object.isFrozen(originalCharacter)).toBe(false);
+        expect(Object.isFrozen(originalProfile!)).toBe(false);
+        expect(Object.isFrozen(originalRelationship)).toBe(false);
+        expect(Object.isFrozen(originalParticipants)).toBe(false);
+        expect(JSON.stringify(blueprint)).toBe(originalJson);
     });
 
     it('returns only the unique arc for a chapter', () => {
@@ -273,5 +331,77 @@ describe('StoryControl compiler and arc lookup', () => {
                 { ...blueprint.arcs![1], startChapter: 300 },
             ],
         })).toThrow(StoryControlValidationError);
+    });
+
+    it('rejects arc coverage gaps and does not build a writer context outside the planned story', () => {
+        const blueprint = makeBlueprint();
+        expect(() => compileStoryControl({
+            ...blueprint,
+            arcs: [
+                { ...blueprint.arcs![0], endChapter: 299 },
+                blueprint.arcs![1],
+            ],
+        })).toThrow(StoryControlValidationError);
+
+        const control = compileStoryControl(blueprint);
+        expect(() => buildWriterSafeContext(control, createInitialStoryState(601), 601)).toThrow('planned story range');
+    });
+
+    it('rejects beat coverage gaps and fails context construction if a manually supplied control has a required beat gap', () => {
+        const blueprint = makeBlueprint();
+        expect(() => compileStoryControl({
+            ...blueprint,
+            beats: [
+                { ...blueprint.beats![0], endChapter: 299 },
+                blueprint.beats![1],
+            ],
+        })).toThrow(StoryControlValidationError);
+
+        const validControl = compileStoryControl(blueprint);
+        const invalidControl = {
+            ...validControl,
+            beats: validControl.beats.map(beat => beat.id === 'beat-current' ? { ...beat, endChapter: 299 } : beat),
+        };
+        expect(() => buildWriterSafeContext(invalidControl, createInitialStoryState(300), 300)).toThrow('no unique beat');
+    });
+
+    it('materializes character timing gates and uses one effective availability boundary', () => {
+        const blueprint = makeBlueprint();
+        const control = compileStoryControl({
+            ...blueprint,
+            characters: blueprint.characters.map(character => character.id === 'character-a'
+                ? { ...character, availableFromChapter: 1 }
+                : character),
+            gates: {
+                ...blueprint.gates,
+                characters: [
+                    { id: 'a-later-explicit-gate', characterId: 'character-a', lockedThroughChapter: 50 },
+                    blueprint.gates!.characters![1],
+                ],
+            },
+        });
+        const character = control.characters['character-a'];
+        expect(character.availableFromChapter).toBe(51);
+        expect(character.initialStatus).toBe('future-locked');
+        expect(isCharacterDirectAppearanceAllowed(control, 'character-a', 50)).toBe(false);
+        expect(isCharacterDirectAppearanceAllowed(control, 'character-a', 51)).toBe(true);
+        expect(control.gates.characters.some(gate => gate.id === 'character-timing:character-a')).toBe(true);
+    });
+
+    it('materializes a direct-appearance gate when the author supplies character timing but no explicit character gate', () => {
+        const blueprint = makeBlueprint();
+        const control = compileStoryControl({
+            ...blueprint,
+            characters: blueprint.characters.map(character => character.id === 'character-a'
+                ? { ...character, lockedThroughChapter: 32 }
+                : character),
+            gates: {
+                ...blueprint.gates,
+                characters: [],
+            },
+        });
+        expect(isCharacterDirectAppearanceAllowed(control, 'character-a', 32)).toBe(false);
+        expect(isCharacterDirectAppearanceAllowed(control, 'character-a', 33)).toBe(true);
+        expect(control.gates.characters).toHaveLength(2);
     });
 });

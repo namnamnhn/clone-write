@@ -55,10 +55,15 @@ export const buildWriterSafeContext = (
     state: StoryState,
     chapter: number = state.currentChapter,
 ): WriterSafeContext => {
-    if (!isValidChapter(chapter)) throw new Error('chapter must be a positive integer');
+    if (!isValidChapter(chapter) || chapter > control.engine.plannedChapterCount) {
+        throw new Error('chapter must be within the planned story range');
+    }
 
     const arc = getArcForChapter(control, chapter);
     const beat = getBeatForChapter(control, chapter);
+    if (!arc) throw new Error(`no unique arc resolves for chapter ${chapter}`);
+    const arcUsesBeats = control.beats.some(candidate => candidate.arcId === arc.id);
+    if (arcUsesBeats && !beat) throw new Error(`no unique beat resolves for chapter ${chapter} in arc ${arc.id}`);
     const allowedCharacters = getAllowedCharactersForChapter(control, chapter);
     const allowedCharacterIds = new Set(allowedCharacters.map(character => character.id));
     const facts = safeFacts(state.facts, chapter);
@@ -68,13 +73,11 @@ export const buildWriterSafeContext = (
         kind: 'writer-safe-context',
         storyControlId: control.id,
         chapter,
-        ...(arc ? {
-            arc: {
-                id: arc.id,
-                title: arc.title,
-                ...(arc.writerBrief === undefined ? {} : { writerBrief: arc.writerBrief }),
-            },
-        } : {}),
+        arc: {
+            id: arc.id,
+            title: arc.title,
+            ...(arc.writerBrief === undefined ? {} : { writerBrief: arc.writerBrief }),
+        },
         ...(beat ? {
             beat: {
                 id: beat.id,
