@@ -11,6 +11,12 @@ import {
     writerStrategicDirectiveMatchesValidatorAction,
 } from './strategicContext';
 import type { ValidatorStrategicView } from './strategicTypes';
+import type { ValidatorRelationshipView } from './relationshipTypes';
+import {
+    parseValidatorRelationshipView,
+    RelationshipContextCapacityError,
+    writerRelationshipDirectiveMatchesValidatorAction,
+} from './relationshipValidatorContext';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 
 export interface ValidatorContextSelectionPolicy {
@@ -21,6 +27,7 @@ export interface ValidatorContextSelectionPolicy {
     readonly maxSecretValidationItems: number;
     readonly maxPlotItems?: number;
     readonly maxStrategicItems?: number;
+    readonly maxRelationshipItems?: number;
 }
 
 export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelectionPolicy = {
@@ -31,6 +38,7 @@ export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelecti
     maxSecretValidationItems: 128,
     maxPlotItems: 256,
     maxStrategicItems: 256,
+    maxRelationshipItems: 256,
 };
 
 export class ValidatorContextCapacityError extends Error {
@@ -74,6 +82,7 @@ export interface ValidatorContext {
     readonly secretValidation: readonly ValidatorSecretDatum[];
     readonly plotView: ValidatorPlotView;
     readonly strategicView?: ValidatorStrategicView;
+    readonly relationshipView?: ValidatorRelationshipView;
 }
 
 /** Builds a target-scoped allow-list. It never spreads either source object or includes future arc prose. */
@@ -84,10 +93,11 @@ const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): Vali
         ...policy,
         maxPlotItems: policy.maxPlotItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxPlotItems,
         maxStrategicItems: policy.maxStrategicItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxStrategicItems,
+        maxRelationshipItems: policy.maxRelationshipItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxRelationshipItems,
     };
     const keys: readonly (keyof ValidatorContextSelectionPolicy)[] = [
         'maxLockedCharacters', 'maxLockedReveals', 'maxLockedRelationshipEvents',
-        'maxLockedStoryEvents', 'maxSecretValidationItems', 'maxPlotItems', 'maxStrategicItems',
+        'maxLockedStoryEvents', 'maxSecretValidationItems', 'maxPlotItems', 'maxStrategicItems', 'maxRelationshipItems',
     ];
     keys.forEach((key) => {
         const value = normalized[key];
@@ -108,12 +118,17 @@ export const buildValidatorContext = (
     plan: WriterChapterPlan,
     selectionPolicy: ValidatorContextSelectionPolicy = DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
     suppliedStrategicView?: unknown,
+    suppliedRelationshipView?: unknown,
 ): ValidatorContext => {
     const policy = normalizeSelectionPolicy(selectionPolicy);
     const writerContext = buildWriterContext(control, state, plan);
     const writerStrategicDirectives = writerContext.chapterPlan.strategicDirectives ?? [];
+    const writerRelationshipDirectives = writerContext.chapterPlan.relationshipDirectives ?? [];
     if (writerStrategicDirectives.length > 0 && suppliedStrategicView === undefined) {
         throw new Error('strategic Writer plan requires a privileged strategic view');
+    }
+    if (writerRelationshipDirectives.length > 0 && suppliedRelationshipView === undefined) {
+        throw new Error('relationship Writer plan requires a privileged relationship view');
     }
     const chapter = writerContext.targetChapter;
     const arc = getArcForChapter(control, chapter);
@@ -159,9 +174,11 @@ export const buildValidatorContext = (
         throw error;
     }
     let strategicView: ValidatorStrategicView | undefined;
+    let relationshipView: ValidatorRelationshipView | undefined;
+    let plannerContext: ReturnType<typeof buildPlannerContext> | undefined;
     try {
         if (suppliedStrategicView !== undefined) {
-            const plannerContext = buildPlannerContext(control, state, chapter);
+            plannerContext = buildPlannerContext(control, state, chapter);
             strategicView = parseValidatorStrategicView(
                 suppliedStrategicView, chapter, policy.maxStrategicItems ?? 256, plannerContext,
             );
@@ -171,12 +188,32 @@ export const buildValidatorContext = (
         if (error instanceof StrategicContextCapacityError) throw new ValidatorContextCapacityError(error.message);
         throw error;
     }
+    try {
+        if (suppliedRelationshipView !== undefined) {
+            plannerContext ??= buildPlannerContext(control, state, chapter);
+            relationshipView = parseValidatorRelationshipView(
+                suppliedRelationshipView, chapter, policy.maxRelationshipItems ?? 256, plannerContext,
+                new Set((writerContext.chapterPlan.strategicDirectives ?? []).map(value => value.id)),
+            );
+            assertModelBoundaryStringsSecretSafe(control, relationshipView, 'validatorRelationshipView');
+        }
+    } catch (error) {
+        if (error instanceof RelationshipContextCapacityError) throw new ValidatorContextCapacityError(error.message);
+        throw error;
+    }
     if (strategicView?.deterministicIssues.length) throw new Error('strategic plan contains deterministic blockers');
     if (strategicView !== undefined) {
         if (writerStrategicDirectives.length !== strategicView.actions.length || strategicView.actions.some((action) => {
             const directive = writerStrategicDirectives.find(candidate => candidate.id === action.id);
             return directive === undefined || !writerStrategicDirectiveMatchesValidatorAction(directive, action);
         })) throw new Error('validator strategic view does not match the writer-safe plan projection');
+    }
+    if (relationshipView?.deterministicIssues.length) throw new Error('relationship plan contains deterministic blockers');
+    if (relationshipView !== undefined) {
+        if (writerRelationshipDirectives.length !== relationshipView.actions.length || relationshipView.actions.some((action) => {
+            const directive = writerRelationshipDirectives.find(candidate => candidate.id === action.id);
+            return directive === undefined || !writerRelationshipDirectiveMatchesValidatorAction(directive, action);
+        })) throw new Error('validator relationship view does not match the writer-safe plan projection');
     }
     return {
         kind: 'validator-context', targetChapter: chapter, currentArc: { id: arc.id, title: arc.title },
@@ -189,5 +226,6 @@ export const buildValidatorContext = (
         secretValidation,
         plotView,
         ...(strategicView === undefined ? {} : { strategicView }),
+        ...(relationshipView === undefined ? {} : { relationshipView }),
     };
 };

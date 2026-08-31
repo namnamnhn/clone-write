@@ -12,6 +12,8 @@ import { FullStoryControl, StoryState } from './types';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 import { parseWriterStrategicDirectives } from './strategicContext';
 import { validateWriterStrategicDirectives } from './writerStrategicValidator';
+import { parseWriterRelationshipDirectives } from './relationshipRuntime';
+import { validateWriterRelationshipDirectives } from './writerRelationshipValidator';
 import {
     DEFAULT_WRITER_CONTEXT_SELECTION_POLICY,
     WriterContext,
@@ -97,8 +99,10 @@ const clonePlan = (
         'participantIds', 'scenes', 'canonConstraints', 'reveals', 'relationshipEvents', 'storyEvents',
         'cluesPlantedIds', 'cluesPaidOffIds', 'expectedResourceDeltas', 'expectedRelationshipDeltas', 'expectedContinuityConsequences',
         'strategicDirectives',
+        'relationshipDirectives',
     ].forEach((field) => {
-        if (field === 'strategicDirectives' && plan.strategicDirectives === undefined) return;
+        if ((field === 'strategicDirectives' && plan.strategicDirectives === undefined)
+            || (field === 'relationshipDirectives' && plan.relationshipDirectives === undefined)) return;
         if (!Array.isArray(plan[field as keyof WriterChapterPlan])) throw new WriterContextError(`plan.${field} must be an array`);
     });
     if (plan.chapterNumber !== safe.chapter) throw new WriterContextError('plan chapter must match target chapter');
@@ -195,6 +199,12 @@ const clonePlan = (
         if (participants.length < 2 || !participants.every(id => allowedCharacters.has(id) && chapterParticipants.includes(id))) {
             throw new WriterContextError(`expectedRelationshipDeltas.${index}.participantIds must contain two available declared characters`);
         }
+        const declaredRelationship = safe.relationshipDefinitions.find(value => value.id === delta.relationshipId)
+            ?? safe.state.relationships.find(value => value.id === delta.relationshipId)
+            ?? safe.relationshipEvents.find(value => value.relationshipId === delta.relationshipId);
+        if (!declaredRelationship || declaredRelationship.participantIds.join('\u0000') !== participants.join('\u0000')) {
+            throw new WriterContextError(`expectedRelationshipDeltas.${index}.relationshipId must resolve with matching participants`);
+        }
         return { relationshipId: delta.relationshipId, participantIds: participants, expectedState: text(delta.expectedState, `expectedRelationshipDeltas.${index}.expectedState`) };
     });
     let strategicDirectives: ReturnType<typeof parseWriterStrategicDirectives>;
@@ -220,6 +230,19 @@ const clonePlan = (
             throw new WriterContextError(`scenes.${index} lacks a matching strategic directive`);
         }
     }));
+    let relationshipDirectives: ReturnType<typeof parseWriterRelationshipDirectives>;
+    try {
+        relationshipDirectives = parseWriterRelationshipDirectives(plan.relationshipDirectives ?? []);
+        validateWriterRelationshipDirectives({
+            participantIds: chapterParticipants,
+            scenes: plan.scenes,
+            expectedRelationshipDeltas: relationshipDeltas,
+            relationshipEventIds: relationshipEvents.map(value => value.id),
+            directives: relationshipDirectives,
+        }, safe);
+    } catch (error) {
+        throw new WriterContextError(error instanceof Error ? error.message : 'relationship directives are infeasible');
+    }
 
     return {
         kind: 'writer-chapter-plan', chapterNumber: plan.chapterNumber,
@@ -232,6 +255,7 @@ const clonePlan = (
         expectedResourceDeltas: resourceDeltas, expectedRelationshipDeltas: relationshipDeltas,
         expectedContinuityConsequences: plan.expectedContinuityConsequences.map((value, index) => ({ id: text(value.id, `expectedContinuityConsequences.${index}.id`), text: text(value.text, `expectedContinuityConsequences.${index}.text`) })),
         strategicDirectives,
+        relationshipDirectives,
         endStateIntent: text(plan.endStateIntent, 'endStateIntent'),
     };
 };
@@ -288,6 +312,7 @@ export const buildWriterContext = (
     const requiredRelationshipIds = new Set([
         ...chapterPlan.relationshipEvents.map(event => event.relationshipId),
         ...chapterPlan.expectedRelationshipDeltas.map(delta => delta.relationshipId),
+        ...(chapterPlan.relationshipDirectives ?? []).map(directive => directive.relationshipId),
     ]);
     const eligibleRelationships = safe.state.relationships
         .filter(entry => entry.participantIds.every(id => selectedIds.has(id)));

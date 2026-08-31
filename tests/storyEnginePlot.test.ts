@@ -13,7 +13,7 @@ const control: FullStoryControl = {
     characters: { a: { id: 'a', name: 'A', initialStatus: 'active', availableFromChapter: 1, writerProfile: {} } },
     characterOrder: ['a'], arcs: [{ id: 'arc', title: 'Arc', startChapter: 1, endChapter: 700 }], beats: [],
     reveals: [{ id: 'r', writerText: 'LOCKED_REVEAL_WRITER_TEXT', authorNotes: 'private reveal note' }],
-    relationshipEvents: [], storyEvents: [],
+    relationshipDefinitions: [], relationshipEvents: [], storyEvents: [],
     gates: { characters: [{ id: 'a-gate', characterId: 'a', allowedFromChapter: 1 }], pov: [{ id: 'a-pov', characterId: 'a', allowedFromChapter: 1 }], reveals: [{ id: 'r-gate', revealId: 'r', allowedFromChapter: 561 }], relationships: [], events: [] },
     forbiddenEvents: [], forbiddenRelationshipEvents: [], forbiddenReveals: [{ id: 'r-hard-lock', revealId: 'r', forbiddenThroughChapter: 560 }],
     authorOnlySecrets: [

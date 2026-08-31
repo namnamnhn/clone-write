@@ -29,6 +29,7 @@ const repairInstruction: Readonly<Partial<Record<ValidationIssueCode, string>>> 
     CONSEQUENCE_MISSING: 'Include the consequence or cost required by the supplied plan.',
     FILLER_SCENE: 'Remove unrelated repetition and make every scene serve its supplied plan purpose.',
     INTERNAL_ID_LEAK: 'Remove internal engine names and identifiers from the prose.',
+    RELATIONSHIP_CONTRACT_VIOLATION: 'Restore the supplied relationship choices, boundaries, stage, and non-romantic constraints without inventing progression.',
 };
 
 export interface SafeRepairIssue {
@@ -81,6 +82,8 @@ export interface ValidateAndRepairRequest {
     readonly maxRepairAttempts?: number;
     readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
     readonly strategicView?: unknown;
+    /** Used only by validation; never copied into RepairContext. */
+    readonly relationshipView?: unknown;
 }
 
 const rejectValidation = (

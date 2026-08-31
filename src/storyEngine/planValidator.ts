@@ -14,6 +14,8 @@ import {
 } from './plannerTypes';
 import { parseStrategicActions } from './strategicRuntime';
 import { validateStrategicActions } from './strategicValidator';
+import { parseRelationshipActions } from './relationshipRuntime';
+import { validateRelationshipActions } from './relationshipValidator';
 
 export class ChapterPlanValidationError extends Error {
     constructor(public readonly issues: readonly PlanValidationIssue[]) {
@@ -183,15 +185,16 @@ export const parseInternalChapterPlan = (value: unknown): InternalPlanParseResul
     const expectedRelationshipDeltas = parseRelationshipDeltas(value.expectedRelationshipDeltas, 'expectedRelationshipDeltas', issues);
     const expectedContinuityConsequences = parseContinuityConsequences(value.expectedContinuityConsequences, 'expectedContinuityConsequences', issues);
     const strategicActions = parseStrategicActions(value.strategicActions, 'strategicActions', issues);
+    const relationshipActions = parseRelationshipActions(value.relationshipActions ?? [], 'relationshipActions', issues);
     const endStateIntent = requiredText(value, 'endStateIntent', '$', issues);
     if (issues.length > 0 || kind !== 'internal-chapter-plan' || !Number.isSafeInteger(chapterNumber) || (chapterNumber as number) < 1
         || !arcId || !primaryGoal || !povCharacterId || !participantIds || !activeConstraintIds || !allowedRevealIds || !plannedRevealIds
         || !relationshipEventIds || !storyEventIds || !cluesPlantedIds || !cluesPaidOffIds || !expectedResourceDeltas || !expectedRelationshipDeltas
-        || !expectedContinuityConsequences || !strategicActions || !endStateIntent) return { issues };
+        || !expectedContinuityConsequences || !strategicActions || !relationshipActions || !endStateIntent) return { issues };
     return { plan: {
         kind: 'internal-chapter-plan', chapterNumber: chapterNumber as number, arcId, ...(beatId === undefined ? {} : { beatId }), primaryGoal, povCharacterId,
         participantIds, scenes, activeConstraintIds, allowedRevealIds, plannedRevealIds, relationshipEventIds, storyEventIds,
-        cluesPlantedIds, cluesPaidOffIds, expectedResourceDeltas, expectedRelationshipDeltas, expectedContinuityConsequences, strategicActions, endStateIntent,
+        cluesPlantedIds, cluesPaidOffIds, expectedResourceDeltas, expectedRelationshipDeltas, expectedContinuityConsequences, strategicActions, relationshipActions, endStateIntent,
     }, issues };
 };
 
@@ -270,5 +273,6 @@ export const validateInternalChapterPlan = (
         if (delta.participantIds.length < 2 || !hasOnlyKnown(delta.participantIds, availableCharacters)) add('RELATIONSHIP_PARTICIPANTS_INVALID', `expectedRelationshipDeltas.${index}.participantIds`, 'relationship delta needs at least two available participants');
     });
     issues.push(...validateStrategicActions(plan, context));
+    issues.push(...validateRelationshipActions(plan, context));
     return issues;
 };

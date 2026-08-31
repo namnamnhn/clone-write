@@ -1,4 +1,5 @@
 import type { CanonicalLedgers, CanonicalProjections, FactProvenance } from './storyStateTypes';
+import type { RelationshipDefinition, RomanceMilestone } from './relationshipTypes';
 
 export type StoryId = string;
 export type ChapterNumber = number;
@@ -85,6 +86,8 @@ export interface RelationshipEventDefinition {
     readonly participantIds: readonly StoryId[];
     readonly writerText?: string;
     readonly authorNotes?: string;
+    /** Explicit control authorization for an otherwise disallowed multi-stage romantic advance. */
+    readonly authorizedRomanceMilestone?: RomanceMilestone;
 }
 
 export interface RelationshipGate {
@@ -165,6 +168,8 @@ export interface FullStoryControl {
     readonly arcs: readonly StoryArc[];
     readonly beats: readonly StoryBeat[];
     readonly reveals: readonly RevealDefinition[];
+    /** Planning policy only; canonical current relationship truth remains in StoryState. */
+    readonly relationshipDefinitions: readonly RelationshipDefinition[];
     readonly relationshipEvents: readonly RelationshipEventDefinition[];
     readonly storyEvents: readonly StoryEventDefinition[];
     readonly gates: StoryGates;
@@ -287,6 +292,7 @@ export interface WriterSafeRelationshipEvent {
     readonly eventType: string;
     readonly participantIds: readonly StoryId[];
     readonly writerText?: string;
+    readonly authorizedRomanceMilestone?: RomanceMilestone;
 }
 
 export interface WriterSafeState {
@@ -314,6 +320,7 @@ export interface WriterSafeContext {
     readonly characters: readonly WriterSafeCharacter[];
     readonly canonRules: readonly Pick<CanonRule, 'id' | 'text' | 'scope'>[];
     readonly reveals: readonly WriterSafeReveal[];
+    readonly relationshipDefinitions: readonly RelationshipDefinition[];
     readonly relationshipEvents: readonly WriterSafeRelationshipEvent[];
     readonly state: WriterSafeState;
 }

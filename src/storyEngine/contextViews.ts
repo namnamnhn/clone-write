@@ -98,6 +98,22 @@ export const buildWriterSafeContext = (
         reveals: control.reveals
             .filter(reveal => isRevealAllowed(control, reveal.id, chapter))
             .map(reveal => ({ id: reveal.id, text: reveal.writerText })),
+        relationshipDefinitions: control.relationshipDefinitions
+            .filter(definition => definition.participantIds.every(id => allowedCharacterIds.has(id)))
+            .map(definition => ({
+                id: definition.id,
+                participantIds: [...definition.participantIds],
+                categories: [...definition.categories],
+                initialRomanceMilestone: definition.initialRomanceMilestone,
+                dynamicProfile: {
+                    coreDynamicTags: [...definition.dynamicProfile.coreDynamicTags],
+                    dominantConflictSources: [...definition.dynamicProfile.dominantConflictSources],
+                    trustBasis: [...definition.dynamicProfile.trustBasis],
+                    respectBasis: [...definition.dynamicProfile.respectBasis],
+                    prohibitedShortcuts: [...definition.dynamicProfile.prohibitedShortcuts],
+                },
+                progressionPolicy: { ...definition.progressionPolicy },
+            })),
         relationshipEvents: control.relationshipEvents
             .filter(event => isRelationshipEventAllowed(control, event.id, chapter))
             .map(event => ({
@@ -106,6 +122,7 @@ export const buildWriterSafeContext = (
                 eventType: event.eventType,
                 participantIds: event.participantIds,
                 ...(event.writerText === undefined ? {} : { writerText: event.writerText }),
+                ...(event.authorizedRomanceMilestone === undefined ? {} : { authorizedRomanceMilestone: event.authorizedRomanceMilestone }),
             })),
         state: {
             currentChapter: chapter,

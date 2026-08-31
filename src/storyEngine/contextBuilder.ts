@@ -23,6 +23,7 @@ import {
     assertWriterFacingControlSecretSafe,
 } from './secretTextSafety';
 import { buildPlannerPlotGuidance } from './plotContext';
+import { buildPlannerRelationshipContext } from './relationshipContext';
 import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
     LongTermMemory,
@@ -238,7 +239,7 @@ export const buildPlannerContext = (
         lockedRelationshipEventIds: makeGateStatus(control.relationshipEvents.map(event => event.id), id => isRelationshipEventAllowed(control, id, targetChapter)).filter(status => !status.allowed).map(status => status.id),
         allowedRelationshipEvents: control.relationshipEvents
             .filter(event => isRelationshipEventAllowed(control, event.id, targetChapter))
-            .map(event => ({ id: event.id, participantIds: [...event.participantIds] })),
+            .map(event => ({ id: event.id, relationshipId: event.relationshipId, participantIds: [...event.participantIds] })),
         authorOnlySecretReferences: control.authorOnlySecrets.map(secret => ({ id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }) })),
         activeHardConstraints: [
             ...control.canonRules
@@ -247,6 +248,7 @@ export const buildPlannerContext = (
         ],
         narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
         plotGuidance: buildPlannerPlotGuidance(control, state, targetChapter),
+        relationshipContext: buildPlannerRelationshipContext(control, state, targetChapter),
     };
     assertModelBoundaryStringsSecretSafe(control, context, 'plannerContext');
     return context;

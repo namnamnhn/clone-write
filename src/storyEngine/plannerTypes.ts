@@ -8,6 +8,7 @@ import {
 } from './types';
 import type { PlannerPlotGuidance } from './plotContext';
 import type { StrategicActionPlan, WriterStrategicDirective } from './strategicTypes';
+import type { PlannerRelationshipContext, RelationshipActionPlan, WriterRelationshipDirective } from './relationshipTypes';
 
 export const SCENE_PURPOSE_TAGS = [
     'plot', 'character', 'resource', 'clue', 'relationship', 'consequence', 'world',
@@ -133,13 +134,14 @@ export interface PlannerContext {
     readonly lockedStoryEventIds: readonly StoryId[];
     readonly allowedRelationshipEventIds: readonly StoryId[];
     readonly lockedRelationshipEventIds: readonly StoryId[];
-    readonly allowedRelationshipEvents: readonly { readonly id: StoryId; readonly participantIds: readonly StoryId[] }[];
+    readonly allowedRelationshipEvents: readonly { readonly id: StoryId; readonly relationshipId: StoryId; readonly participantIds: readonly StoryId[] }[];
     /** References only; raw secret values are intentionally never copied into model context. */
     readonly authorOnlySecretReferences: readonly { readonly id: StoryId; readonly revealId?: StoryId }[];
     /** Only constraints currently applicable to this chapter; locked gates live in typed status/allow lists. */
     readonly activeHardConstraints: readonly PlannerHardConstraint[];
     readonly narrativeMemory: SelectedNarrativeMemory;
     readonly plotGuidance: PlannerPlotGuidance;
+    readonly relationshipContext: PlannerRelationshipContext;
 }
 
 export interface IntelligentConflictPlan {
@@ -208,6 +210,8 @@ export interface InternalChapterPlan {
     readonly expectedContinuityConsequences: readonly ExpectedContinuityConsequence[];
     /** Legacy runtime plans may omit this field; parsing normalizes omission to an empty list. */
     readonly strategicActions?: readonly StrategicActionPlan[];
+    /** Legacy runtime plans may omit this field; parsing normalizes omission to an empty list. */
+    readonly relationshipActions?: readonly RelationshipActionPlan[];
     readonly endStateIntent: string;
 }
 
@@ -246,6 +250,8 @@ export interface WriterChapterPlan {
     readonly expectedContinuityConsequences: readonly ExpectedContinuityConsequence[];
     /** Safe strategic projection only; internal evidence and opponent epistemics are excluded. */
     readonly strategicDirectives?: readonly WriterStrategicDirective[];
+    /** Exact Writer-safe relationship contract; privileged evidence is excluded. */
+    readonly relationshipDirectives?: readonly WriterRelationshipDirective[];
     readonly endStateIntent: string;
 }
 
