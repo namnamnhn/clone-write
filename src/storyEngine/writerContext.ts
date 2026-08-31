@@ -9,6 +9,7 @@ import {
     WriterChapterPlan,
 } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
+import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 import {
     DEFAULT_WRITER_CONTEXT_SELECTION_POLICY,
     WriterContext,
@@ -233,6 +234,7 @@ export const buildWriterContext = (
     memoryPolicy: NarrativeMemorySelectionPolicy = DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
     suppliedSelectionPolicy: WriterContextSelectionPolicy = DEFAULT_WRITER_CONTEXT_SELECTION_POLICY,
 ): WriterContext => {
+    assertModelBoundaryStringsSecretSafe(control, plan, 'writerChapterPlan');
     if (state.currentChapter > plan.chapterNumber) throw new WriterContextError('state current chapter must not be later than the target chapter');
     const selectionPolicy = normalizeSelectionPolicy(suppliedSelectionPolicy);
     const safe = buildWriterSafeContext(control, state, plan.chapterNumber);
@@ -308,7 +310,7 @@ export const buildWriterContext = (
         resources[characterId] = [...required, ...values.filter(value => !requiredSet.has(value.id)).slice().sort((left, right) => left.id.localeCompare(right.id)).slice(0, selectionPolicy.maxResourcesPerCharacter - required.length)]
             .map(resource => ({ id: resource.id, name: resource.name, ...(resource.quantity === undefined ? {} : { quantity: resource.quantity }), ...(resource.state === undefined ? {} : { state: resource.state }) }));
     });
-    return {
+    const context: WriterContext = {
         kind: 'writer-context', targetChapter: safe.chapter,
         currentArc: { id: safe.arc.id, title: safe.arc.title, ...(safe.arc.writerBrief === undefined ? {} : { writerBrief: safe.arc.writerBrief }) },
         ...(safe.beat === undefined ? {} : { currentBeat: { id: safe.beat.id, order: safe.beat.order, ...(safe.beat.writerBrief === undefined ? {} : { writerBrief: safe.beat.writerBrief }) } }),
@@ -326,4 +328,6 @@ export const buildWriterContext = (
         controlledStoryEvents: chapterPlan.storyEvents.map(entry => ({ id: entry.id, eventType: entry.eventType, ...(entry.text === undefined ? {} : { text: entry.text }) })),
         narrativeMemory: selectNarrativeMemory(memoryInput, plan.chapterNumber, memoryPolicy),
     };
+    assertModelBoundaryStringsSecretSafe(control, context, 'writerContext');
+    return context;
 };

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-    applyStoryStateDelta, buildPlannerPlotGuidance, buildValidatorPlotView, createInitialStoryState,
-    getAuthorSecretStatus, getDuePayoffs, getForeshadowCues, getForeshadowReinforcementAge,
+    applyStoryStateDelta, buildPlannerContext, buildPlannerPlotGuidance, buildValidatorPlotView, buildWriterContext, buildWriterSafeContext, createInitialStoryState,
+    generateWriterDraft, getAuthorSecretStatus, getDuePayoffs, getForeshadowCues, getForeshadowReinforcementAge,
     getForeshadowThreadStatus, getOpenForeshadowThreads, getOverduePayoffs, getPayoffStatus,
     getPayoffUrgency, getRevealOccurrence, hasRevealOccurred, parseStoryState, parseStoryStateDelta, PlotGuidanceCapacityError,
-    StoryState, StoryStateDelta, StoryStateDeltaV2, StoryStateTransitionError, type FullStoryControl,
+    StoryState, StoryStateDelta, StoryStateDeltaV2, StoryStateTransitionError, validateFullStoryControl, type FullStoryControl, type WriterChapterPlan,
 } from '../src/storyEngine';
 
 const control: FullStoryControl = {
@@ -14,7 +14,7 @@ const control: FullStoryControl = {
     characterOrder: ['a'], arcs: [{ id: 'arc', title: 'Arc', startChapter: 1, endChapter: 700 }], beats: [],
     reveals: [{ id: 'r', writerText: 'LOCKED_REVEAL_WRITER_TEXT', authorNotes: 'private reveal note' }],
     relationshipEvents: [], storyEvents: [],
-    gates: { characters: [{ id: 'a-gate', characterId: 'a', allowedFromChapter: 1 }], pov: [], reveals: [{ id: 'r-gate', revealId: 'r', allowedFromChapter: 561 }], relationships: [], events: [] },
+    gates: { characters: [{ id: 'a-gate', characterId: 'a', allowedFromChapter: 1 }], pov: [{ id: 'a-pov', characterId: 'a', allowedFromChapter: 1 }], reveals: [{ id: 'r-gate', revealId: 'r', allowedFromChapter: 561 }], relationships: [], events: [] },
     forbiddenEvents: [], forbiddenRelationshipEvents: [], forbiddenReveals: [{ id: 'r-hard-lock', revealId: 'r', forbiddenThroughChapter: 560 }],
     authorOnlySecrets: [
         { id: 's', value: 'RAW_AUTHOR_SECRET_ABC', revealId: 'r', notes: 'private secret note' },
@@ -41,8 +41,56 @@ const advance = (target: number, start: StoryState = createInitialStoryState(), 
     return state;
 };
 const state560 = advance(560);
+const writerPlan = (revealText = 'LOCKED_REVEAL_WRITER_TEXT'): WriterChapterPlan => ({
+    kind: 'writer-chapter-plan', chapterNumber: 561, arc: { id: 'arc', title: 'Arc' }, primaryGoal: 'Advance safely.',
+    povCharacterId: 'a', participantIds: ['a'], scenes: [{ id: 'scene', order: 1, goal: 'Advance.', location: 'Road', povCharacterId: 'a', participantIds: ['a'], conflictOrObstacle: 'Delay.', uncertainty: 'Timing.', expectedConsequence: 'Progress.', purposeTags: ['plot'], conflictImportance: 'minor' }],
+    canonConstraints: [], reveals: [{ id: 'r', text: revealText }], relationshipEvents: [], storyEvents: [], cluesPlantedIds: [], cluesPaidOffIds: [],
+    expectedResourceDeltas: [], expectedRelationshipDeltas: [], expectedContinuityConsequences: [], endStateIntent: 'Stop after progress.',
+});
 
 describe('Story Engine V4 canonical plot control', () => {
+    it('blocks exact and embedded raw secrets in writer-facing control text at validation and runtime boundaries', async () => {
+        const unsafe = (writerText: string): FullStoryControl => ({ ...control, reveals: [{ ...control.reveals[0], writerText }] });
+        ['RAW_AUTHOR_SECRET_ABC', 'Public phrasing: RAW_AUTHOR_SECRET_ABC'].forEach((writerText) => {
+            const fabricated = unsafe(writerText);
+            const issues = validateFullStoryControl(fabricated);
+            expect(issues).toContainEqual(expect.objectContaining({ path: 'reveals.0.writerText' }));
+            expect(JSON.stringify(issues)).not.toContain('RAW_AUTHOR_SECRET_ABC');
+            for (const projection of [
+                () => buildPlannerContext(fabricated, state560, 561),
+                () => buildPlannerPlotGuidance(fabricated, state560, 561),
+                () => buildWriterSafeContext(fabricated, state560, 561),
+            ]) {
+                try { projection(); throw new Error('expected secret boundary rejection'); } catch (error) { expect((error as Error).message).not.toContain('RAW_AUTHOR_SECRET_ABC'); }
+            }
+        });
+        expect(validateFullStoryControl(control).filter(issue => issue.path.includes('writerText'))).toEqual([]);
+        expect(JSON.stringify(buildPlannerContext(control, state560, 560))).not.toContain('RAW_AUTHOR_SECRET_ABC');
+        expect(JSON.stringify(buildPlannerContext(control, state560, 561))).not.toContain('RAW_AUTHOR_SECRET_ABC');
+        expect(JSON.stringify(buildWriterContext(control, state560, writerPlan()))).not.toContain('RAW_AUTHOR_SECRET_ABC');
+        expect(() => buildWriterContext(control, state560, writerPlan('Public phrasing: RAW_AUTHOR_SECRET_ABC'))).toThrowError(expect.objectContaining({ name: 'WriterFacingSecretBoundaryError' }));
+        let writerRequest = '';
+        await generateWriterDraft({ control, state: state560, plan: writerPlan(), model: { async write(request) { writerRequest = JSON.stringify(request); return { kind: 'writer-chapter-draft', chapterNumber: 561, prose: 'Safe prose.' }; } } });
+        expect(writerRequest).not.toContain('RAW_AUTHOR_SECRET_ABC');
+    });
+
+    it('applies the same direct-secret guard to other writer-facing control fields', () => {
+        const marker = 'Public phrasing: RAW_AUTHOR_SECRET_ABC';
+        const variants: readonly [FullStoryControl, string][] = [
+            [{ ...control, arcs: [{ ...control.arcs[0], writerBrief: marker }] }, 'arcs.0.writerBrief'],
+            [{ ...control, beats: [{ id: 'beat', arcId: 'arc', order: 1, startChapter: 1, endChapter: 700, writerBrief: marker }] }, 'beats.0.writerBrief'],
+            [{ ...control, canonRules: [{ id: 'rule', text: marker, availableFromChapter: 1, scope: 'canon' }] }, 'canonRules.0.text'],
+            [{ ...control, characters: { a: { ...control.characters.a, writerProfile: { role: marker } } } }, 'characters.0.writerProfile.role'],
+            [{ ...control, relationshipEvents: [{ id: 'rel-event', relationshipId: 'rel', eventType: 'meeting', participantIds: ['a', 'a'], writerText: marker }], gates: { ...control.gates, relationships: [{ id: 'rel-gate', eventId: 'rel-event', allowedFromChapter: 1 }] } }, 'relationshipEvents.0.writerText'],
+            [{ ...control, storyEvents: [{ id: 'story-event', eventType: 'event', writerText: marker }], gates: { ...control.gates, events: [{ id: 'event-gate', eventId: 'story-event', allowedFromChapter: 1 }] } }, 'storyEvents.0.writerText'],
+        ];
+        variants.forEach(([variant, path]) => {
+            const issues = validateFullStoryControl(variant);
+            expect(issues).toContainEqual(expect.objectContaining({ path }));
+            expect(JSON.stringify(issues)).not.toContain('RAW_AUTHOR_SECRET_ABC');
+        });
+    });
+
     it('normalizes explicit Delta V1 compatibility and strictly parses V2', () => {
         expect(parseStoryStateDelta(v1(1, 0))).toMatchObject({ schemaVersion: 2, revealChanges: [], foreshadowChanges: [], payoffChanges: [] });
         expect(parseStoryStateDelta(v2(1, 0))).toMatchObject({ schemaVersion: 2 });
@@ -161,6 +209,38 @@ describe('Story Engine V4 canonical plot control', () => {
         const revealed = applyStoryStateDelta(control, state560, v2(561, 560, { revealChanges: [{ operation: 'record', occurrence: { id: 'occ', revealId: 'r', chapterNumber: 561, provenance: provenance(561) } }] }));
         const malformed = { ...revealed, ledgers: { ...revealed.ledgers, revealOccurrences: [{ ...revealed.ledgers.revealOccurrences[0], chapterNumber: 562 }] } };
         expect(() => parseStoryState(malformed, control)).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
+    });
+
+    it('rejects impossible persisted foreshadow/payoff history and accepts legal link chronology', () => {
+        const base = advance(25);
+        const parsePlot = (values: Partial<StoryState['ledgers']>) => parseStoryState({ ...base, ledgers: { ...base.ledgers, ...values } }, control);
+        const thread = (id: string, openedChapter: number, linkedPayoffId?: string) => ({ id, writerLabel: `Thread ${id}`, openedChapter, ...(linkedPayoffId ? { linkedPayoffId } : {}), provenance: provenance(openedChapter) });
+        const cue = (id: string, threadId: string, chapterNumber: number) => ({ id, threadId, chapterNumber, cueType: 'seed' as const, writerText: `Seed ${id}`, provenance: provenance(chapterNumber) });
+        const payoff = (id: string, openedChapter: number, linkedForeshadowThreadId?: string, requiresForeshadowSeed?: true) => ({ id, writerLabel: `Payoff ${id}`, openedChapter, ...(linkedForeshadowThreadId ? { linkedForeshadowThreadId } : {}), ...(requiresForeshadowSeed ? { requiresForeshadowSeed } : {}), provenance: provenance(openedChapter) });
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], foreshadowCues: [cue('s1', 'f', 10), cue('s2', 'f', 11)] })).toThrowError(expect.objectContaining({ code: 'CONFLICTING_OPERATION' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], foreshadowLifecycle: [{ id: 'f-paid', threadId: 'f', chapterNumber: 20, status: 'paid', provenance: provenance(20) }] })).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], foreshadowCues: [cue('late-seed', 'f', 21)], foreshadowLifecycle: [{ id: 'f-paid', threadId: 'f', chapterNumber: 20, status: 'paid', provenance: provenance(20) }] })).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], payoffObligations: [payoff('p', 10, 'f', true)], payoffLifecycle: [{ id: 'p-paid', payoffId: 'p', chapterNumber: 20, status: 'paid', provenance: provenance(20) }] })).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], foreshadowCues: [cue('late-seed', 'f', 21)], payoffObligations: [payoff('p', 10, 'f', true)], payoffLifecycle: [{ id: 'p-paid', payoffId: 'p', chapterNumber: 20, status: 'paid', provenance: provenance(20) }] })).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10, 'p')], payoffObligations: [payoff('p', 20)] })).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 20)], payoffObligations: [payoff('p', 10, 'f')] })).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10, 'p'), thread('other', 10)], payoffObligations: [payoff('p', 10, 'other')] })).toThrowError(expect.objectContaining({ code: 'REFERENTIAL_INTEGRITY_FAILURE' }));
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10, 'p')], payoffObligations: [payoff('p', 10, 'f')] })).not.toThrow();
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], payoffObligations: [payoff('p', 20, 'f')] })).not.toThrow();
+        expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], foreshadowCues: [cue('seed', 'f', 10)], payoffObligations: [payoff('p', 10, 'f', true)], payoffLifecycle: [{ id: 'p-paid', payoffId: 'p', chapterNumber: 20, status: 'paid', provenance: provenance(20) }] })).not.toThrow();
+    });
+
+    it('rejects state-independent plot conflicts during V2 parsing', () => {
+        const reveal = (id: string) => ({ operation: 'record' as const, occurrence: { id, revealId: 'r', chapterNumber: 1, provenance: provenance(1) } });
+        const closeThread = (id: string) => ({ operation: 'pay' as const, lifecycle: { id, threadId: 'f', chapterNumber: 1, status: 'paid' as const, provenance: provenance(1) } });
+        const closePayoff = (id: string) => ({ operation: 'resolve' as const, lifecycle: { id, payoffId: 'p', chapterNumber: 1, status: 'paid' as const, provenance: provenance(1) } });
+        const seed = (id: string) => ({ operation: 'add-cue' as const, cue: { id, threadId: 'f', chapterNumber: 1, cueType: 'seed' as const, writerText: `Seed ${id}`, provenance: provenance(1) } });
+        [
+            v2(1, 0, { revealChanges: [reveal('r1'), reveal('r2')] }),
+            v2(1, 0, { foreshadowChanges: [closeThread('f1'), closeThread('f2')] }),
+            v2(1, 0, { payoffChanges: [closePayoff('p1'), closePayoff('p2')] }),
+            v2(1, 0, { foreshadowChanges: [seed('s1'), seed('s2')] }),
+        ].forEach(value => expect(() => parseStoryStateDelta(value)).toThrowError(expect.objectContaining({ code: 'CONFLICTING_OPERATION' })));
     });
 
     it('remains deterministic and bounded across 300 chapters with many plot records', () => {

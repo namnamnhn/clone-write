@@ -18,6 +18,7 @@ import {
     isStoryEventAllowed,
 } from './gates';
 import { isValidChapter } from './storyControl';
+import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
 import { buildPlannerPlotGuidance } from './plotContext';
 import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
@@ -164,6 +165,7 @@ export const buildPlannerContext = (
     memoryInput?: NarrativeMemoryInput,
     memoryPolicy: NarrativeMemorySelectionPolicy = DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
 ): PlannerContext => {
+    assertWriterFacingControlSecretSafe(control);
     if (!isValidChapter(targetChapter) || targetChapter > control.engine.plannedChapterCount) {
         throw new Error('target chapter must be within the planned story range');
     }

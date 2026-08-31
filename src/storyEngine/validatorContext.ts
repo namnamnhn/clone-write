@@ -3,7 +3,7 @@ import { WriterChapterPlan } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { buildWriterContext } from './writerContext';
 import { WriterContext } from './writerTypes';
-import { buildValidatorPlotView, ValidatorPlotView } from './plotContext';
+import { buildValidatorPlotView, PlotGuidanceCapacityError, ValidatorPlotView } from './plotContext';
 
 export interface ValidatorContextSelectionPolicy {
     readonly maxLockedCharacters: number;
@@ -131,6 +131,13 @@ export const buildValidatorContext = (
     requireCapacity('locked relationship events', lockedRelationshipEvents.length, policy.maxLockedRelationshipEvents);
     requireCapacity('locked story events', lockedStoryEvents.length, policy.maxLockedStoryEvents);
     requireCapacity('secret validation', secretValidation.length, policy.maxSecretValidationItems);
+    let plotView: ValidatorPlotView;
+    try {
+        plotView = buildValidatorPlotView(control, state, chapter, policy.maxPlotItems ?? 256);
+    } catch (error) {
+        if (error instanceof PlotGuidanceCapacityError) throw new ValidatorContextCapacityError(error.message);
+        throw error;
+    }
     return {
         kind: 'validator-context', targetChapter: chapter, currentArc: { id: arc.id, title: arc.title },
         ...(beat === undefined ? {} : { currentBeat: { id: beat.id, order: beat.order } }),
@@ -140,6 +147,6 @@ export const buildValidatorContext = (
             lockedReveals, lockedRelationshipEvents, lockedStoryEvents,
         },
         secretValidation,
-        plotView: buildValidatorPlotView(control, state, chapter, policy.maxPlotItems ?? 256),
+        plotView,
     };
 };

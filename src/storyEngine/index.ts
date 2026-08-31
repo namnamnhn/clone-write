@@ -7,6 +7,7 @@ export * from './storyStateRuntime';
 export * from './plotTypes';
 export * from './plotQueries';
 export * from './plotContext';
+export * from './secretTextSafety';
 export * from './gates';
 export * from './contextViews';
 export * from './plannerTypes';

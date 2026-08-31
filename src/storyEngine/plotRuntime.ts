@@ -137,20 +137,70 @@ export const parsePlotDelta = (source: UnknownRecord, deltaChapter: number): Pic
         const lifecycle = parsePayoffLifecycle(base.lifecycle, `${path}.lifecycle`, true); if (lifecycle.chapterNumber !== deltaChapter || lifecycle.status !== (operation === 'resolve' ? 'paid' : 'superseded')) fail('TEMPORAL_VIOLATION', 'payoff lifecycle must match delta operation and chapter', path);
         return { operation, lifecycle };
     });
+    const uniqueOperationTargets = (targets: readonly string[], path: string, message: string): void => {
+        const seen = new Set<string>();
+        targets.forEach((target) => { if (seen.has(target)) fail('CONFLICTING_OPERATION', message, path); seen.add(target); });
+    };
+    uniqueOperationTargets(revealChanges.map(value => value.occurrence.revealId), 'delta.revealChanges', 'duplicate reveal operation');
+    uniqueOperationTargets(foreshadowChanges.flatMap(value => value.operation === 'pay' || value.operation === 'supersede' ? [value.lifecycle.threadId] : []), 'delta.foreshadowChanges', 'duplicate foreshadow lifecycle close');
+    uniqueOperationTargets(payoffChanges.flatMap(value => value.operation === 'resolve' || value.operation === 'supersede' ? [value.lifecycle.payoffId] : []), 'delta.payoffChanges', 'duplicate payoff lifecycle close');
+    uniqueOperationTargets(foreshadowChanges.flatMap(value => value.operation === 'add-cue' && value.cue.cueType === 'seed' ? [value.cue.threadId] : []), 'delta.foreshadowChanges', 'duplicate foreshadow seed');
     return { revealChanges, foreshadowChanges, payoffChanges };
 };
 
 export const validatePlotReferences = (plot: PlotLedgers, currentChapter: number, control?: FullStoryControl): void => {
-    const threads = new Map(plot.foreshadowThreads.map(value => [value.id, value])); const payoffs = new Map(plot.payoffObligations.map(value => [value.id, value]));
+    const threads = new Map(plot.foreshadowThreads.map(value => [value.id, value]));
+    const payoffs = new Map(plot.payoffObligations.map(value => [value.id, value]));
     const all = [...plot.revealOccurrences, ...plot.foreshadowThreads, ...plot.foreshadowCues, ...plot.foreshadowLifecycle, ...plot.payoffObligations, ...plot.payoffLifecycle];
     const ids = new Set<string>(); all.forEach((value) => { if (ids.has(value.id)) fail('DUPLICATE_ID', 'plot ledger IDs must be globally unique', 'state.ledgers'); ids.add(value.id); });
     plot.revealOccurrences.forEach((value, index) => { if (value.chapterNumber > currentChapter) fail('TEMPORAL_VIOLATION', 'future reveal occurrence', `state.ledgers.revealOccurrences[${index}]`); if (control && !control.reveals.some(reveal => reveal.id === value.revealId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown reveal', `state.ledgers.revealOccurrences[${index}].revealId`); if (control && !isRevealAllowed(control, value.revealId, value.chapterNumber)) fail('TEMPORAL_VIOLATION', 'canonical reveal predates its gate', `state.ledgers.revealOccurrences[${index}]`); });
     const revealIds = plot.revealOccurrences.map(value => value.revealId); if (new Set(revealIds).size !== revealIds.length) fail('CONFLICTING_OPERATION', 'duplicate canonical first reveal', 'state.ledgers.revealOccurrences');
-    plot.foreshadowThreads.forEach((value, index) => { if (value.openedChapter > currentChapter) fail('TEMPORAL_VIOLATION', 'future foreshadow thread', `state.ledgers.foreshadowThreads[${index}]`); if (control && value.linkedRevealId && !control.reveals.some(reveal => reveal.id === value.linkedRevealId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked reveal', `state.ledgers.foreshadowThreads[${index}].linkedRevealId`); if (value.linkedPayoffId && !payoffs.has(value.linkedPayoffId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked payoff', `state.ledgers.foreshadowThreads[${index}].linkedPayoffId`); });
+    plot.foreshadowThreads.forEach((value, index) => {
+        const path = `state.ledgers.foreshadowThreads[${index}]`;
+        if (value.openedChapter > currentChapter) fail('TEMPORAL_VIOLATION', 'future foreshadow thread', path);
+        if (control && value.linkedRevealId && !control.reveals.some(reveal => reveal.id === value.linkedRevealId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked reveal', `${path}.linkedRevealId`);
+        if (value.linkedPayoffId) {
+            const payoff = payoffs.get(value.linkedPayoffId);
+            if (!payoff) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked payoff', `${path}.linkedPayoffId`);
+            if (payoff.openedChapter > value.openedChapter) fail('TEMPORAL_VIOLATION', 'foreshadow thread links to a future payoff', `${path}.linkedPayoffId`);
+            if (payoff.linkedForeshadowThreadId !== undefined && payoff.linkedForeshadowThreadId !== value.id) fail('REFERENTIAL_INTEGRITY_FAILURE', 'inconsistent reciprocal payoff link', `${path}.linkedPayoffId`);
+        }
+    });
     plot.foreshadowCues.forEach((value, index) => { const thread = threads.get(value.threadId); if (!thread) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown foreshadow thread', `state.ledgers.foreshadowCues[${index}].threadId`); if (value.chapterNumber > currentChapter || value.chapterNumber < thread.openedChapter) fail('TEMPORAL_VIOLATION', 'invalid cue chapter', `state.ledgers.foreshadowCues[${index}]`); });
-    plot.foreshadowLifecycle.forEach((value, index) => { const thread = threads.get(value.threadId); if (!thread) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown foreshadow thread', `state.ledgers.foreshadowLifecycle[${index}].threadId`); if (value.chapterNumber > currentChapter || value.chapterNumber < thread.openedChapter) fail('TEMPORAL_VIOLATION', 'invalid foreshadow lifecycle chapter', `state.ledgers.foreshadowLifecycle[${index}]`); });
+    const seedCuesByThread = new Map<string, ForeshadowCueRecord[]>();
+    plot.foreshadowCues.filter(value => value.cueType === 'seed').forEach((value) => {
+        const seeds = seedCuesByThread.get(value.threadId) ?? [];
+        seeds.push(value); seedCuesByThread.set(value.threadId, seeds);
+    });
+    seedCuesByThread.forEach((seeds) => { if (seeds.length > 1) fail('CONFLICTING_OPERATION', 'foreshadow thread has multiple seeds', 'state.ledgers.foreshadowCues'); });
+    plot.foreshadowLifecycle.forEach((value, index) => {
+        const path = `state.ledgers.foreshadowLifecycle[${index}]`;
+        const thread = threads.get(value.threadId);
+        if (!thread) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown foreshadow thread', `${path}.threadId`);
+        if (value.chapterNumber > currentChapter || value.chapterNumber < thread.openedChapter) fail('TEMPORAL_VIOLATION', 'invalid foreshadow lifecycle chapter', path);
+        if (value.status === 'paid' && !(seedCuesByThread.get(value.threadId) ?? []).some(seed => seed.chapterNumber <= value.chapterNumber)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'paid foreshadow thread lacks a prior seed', path);
+    });
     const lifecycleThreadIds = plot.foreshadowLifecycle.map(value => value.threadId); if (new Set(lifecycleThreadIds).size !== lifecycleThreadIds.length) fail('CONFLICTING_OPERATION', 'foreshadow thread already closed', 'state.ledgers.foreshadowLifecycle');
-    plot.payoffObligations.forEach((value, index) => { if (value.openedChapter > currentChapter) fail('TEMPORAL_VIOLATION', 'future payoff opening', `state.ledgers.payoffObligations[${index}]`); if (value.linkedForeshadowThreadId && !threads.has(value.linkedForeshadowThreadId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked foreshadow thread', `state.ledgers.payoffObligations[${index}].linkedForeshadowThreadId`); if (control && value.linkedRevealId && !control.reveals.some(reveal => reveal.id === value.linkedRevealId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked reveal', `state.ledgers.payoffObligations[${index}].linkedRevealId`); });
-    plot.payoffLifecycle.forEach((value, index) => { const payoff = payoffs.get(value.payoffId); if (!payoff) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown payoff', `state.ledgers.payoffLifecycle[${index}].payoffId`); if (value.chapterNumber > currentChapter || value.chapterNumber < payoff.openedChapter) fail('TEMPORAL_VIOLATION', 'invalid payoff lifecycle chapter', `state.ledgers.payoffLifecycle[${index}]`); if (value.status === 'paid' && payoff.earliestPayoffChapter !== undefined && value.chapterNumber < payoff.earliestPayoffChapter) fail('TEMPORAL_VIOLATION', 'payoff resolved before earliest chapter', `state.ledgers.payoffLifecycle[${index}]`); if (control && value.status === 'paid' && payoff.linkedRevealId && !isRevealAllowed(control, payoff.linkedRevealId, value.chapterNumber)) fail('TEMPORAL_VIOLATION', 'payoff predates linked reveal gate', `state.ledgers.payoffLifecycle[${index}]`); if (value.status === 'paid' && payoff.revealIsPayoff && !plot.revealOccurrences.some(reveal => reveal.revealId === payoff.linkedRevealId && reveal.chapterNumber === value.chapterNumber)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'reveal payoff lacks same-chapter reveal occurrence', `state.ledgers.payoffLifecycle[${index}]`); });
+    plot.payoffObligations.forEach((value, index) => {
+        const path = `state.ledgers.payoffObligations[${index}]`;
+        if (value.openedChapter > currentChapter) fail('TEMPORAL_VIOLATION', 'future payoff opening', path);
+        if (value.linkedForeshadowThreadId) {
+            const thread = threads.get(value.linkedForeshadowThreadId);
+            if (!thread) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked foreshadow thread', `${path}.linkedForeshadowThreadId`);
+            if (thread.openedChapter > value.openedChapter) fail('TEMPORAL_VIOLATION', 'payoff links to a future foreshadow thread', `${path}.linkedForeshadowThreadId`);
+            if (thread.linkedPayoffId !== undefined && thread.linkedPayoffId !== value.id) fail('REFERENTIAL_INTEGRITY_FAILURE', 'inconsistent reciprocal foreshadow link', `${path}.linkedForeshadowThreadId`);
+        }
+        if (control && value.linkedRevealId && !control.reveals.some(reveal => reveal.id === value.linkedRevealId)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown linked reveal', `${path}.linkedRevealId`);
+    });
+    plot.payoffLifecycle.forEach((value, index) => {
+        const path = `state.ledgers.payoffLifecycle[${index}]`;
+        const payoff = payoffs.get(value.payoffId);
+        if (!payoff) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown payoff', `${path}.payoffId`);
+        if (value.chapterNumber > currentChapter || value.chapterNumber < payoff.openedChapter) fail('TEMPORAL_VIOLATION', 'invalid payoff lifecycle chapter', path);
+        if (value.status === 'paid' && payoff.earliestPayoffChapter !== undefined && value.chapterNumber < payoff.earliestPayoffChapter) fail('TEMPORAL_VIOLATION', 'payoff resolved before earliest chapter', path);
+        if (control && value.status === 'paid' && payoff.linkedRevealId && !isRevealAllowed(control, payoff.linkedRevealId, value.chapterNumber)) fail('TEMPORAL_VIOLATION', 'payoff predates linked reveal gate', path);
+        if (value.status === 'paid' && payoff.revealIsPayoff && !plot.revealOccurrences.some(reveal => reveal.revealId === payoff.linkedRevealId && reveal.chapterNumber === value.chapterNumber)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'reveal payoff lacks same-chapter reveal occurrence', path);
+        if (value.status === 'paid' && payoff.requiresForeshadowSeed && !(seedCuesByThread.get(payoff.linkedForeshadowThreadId!) ?? []).some(seed => seed.chapterNumber <= value.chapterNumber)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'paid payoff lacks its required prior seed', path);
+    });
     const lifecyclePayoffIds = plot.payoffLifecycle.map(value => value.payoffId); if (new Set(lifecyclePayoffIds).size !== lifecyclePayoffIds.length) fail('CONFLICTING_OPERATION', 'payoff already closed', 'state.ledgers.payoffLifecycle');
 };

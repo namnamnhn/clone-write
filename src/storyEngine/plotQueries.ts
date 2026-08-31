@@ -4,6 +4,7 @@ import type {
     PayoffObligationRecord, PayoffStatus, RevealOccurrenceRecord,
 } from './plotTypes';
 import type { FullStoryControl, StoryState } from './types';
+import { assertWriterFacingTextSecretSafe } from './secretTextSafety';
 
 const copy = <T>(value: T): T => structuredClone(value);
 const byChapterId = <T extends { readonly id: string }>(chapter: (value: T) => number) =>
@@ -35,7 +36,10 @@ export const getEligibleUnrevealedReveals = (control: FullStoryControl, state: S
     if (!Number.isSafeInteger(targetChapter) || targetChapter < 1) throw new Error('invalid target chapter');
     return control.reveals.filter(value => isRevealAllowed(control, value.id, targetChapter)
         && !state.ledgers.revealOccurrences.some(entry => entry.revealId === value.id && entry.chapterNumber <= targetChapter))
-        .slice().sort((a, b) => a.id.localeCompare(b.id)).map(value => ({ id: value.id, text: value.writerText }));
+        .slice().sort((a, b) => a.id.localeCompare(b.id)).map((value) => {
+            assertWriterFacingTextSecretSafe(control, value.writerText, 'reveals.writerText');
+            return { id: value.id, text: value.writerText };
+        });
 };
 
 export const getAuthorSecretStatus = (

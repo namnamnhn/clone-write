@@ -15,6 +15,7 @@ import {
     isRevealAllowed,
 } from './gates';
 import { isValidChapter } from './storyControl';
+import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
 
 const pickRecord = <T>(source: Readonly<Record<string, T>>, allowedIds: ReadonlySet<string>): Record<string, T> => {
     const output: Record<string, T> = {};
@@ -55,6 +56,7 @@ export const buildWriterSafeContext = (
     state: StoryState,
     chapter: number = state.currentChapter,
 ): WriterSafeContext => {
+    assertWriterFacingControlSecretSafe(control);
     if (!isValidChapter(chapter) || chapter > control.engine.plannedChapterCount) {
         throw new Error('chapter must be within the planned story range');
     }

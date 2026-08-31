@@ -4,6 +4,7 @@ import {
     StoryArc,
     StoryBeat,
 } from './types';
+import { getWriterFacingControlSecretSafetyIssues } from './secretTextSafety';
 
 export interface StoryControlValidationIssue {
     readonly path: string;
@@ -166,6 +167,7 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         secretIds.add(secret.id);
         if (secret.revealId && !revealIds.has(secret.revealId)) issue(`authorOnlySecrets.${index}.revealId`, `references unknown reveal ${secret.revealId}`);
     });
+    getWriterFacingControlSecretSafetyIssues(control).forEach(({ path }) => issue(path, 'writer-facing text contains protected author material'));
     control.relationshipEvents.forEach((event, index) => {
         if (event.participantIds.length < 2) issue(`relationshipEvents.${index}.participantIds`, 'must contain at least two characters');
         event.participantIds.forEach(id => {

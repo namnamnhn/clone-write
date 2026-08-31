@@ -1,6 +1,7 @@
 import { FullStoryControl, StoryState } from './types';
 import { getArcForChapter, getBeatForChapter, isRevealAllowed } from './gates';
 import { parsePlotDelta, parsePlotLedgers, validatePlotReferences } from './plotRuntime';
+import { containsProtectedAuthorSecret } from './secretTextSafety';
 import {
     CANONICAL_EVENT_TYPES,
     CanonicalContinuityEntry,
@@ -526,13 +527,8 @@ export const parseStoryStateDelta = (value: unknown): NormalizedStoryStateDelta 
 const compareChapterId = <T extends { readonly id: string }>(chapter: (entry: T) => number) => (left: T, right: T): number => chapter(left) - chapter(right) || left.id.localeCompare(right.id);
 const eventFor = (chapter: number, type: CanonicalStateEvent['type'], id: string, provenanceValue: FactProvenance, affectedIds: readonly string[]): CanonicalStateEvent => ({ id: `event:${chapter}:${type}:${id}`, chapterNumber: chapter, type, affectedIds: [...affectedIds].sort(), provenance: { ...provenanceValue } });
 const ensureChapterProvenance = (value: FactProvenance, chapter: number, path: string): void => { if (value.sourceChapter > chapter) fail('TEMPORAL_VIOLATION', 'provenance source is in the future', path); };
-const normalizeSecretText = (value: string): string => value.normalize('NFKC').toLocaleLowerCase('en-US').replace(/\s+/gu, ' ').trim();
 const rejectRawSecretText = (control: FullStoryControl, value: string, path: string): void => {
-    const normalized = normalizeSecretText(value);
-    if (control.authorOnlySecrets.some(secret => {
-        const marker = normalizeSecretText(secret.value);
-        return marker.length > 0 && normalized.includes(marker);
-    })) fail('CONFLICTING_OPERATION', 'canonical text contains protected author material', path);
+    if (containsProtectedAuthorSecret(control, value)) fail('CONFLICTING_OPERATION', 'canonical text contains protected author material', path);
 };
 function validateCanonicalSecretIsolation(control: FullStoryControl, state: StoryState): void {
     const values: [string, string][] = [
