@@ -20,6 +20,7 @@ import {
     StrategicEvidenceRef,
     StrategicRelationshipEffect,
     StrategicResourceEffect,
+    WriterVisibleCounterplay,
 } from './strategicTypes';
 import { evidenceIdentity } from './strategicEvidence';
 
@@ -140,6 +141,22 @@ const parseCountermove = (value: unknown, path: string, issues: PlanValidationIs
         : undefined;
 };
 
+const parseWriterVisibleCounterplay = (
+    value: unknown,
+    path: string,
+    issues: PlanValidationIssue[],
+): WriterVisibleCounterplay | undefined => {
+    if (value === undefined) return undefined;
+    if (!isRecord(value)) { invalid(issues, path, 'must be a writer-visible counterplay contract'); return undefined; }
+    strictKeys(value, ['opponentCharacterId', 'action', 'uncertainty', 'costOrTradeoff'], path, issues);
+    const opponentCharacterId = text(value.opponentCharacterId, `${path}.opponentCharacterId`, issues);
+    const action = text(value.action, `${path}.action`, issues);
+    const uncertainty = text(value.uncertainty, `${path}.uncertainty`, issues);
+    const costOrTradeoff = text(value.costOrTradeoff, `${path}.costOrTradeoff`, issues);
+    return opponentCharacterId && action && uncertainty && costOrTradeoff
+        ? { opponentCharacterId, action, uncertainty, costOrTradeoff } : undefined;
+};
+
 interface ParsedCommon extends Omit<StrategicActionBase, 'domain'> {
     readonly domain: StrategicActionPlan['domain'];
 }
@@ -147,7 +164,7 @@ interface ParsedCommon extends Omit<StrategicActionBase, 'domain'> {
 const commonKeys = [
     'id', 'domain', 'sceneIds', 'importance', 'actorCharacterId', 'objective', 'uncertainty',
     'expectedCostOrTradeoff', 'writerVisibleConstraints', 'actorKnowledgeFactIds', 'relationshipEffects',
-    'countermove', 'noCountermoveReason',
+    'countermove', 'writerVisibleCounterplay', 'noCountermoveReason',
 ] as const;
 
 const parseCommon = (value: Record<string, unknown>, path: string, issues: PlanValidationIssue[]): ParsedCommon | undefined => {
@@ -161,6 +178,9 @@ const parseCommon = (value: Record<string, unknown>, path: string, issues: PlanV
     const actorKnowledgeFactIds = textArray(value.actorKnowledgeFactIds, `${path}.actorKnowledgeFactIds`, issues);
     const relationshipEffects = parseRelationshipEffects(value.relationshipEffects, `${path}.relationshipEffects`, issues);
     const countermove = parseCountermove(value.countermove, `${path}.countermove`, issues);
+    const writerVisibleCounterplay = parseWriterVisibleCounterplay(
+        value.writerVisibleCounterplay, `${path}.writerVisibleCounterplay`, issues,
+    );
     const noCountermoveReason = value.noCountermoveReason === undefined ? undefined
         : text(value.noCountermoveReason, `${path}.noCountermoveReason`, issues);
     const domain = value.domain;
@@ -172,11 +192,13 @@ const parseCommon = (value: Record<string, unknown>, path: string, issues: PlanV
         || (domain !== 'politics' && domain !== 'military' && domain !== 'commerce')
         || (importance !== 'minor' && importance !== 'major')
         || (value.countermove !== undefined && countermove === undefined)
+        || (value.writerVisibleCounterplay !== undefined && writerVisibleCounterplay === undefined)
         || (value.noCountermoveReason !== undefined && noCountermoveReason === undefined)) return undefined;
     return {
         id, domain, sceneIds, importance, actorCharacterId, objective, uncertainty,
         expectedCostOrTradeoff, writerVisibleConstraints, actorKnowledgeFactIds, relationshipEffects,
         ...(countermove === undefined ? {} : { countermove }),
+        ...(writerVisibleCounterplay === undefined ? {} : { writerVisibleCounterplay }),
         ...(noCountermoveReason === undefined ? {} : { noCountermoveReason }),
     };
 };

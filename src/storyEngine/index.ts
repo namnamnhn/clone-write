@@ -19,6 +19,7 @@ export * from './militaryEngine';
 export * from './commerceEngine';
 export * from './strategicValidator';
 export * from './strategicContext';
+export * from './writerStrategicValidator';
 export * from './contextBuilder';
 export * from './planValidator';
 export * from './planSanitizer';

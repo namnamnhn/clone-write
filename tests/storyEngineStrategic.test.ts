@@ -19,6 +19,9 @@ import {
     validateWriterChapter,
     validateInternalChapterPlan,
     validateStrategicActions,
+    WriterChapterPlan,
+    WriterStrategicDirective,
+    isMeaningfulText,
 } from '../src/storyEngine';
 
 const RAW_SECRET = 'RAW_AUTHOR_SECRET_ABC';
@@ -86,8 +89,13 @@ const stateFor = (chapter = 100) => ({
 
 const counter = {
     opponentCharacterId: 'b', opponentKnowledgeFactIds: ['opponent-fact'], opponentBeliefClaims: [],
-    action: 'Delay the move through supplier pressure.', uncertainty: 'B may misread the timing.',
-    costOrTradeoff: 'B risks exposing the supplier network.',
+    action: 'Lock the northern supplier network.', uncertainty: 'B may misread demand.',
+    costOrTradeoff: 'B exposes his supplier relationships.',
+} as const;
+
+const safeCounterplay = {
+    opponentCharacterId: 'b', action: 'Lock the northern supplier network.',
+    uncertainty: 'B may misread demand.', costOrTradeoff: 'B exposes his supplier relationships.',
 } as const;
 
 const basePlan = (domain: 'politics' | 'military' | 'commerce', action?: StrategicActionPlan): InternalChapterPlan => ({
@@ -130,14 +138,18 @@ const asMajor = (plan: InternalChapterPlan, action: StrategicActionPlan): Intern
             uncertainty: counter.uncertainty, expectedCostOrTradeoff: counter.costOrTradeoff,
         },
     })),
-    strategicActions: [{ ...action, importance: 'major' as const, countermove: counter, noCountermoveReason: undefined }],
+    strategicActions: [{
+        ...action, importance: 'major' as const, countermove: counter,
+        writerVisibleCounterplay: safeCounterplay, noCountermoveReason: undefined,
+    }],
 });
 
 const militaryAction = (): Extract<StrategicActionPlan, { domain: 'military' }> => ({
     id: 'military-action', domain: 'military', sceneIds: ['military-scene'], importance: 'major', actorCharacterId: 'a',
     objective: 'Take the frontier fort.', uncertainty: 'The defense may hold.', expectedCostOrTradeoff: 'The operation consumes supply and time.',
     writerVisibleConstraints: ['The army must arrive before fighting.'], actorKnowledgeFactIds: ['actor-fact'], relationshipEffects: [],
-    countermove: counter, operationType: 'assault', location: 'Frontier', intelligenceFactIds: ['actor-fact'],
+    countermove: counter, writerVisibleCounterplay: safeCounterplay,
+    operationType: 'assault', location: 'Frontier', intelligenceFactIds: ['actor-fact'],
     readiness: MILITARY_READINESS_DIMENSIONS.map(dimension => ({ dimension, status: 'unknown', evidenceRefs: [] })),
     resourceEffects: [{ characterId: 'a', resourceId: 'supply', quantityDelta: -20 }],
     logistics: {
@@ -170,6 +182,63 @@ const purchaseAction = (): Extract<StrategicActionPlan, { domain: 'commerce' }> 
 const commercePlan = (action = purchaseAction()): InternalChapterPlan => ({
     ...basePlan('commerce', action),
     expectedResourceDeltas: action.resourceFlows.map(flow => ({ characterId: flow.characterId, resourceId: flow.resourceId, quantityDelta: flow.quantityDelta })),
+});
+
+const directWriterPlan = (
+    domain: 'politics' | 'military' | 'commerce',
+    directive: WriterStrategicDirective,
+    expectedResourceDeltas: WriterChapterPlan['expectedResourceDeltas'] = [],
+    major = false,
+): WriterChapterPlan => ({
+    kind: 'writer-chapter-plan', chapterNumber: 100,
+    arc: { id: 'arc', title: 'Strategic Arc' }, beat: { id: 'beat', order: 1 },
+    primaryGoal: 'Execute a bounded strategic plan.', povCharacterId: 'a', participantIds: ['a', 'b'],
+    scenes: [{
+        id: `${domain}-scene`, order: 1, goal: 'Execute the strategic action.',
+        location: domain === 'military' ? 'Frontier' : 'Capital', povCharacterId: 'a',
+        participantIds: ['a', 'b'], conflictOrObstacle: 'B resists.', uncertainty: 'The result remains uncertain.',
+        expectedConsequence: 'The plan incurs its stated cost.', purposeTags: [domain],
+        conflictImportance: major ? 'major' : 'minor',
+    }],
+    canonConstraints: [{ id: 'current-law', text: 'The council charter is active.', scope: 'canon' }],
+    reveals: [], relationshipEvents: [], storyEvents: [], cluesPlantedIds: [], cluesPaidOffIds: [],
+    expectedResourceDeltas, expectedRelationshipDeltas: [], expectedContinuityConsequences: [],
+    strategicDirectives: [directive], endStateIntent: 'Remain approved but not canon.',
+});
+
+const directPoliticalDirective = (): Extract<WriterStrategicDirective, { domain: 'politics' }> => ({
+    id: 'direct-politics', domain: 'politics', sceneIds: ['politics-scene'], actorCharacterId: 'a',
+    visibleObjective: 'Secure a lawful council decision.', visibleConstraints: ['Respect council procedure.'],
+    expectedCostOrTradeoff: 'A spends political capital.',
+    dimensionStatuses: POLITICAL_DIMENSIONS.map(dimension => ({ dimension, status: 'unknown' })),
+    timing: { earliestChapter: 90, deadlineChapter: 110, preparationChapters: 2 },
+});
+
+const directMilitaryDirective = (): Extract<WriterStrategicDirective, { domain: 'military' }> => ({
+    id: 'direct-military', domain: 'military', sceneIds: ['military-scene'], actorCharacterId: 'a',
+    visibleObjective: 'Take the frontier fort.', visibleConstraints: ['The army must arrive before fighting.'],
+    expectedCostOrTradeoff: 'The operation consumes supply and time.', writerVisibleCounterplay: safeCounterplay,
+    operationType: 'assault', location: 'Frontier',
+    movement: { fromLocation: 'Capital', toLocation: 'Frontier', method: 'march', transitChapters: 0 },
+    logistics: {
+        supplyResource: { characterId: 'a', resourceId: 'supply' }, expectedSupplyConsumption: 20,
+        mobilityResource: { characterId: 'a', resourceId: 'mobility' },
+        movementConstraint: 'Wagons use the northern pass.', operationalTimeChapters: 2,
+        resupplyOrFallback: 'Withdraw to the river depot.',
+    },
+    expectedLossOrCost: 'The vanguard may be depleted.', retreatOrFailurePlan: 'Withdraw to the river depot.',
+});
+
+const directCommerceDirective = (): Extract<WriterStrategicDirective, { domain: 'commerce' }> => ({
+    id: 'direct-commerce', domain: 'commerce', sceneIds: ['commerce-scene'], actorCharacterId: 'a',
+    visibleObjective: 'Purchase grain.', visibleConstraints: ['Show payment and delivery.'],
+    expectedCostOrTradeoff: 'A spends cash.', actionType: 'purchase',
+    resourceFlows: [
+        { characterId: 'a', resourceId: 'inventory', quantityDelta: 10, role: 'inventory' },
+        { characterId: 'a', resourceId: 'cash', quantityDelta: -100, role: 'cash' },
+    ],
+    counterpartyCharacterId: 'b', logistics: 'B delivers grain by cart.',
+    timing: { settlementChapters: 1, deadlineChapter: 101 }, risk: 'The carts may be delayed.',
 });
 
 const codesFor = (plan: InternalChapterPlan, state = stateFor()) => validateInternalChapterPlan(
@@ -268,6 +337,7 @@ describe('WORK 07 military logistics engine', () => {
             movement: { fromLocation: 'Capital', toLocation: 'Frontier', method: 'march', transitChapters },
             expectedCostOrTradeoff: 'The march consumes time.', expectedLossOrCost: 'The column risks fatigue.',
             retreatOrFailurePlan: 'Return to the capital.', countermove: undefined,
+            writerVisibleCounterplay: undefined,
             noCountermoveReason: 'No organized response occurs during the march.',
         });
         const twoScenePlan = (transitChapters: number): InternalChapterPlan => {
@@ -348,7 +418,8 @@ describe('WORK 07 commerce engine', () => {
         const priceWar = {
             ...base, actionType: 'price-war' as const, importance: 'major' as const, objective: 'Defend market share.',
             expectedCostOrTradeoff: 'A burns cash to hold customers.', resourceFlows: [{ characterId: 'a', resourceId: 'cash', quantityDelta: -50, role: 'cash' as const }],
-            competitorCharacterId: 'b', fundingResource: { characterId: 'a', resourceId: 'cash' }, countermove: counter, noCountermoveReason: undefined,
+            competitorCharacterId: 'b', fundingResource: { characterId: 'a', resourceId: 'cash' },
+            countermove: counter, writerVisibleCounterplay: safeCounterplay, noCountermoveReason: undefined,
         };
         const plan = asMajor(commercePlan(priceWar), priceWar);
         expect(codesFor(plan)).toEqual([]);
@@ -358,6 +429,137 @@ describe('WORK 07 commerce engine', () => {
 });
 
 describe('WORK 07 shared contracts and boundaries', () => {
+    it('rejects fabricated WriterChapterPlan strategic bypasses before Writer and Repair models', async () => {
+        const validCommerce = directCommerceDirective();
+        const freePurchase = directWriterPlan('commerce', {
+            ...validCommerce,
+            resourceFlows: [
+                { characterId: 'a', resourceId: 'inventory', quantityDelta: 10, role: 'inventory' },
+                { characterId: 'a', resourceId: 'cash', quantityDelta: 0, role: 'cash' },
+            ],
+        }, [
+            { characterId: 'a', resourceId: 'inventory', quantityDelta: 10 },
+            { characterId: 'a', resourceId: 'cash', quantityDelta: 0 },
+        ]);
+        const loanWithoutLiability = directWriterPlan('commerce', {
+            ...validCommerce, actionType: 'loan', visibleObjective: 'Borrow cash.',
+            resourceFlows: [{ characterId: 'a', resourceId: 'cash', quantityDelta: 100, role: 'cash' }],
+        }, [{ characterId: 'a', resourceId: 'cash', quantityDelta: 100 }]);
+        const saleWithoutBasis = directWriterPlan('commerce', {
+            ...validCommerce, actionType: 'sale', visibleObjective: 'Sell a service.',
+            resourceFlows: [{ characterId: 'a', resourceId: 'cash', quantityDelta: 100, role: 'cash' }],
+            serviceOrContractBasis: undefined,
+        }, [{ characterId: 'a', resourceId: 'cash', quantityDelta: 100 }]);
+        const priceWarWithoutSpend = directWriterPlan('commerce', {
+            ...validCommerce, actionType: 'price-war', visibleObjective: 'Defend market share.',
+            expectedCostOrTradeoff: 'A risks exhausting cash.', writerVisibleCounterplay: safeCounterplay,
+            resourceFlows: [{ characterId: 'a', resourceId: 'cash', quantityDelta: 0, role: 'cash' }],
+            competitorCharacterId: 'b', fundingResource: { characterId: 'a', resourceId: 'cash' },
+        }, [{ characterId: 'a', resourceId: 'cash', quantityDelta: 0 }], true);
+        const military = directMilitaryDirective();
+        const missingLogistics = directWriterPlan('military', { ...military, logistics: undefined }, [], true);
+        const lateArrival = (transitChapters: number | 'unknown') => directWriterPlan('military', {
+            ...military, movement: { ...military.movement!, transitChapters },
+        }, [{ characterId: 'a', resourceId: 'supply', quantityDelta: -20 }], true);
+        const futurePolitics = directWriterPlan('politics', {
+            ...directPoliticalDirective(), timing: { earliestChapter: 101, deadlineChapter: 110, preparationChapters: 1 },
+        });
+        const placeholderMilitary = directWriterPlan('military', {
+            ...military, expectedCostOrTradeoff: '!!!', retreatOrFailurePlan: '...',
+            logistics: { ...military.logistics!, resupplyOrFallback: '---' },
+        }, [{ characterId: 'a', resourceId: 'supply', quantityDelta: -20 }], true);
+        const missingCounterplay = directWriterPlan('military', {
+            ...military, writerVisibleCounterplay: undefined,
+        }, [{ characterId: 'a', resourceId: 'supply', quantityDelta: -20 }], true);
+        const tamperedCounterplay = directWriterPlan('military', {
+            ...military, writerVisibleCounterplay: { ...safeCounterplay, opponentCharacterId: 'future' },
+        }, [{ characterId: 'a', resourceId: 'supply', quantityDelta: -20 }], true);
+        const sameSceneMarch = {
+            ...military, id: 'direct-march', operationType: 'march' as const, logistics: undefined,
+            expectedCostOrTradeoff: 'The march consumes time.', expectedLossOrCost: 'The column risks fatigue.',
+            retreatOrFailurePlan: 'Return to the capital.',
+        };
+        const sameSceneMovement: WriterChapterPlan = {
+            ...directWriterPlan('military', { ...military, movement: undefined }, [
+                { characterId: 'a', resourceId: 'supply', quantityDelta: -20 },
+            ], true),
+            strategicDirectives: [sameSceneMarch, { ...military, movement: undefined }],
+        };
+
+        const fabricated = [
+            freePurchase, loanWithoutLiability, saleWithoutBasis, priceWarWithoutSpend,
+            missingLogistics, lateArrival(2), lateArrival('unknown'), futurePolitics,
+            placeholderMilitary, missingCounterplay, tamperedCounterplay,
+            sameSceneMovement,
+        ];
+        fabricated.forEach(plan => expect(() => buildWriterContext(control, stateFor(), plan)).toThrow());
+
+        const writerModel = vi.fn(async () => ({
+            kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'This must not be written.',
+        }));
+        await expect(generateWriterDraft({
+            control, state: stateFor(), plan: freePurchase, model: { write: writerModel },
+        })).rejects.toThrow();
+        expect(writerModel).not.toHaveBeenCalled();
+
+        const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const repair = vi.fn(async () => ({ kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'repair' }));
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(), plan: freePurchase,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'Fabricated purchase.' },
+            semanticModel: { validate: semantic }, repairModel: { repair }, maxRepairAttempts: 2,
+        });
+        expect(result.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+        expect(semantic).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
+
+        expect(() => buildWriterContext(control, stateFor(), directWriterPlan(
+            'commerce', validCommerce, commercePlan().expectedResourceDeltas,
+        ))).not.toThrow();
+        expect(() => buildWriterContext(control, stateFor(), directWriterPlan(
+            'military', military, [{ characterId: 'a', resourceId: 'supply', quantityDelta: -20 }], true,
+        ))).not.toThrow();
+        const earlierMovementPlan: WriterChapterPlan = {
+            ...directWriterPlan('military', { ...military, sceneIds: ['assault-scene'], movement: undefined }, [
+                { characterId: 'a', resourceId: 'supply', quantityDelta: -20 },
+            ], true),
+            scenes: [
+                { ...directWriterPlan('military', military).scenes[0], id: 'march-scene', order: 1, conflictImportance: 'minor' },
+                { ...directWriterPlan('military', military).scenes[0], id: 'assault-scene', order: 2, conflictImportance: 'major' },
+            ],
+            strategicDirectives: [
+                { ...sameSceneMarch, sceneIds: ['march-scene'], writerVisibleCounterplay: undefined },
+                { ...military, sceneIds: ['assault-scene'], movement: undefined },
+            ],
+        };
+        expect(() => buildWriterContext(control, stateFor(), earlierMovementPlan)).not.toThrow();
+        expect(() => buildWriterContext(control, stateFor(), directWriterPlan(
+            'politics', directPoliticalDirective(), [], false,
+        ))).not.toThrow();
+    });
+
+    it('requires compatible meaningful writer-visible counterplay on major source actions', () => {
+        const internal = militaryPlan();
+        const action = internal.strategicActions![0];
+        expect(codesFor({
+            ...internal, strategicActions: [{ ...action, writerVisibleCounterplay: undefined }],
+        })).toContain('STRATEGIC_REFERENCE_INVALID');
+        expect(codesFor({
+            ...internal,
+            strategicActions: [{
+                ...action,
+                writerVisibleCounterplay: { ...safeCounterplay, opponentCharacterId: 'a' },
+            }],
+        })).toContain('STRATEGIC_REFERENCE_INVALID');
+        expect(codesFor({
+            ...internal,
+            strategicActions: [{
+                ...action,
+                writerVisibleCounterplay: { ...safeCounterplay, action: '!!!' },
+            }],
+        })).toContain('STRATEGIC_REFERENCE_INVALID');
+    });
+
     it('preserves concrete writer-safe domain contracts through WriterModelRequest', async () => {
         const requests: unknown[] = [];
         const model = {
@@ -373,6 +575,7 @@ describe('WORK 07 shared contracts and boundaries', () => {
         expect(militaryRequest).toContain('Wagons use the northern pass.');
         expect(militaryRequest).toContain('Withdraw to the river depot.');
         expect(militaryRequest).toContain('The vanguard may be depleted.');
+        expect(militaryRequest).toContain('Lock the northern supplier network.');
         expect(militaryRequest).toContain('"transitChapters":0');
         expect(commerceRequest).toContain('"counterpartyCharacterId":"b"');
         expect(commerceRequest).toContain('B delivers grain by cart.');
@@ -386,6 +589,46 @@ describe('WORK 07 shared contracts and boundaries', () => {
             expect(payload).not.toContain('opponentKnowledgeFactIds');
             expect(payload).not.toContain('opponent-fact');
         });
+    });
+
+    it('projects safe rational counterplay for major politics, military, and commerce without epistemics', async () => {
+        const commerceBase = purchaseAction();
+        const priceWar = {
+            ...commerceBase, actionType: 'price-war' as const, importance: 'major' as const,
+            objective: 'Defend market share.', expectedCostOrTradeoff: 'A burns cash to hold customers.',
+            resourceFlows: [{ characterId: 'a', resourceId: 'cash', quantityDelta: -50, role: 'cash' as const }],
+            competitorCharacterId: 'b', fundingResource: { characterId: 'a', resourceId: 'cash' },
+            countermove: counter, writerVisibleCounterplay: safeCounterplay, noCountermoveReason: undefined,
+        };
+        const internalPlans = [
+            asMajor(basePlan('politics', politicalAction()), politicalAction()),
+            militaryPlan(),
+            asMajor(commercePlan(priceWar), priceWar),
+        ];
+        for (const internal of internalPlans) {
+            let payload = '';
+            await generateWriterDraft({
+                control, state: stateFor(), plan: sanitizeWriterChapterPlan(internal, control, stateFor()),
+                model: { async write(request) {
+                    payload = JSON.stringify(request);
+                    return { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'Execute rational opposition.' };
+                } },
+            });
+            expect(payload).toContain('"writerVisibleCounterplay"');
+            expect(payload).toContain('Lock the northern supplier network.');
+            expect(payload).not.toContain('opponentKnowledgeFactIds');
+            expect(payload).not.toContain('opponentBeliefClaims');
+            expect(payload).not.toContain('evidenceRefs');
+
+            const validatorPayload = JSON.stringify(buildValidatorStrategicView(
+                internal, buildPlannerContext(control, stateFor(), 100),
+            ));
+            expect(validatorPayload).toContain('"privilegedCountermove"');
+            expect(validatorPayload).toContain('"opponentKnowledgeFactIds":["opponent-fact"]');
+            expect(validatorPayload).toContain('Lock the northern supplier network.');
+            expect(validatorPayload).toContain('B may misread demand.');
+            expect(validatorPayload).toContain('B exposes his supplier relationships.');
+        }
     });
 
     it('runtime-revalidates every discriminated Writer strategic directive field', () => {
@@ -445,6 +688,29 @@ describe('WORK 07 shared contracts and boundaries', () => {
         });
         expect(result.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
         expect(semantic).not.toHaveBeenCalled();
+
+        const originalWriterPlan = sanitizeWriterChapterPlan(source, control, stateFor());
+        const originalDirective = originalWriterPlan.strategicDirectives![0];
+        if (originalDirective.writerVisibleCounterplay === undefined) throw new Error('expected counterplay');
+        const counterplayTamperedPlan: WriterChapterPlan = {
+            ...originalWriterPlan,
+            strategicDirectives: [{
+                ...originalDirective,
+                writerVisibleCounterplay: {
+                    ...originalDirective.writerVisibleCounterplay,
+                    action: 'Invent a different strategic response.',
+                },
+            }],
+        };
+        expect(() => buildWriterContext(control, stateFor(), counterplayTamperedPlan)).not.toThrow();
+        const tamperedSemantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const tampered = await validateWriterChapter({
+            control, state: stateFor(), plan: counterplayTamperedPlan, strategicView,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A attacks.' },
+            semanticModel: { validate: tamperedSemantic },
+        });
+        expect(tampered.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+        expect(tamperedSemantic).not.toHaveBeenCalled();
     });
 
     it('strictly rejects malformed privileged strategic views before Validator or Repair models', async () => {
@@ -509,6 +775,79 @@ describe('WORK 07 shared contracts and boundaries', () => {
         expect(result.report.issues.map(issue => issue.code)).toContain('VALIDATOR_CONTEXT_CAPACITY_EXCEEDED');
         expect(semantic).not.toHaveBeenCalled();
         expect(repair).not.toHaveBeenCalled();
+    });
+
+    it('blocks raw Author Secret strings in strategicView while preserving the deliberate secretValidation channel', async () => {
+        const militaryInternal = militaryPlan();
+        const militaryWriterPlan = sanitizeWriterChapterPlan(militaryInternal, control, stateFor());
+        const militaryView = buildValidatorStrategicView(
+            militaryInternal, buildPlannerContext(control, stateFor(), 100),
+        );
+        const militaryDescriptor = militaryView.actions[0];
+        if (militaryDescriptor.domain !== 'military' || militaryDescriptor.logistics === undefined
+            || militaryDescriptor.writerVisibleCounterplay === undefined) throw new Error('expected military descriptor');
+        const commerceInternal = commercePlan();
+        const commerceWriterPlan = sanitizeWriterChapterPlan(commerceInternal, control, stateFor());
+        const commerceView = buildValidatorStrategicView(
+            commerceInternal, buildPlannerContext(control, stateFor(), 100),
+        );
+        const commerceDescriptor = commerceView.actions[0];
+        if (commerceDescriptor.domain !== 'commerce') throw new Error('expected commerce descriptor');
+        const secretViews: readonly { readonly plan: WriterChapterPlan; readonly view: unknown }[] = [
+            { plan: militaryWriterPlan, view: { ...militaryView, actions: [{ ...militaryDescriptor, visibleObjective: RAW_SECRET }] } },
+            { plan: militaryWriterPlan, view: { ...militaryView, actions: [{
+                ...militaryDescriptor,
+                logistics: { ...militaryDescriptor.logistics, movementConstraint: RAW_SECRET },
+            }] } },
+            { plan: militaryWriterPlan, view: { ...militaryView, actions: [{
+                ...militaryDescriptor,
+                logistics: { ...militaryDescriptor.logistics, resupplyOrFallback: RAW_SECRET },
+            }] } },
+            { plan: commerceWriterPlan, view: { ...commerceView, actions: [{ ...commerceDescriptor, logistics: RAW_SECRET }] } },
+            { plan: commerceWriterPlan, view: { ...commerceView, actions: [{ ...commerceDescriptor, risk: RAW_SECRET }] } },
+            { plan: militaryWriterPlan, view: { ...militaryView, actions: [{
+                ...militaryDescriptor,
+                writerVisibleCounterplay: { ...militaryDescriptor.writerVisibleCounterplay, action: RAW_SECRET },
+            }] } },
+        ];
+        for (const entry of secretViews) {
+            const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+            const result = await validateWriterChapter({
+                control, state: stateFor(), plan: entry.plan, strategicView: entry.view,
+                draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A safe candidate.' },
+                semanticModel: { validate: semantic },
+            });
+            expect(result.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+            expect(JSON.stringify(result.report)).not.toContain(RAW_SECRET);
+            expect(semantic).not.toHaveBeenCalled();
+        }
+
+        const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const repair = vi.fn(async () => ({ kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'repair' }));
+        const blocked = await validateAndRepairWriterChapter({
+            control, state: stateFor(), plan: secretViews[0].plan, strategicView: secretViews[0].view,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A safe candidate.' },
+            semanticModel: { validate: semantic }, repairModel: { repair }, maxRepairAttempts: 2,
+        });
+        expect(JSON.stringify(blocked.report)).not.toContain(RAW_SECRET);
+        expect(semantic).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
+
+        const safeSemantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const leakResult = await validateWriterChapter({
+            control, state: stateFor(), plan: militaryWriterPlan, strategicView: militaryView,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: `The prose leaks ${RAW_SECRET}.` },
+            semanticModel: { validate: safeSemantic },
+        });
+        expect(leakResult.report.issues.map(issue => issue.code)).toContain('AUTHOR_SECRET_LEAK');
+        expect(leakResult.context?.secretValidation.some(entry => entry.rawValue === RAW_SECRET)).toBe(true);
+    });
+
+    it('treats punctuation-only and normalized placeholder text as non-meaningful', () => {
+        for (const value of ['!!!', '...', '---', ' N/A. ', 'NO COST!!!', 'none...']) {
+            expect(isMeaningfulText(value)).toBe(false);
+        }
+        expect(isMeaningfulText('The retreat abandons the northern depot.')).toBe(true);
     });
 
     it('normalizes legacy plans to no actions and requires exact domain scene coverage', () => {
@@ -592,7 +931,14 @@ describe('WORK 07 shared contracts and boundaries', () => {
         });
         expect(result.status).toBe('rejected');
         expect(validatorPayload).toContain('opponent-fact');
+        expect(validatorPayload).toContain('privilegedCountermove');
+        expect(validatorPayload).toContain('Lock the northern supplier network.');
+        expect(repairPayload).toContain('writerVisibleCounterplay');
+        expect(repairPayload).toContain('Lock the northern supplier network.');
         expect(repairPayload).not.toContain('opponent-fact');
+        expect(repairPayload).not.toContain('privilegedCountermove');
+        expect(repairPayload).not.toContain('opponentKnowledgeFactIds');
+        expect(repairPayload).not.toContain('opponentBeliefClaims');
         expect(repairPayload).not.toContain('evidenceRefs');
         expect(repairPayload).not.toContain('validator-strategic-view');
         expect(buildWriterContext(control, stateFor(), writerPlan).chapterPlan.strategicDirectives).toHaveLength(1);

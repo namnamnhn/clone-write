@@ -59,9 +59,27 @@ const validateCountermove = (
         issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.noCountermoveReason`, 'no-countermove reason must be meaningful'));
     }
     const counter = action.countermove;
+    const visibleCounterplay = action.writerVisibleCounterplay;
+    if (action.importance === 'major' && visibleCounterplay === undefined) {
+        issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.writerVisibleCounterplay`, 'major strategic action requires writer-visible counterplay'));
+    }
+    if ((counter === undefined) !== (visibleCounterplay === undefined)
+        && (action.importance === 'major' || visibleCounterplay !== undefined)) {
+        issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.writerVisibleCounterplay`, 'writer-visible counterplay requires a compatible privileged countermove'));
+    }
+    if (visibleCounterplay !== undefined) {
+        if (!isMeaningfulText(visibleCounterplay.action) || !isMeaningfulText(visibleCounterplay.uncertainty)
+            || !isMeaningfulText(visibleCounterplay.costOrTradeoff)) {
+            issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.writerVisibleCounterplay`, 'writer-visible counterplay text must be meaningful'));
+        }
+        if (counter !== undefined && visibleCounterplay.opponentCharacterId !== counter.opponentCharacterId) {
+            issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.writerVisibleCounterplay.opponentCharacterId`, 'writer-visible and privileged counterplay must identify the same opponent'));
+        }
+    }
     if (!counter) return issues;
-    if (!isMeaningfulText(counter.action) || !isMeaningfulText(counter.costOrTradeoff)) {
-        issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.countermove`, 'countermove action and cost must be meaningful'));
+    if (!isMeaningfulText(counter.action) || !isMeaningfulText(counter.uncertainty)
+        || !isMeaningfulText(counter.costOrTradeoff)) {
+        issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.countermove`, 'countermove action, uncertainty, and cost must be meaningful'));
     }
     if (!context.availableCharacters.some(character => character.id === counter.opponentCharacterId)) {
         issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.countermove.opponentCharacterId`, 'countermove opponent is unavailable at the target chapter'));

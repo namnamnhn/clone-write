@@ -62,6 +62,14 @@ export interface StrategicCountermove {
     readonly costOrTradeoff: string;
 }
 
+/** Prose-facing opposition contract. It deliberately excludes knowledge and belief evidence. */
+export interface WriterVisibleCounterplay {
+    readonly opponentCharacterId: StoryId;
+    readonly action: string;
+    readonly uncertainty: string;
+    readonly costOrTradeoff: string;
+}
+
 export interface StrategicActionBase {
     readonly id: StoryId;
     readonly domain: StrategicDomain;
@@ -75,6 +83,7 @@ export interface StrategicActionBase {
     readonly actorKnowledgeFactIds: readonly StoryId[];
     readonly relationshipEffects: readonly StrategicRelationshipEffect[];
     readonly countermove?: StrategicCountermove;
+    readonly writerVisibleCounterplay?: WriterVisibleCounterplay;
     /** Required when no structured countermove applies; major politics/commerce cannot use it. */
     readonly noCountermoveReason?: string;
 }
@@ -199,6 +208,7 @@ interface WriterStrategicDirectiveBase {
     readonly visibleObjective: string;
     readonly visibleConstraints: readonly string[];
     readonly expectedCostOrTradeoff: string;
+    readonly writerVisibleCounterplay?: WriterVisibleCounterplay;
 }
 
 export interface WriterPoliticalDirective extends WriterStrategicDirectiveBase {
@@ -246,6 +256,7 @@ interface ValidatorStrategicEvidenceDescriptor {
     readonly resourceKeys: readonly string[];
     readonly actorKnowledgeFactIds: readonly StoryId[];
     readonly opponentKnowledgeFactIds: readonly StoryId[];
+    readonly privilegedCountermove?: WriterVisibleCounterplay;
 }
 
 /** Privileged, bounded descriptor: Writer contract plus evidence identities, never evidence prose. */

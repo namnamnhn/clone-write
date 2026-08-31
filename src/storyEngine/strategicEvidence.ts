@@ -17,7 +17,8 @@ export const isMeaningfulText = (value: string): boolean => {
         .replace(/[\p{P}\p{S}]+/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-    return !['none', 'no cost', 'no tradeoff', 'not applicable', 'n a', 'na'].includes(normalized);
+    return normalized.length > 0
+        && !['none', 'no cost', 'no tradeoff', 'not applicable', 'n a', 'na'].includes(normalized);
 };
 
 export const factExists = (context: PlannerContext, factId: string): boolean =>

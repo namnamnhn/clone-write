@@ -11,6 +11,7 @@ import {
     writerStrategicDirectiveMatchesValidatorAction,
 } from './strategicContext';
 import type { ValidatorStrategicView } from './strategicTypes';
+import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 
 export interface ValidatorContextSelectionPolicy {
     readonly maxLockedCharacters: number;
@@ -160,6 +161,7 @@ export const buildValidatorContext = (
             strategicView = parseValidatorStrategicView(
                 suppliedStrategicView, chapter, policy.maxStrategicItems ?? 256, plannerContext,
             );
+            assertModelBoundaryStringsSecretSafe(control, strategicView, 'validatorStrategicView');
         }
     } catch (error) {
         if (error instanceof StrategicContextCapacityError) throw new ValidatorContextCapacityError(error.message);

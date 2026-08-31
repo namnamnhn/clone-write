@@ -4,6 +4,7 @@ import {
     actionResourceEffects,
     collectActionEvidence,
     evidenceIdentity,
+    isMeaningfulText,
     resourceFor,
     resourceKey,
     strategicCharacterKnowsFact,
@@ -31,6 +32,7 @@ import type {
     WriterMilitaryDirective,
     WriterPoliticalDirective,
     WriterStrategicDirective,
+    WriterVisibleCounterplay,
 } from './strategicTypes';
 import { orderStrategicActions, validateStrategicActions } from './strategicValidator';
 import type { FullStoryControl } from './types';
@@ -166,6 +168,17 @@ const parseResourceFlows = (value: unknown, path: string): readonly CommerceReso
     });
 };
 
+const parseCounterplay = (value: unknown, path: string): WriterVisibleCounterplay => {
+    const source = record(value, path);
+    strictKeys(source, ['opponentCharacterId', 'action', 'uncertainty', 'costOrTradeoff'], path);
+    return {
+        opponentCharacterId: nonEmptyText(source.opponentCharacterId, `${path}.opponentCharacterId`),
+        action: nonEmptyText(source.action, `${path}.action`),
+        uncertainty: nonEmptyText(source.uncertainty, `${path}.uncertainty`),
+        costOrTradeoff: nonEmptyText(source.costOrTradeoff, `${path}.costOrTradeoff`),
+    };
+};
+
 const directiveBase = (source: Record<string, unknown>, path: string) => ({
     id: nonEmptyText(source.id, `${path}.id`),
     sceneIds: stringArray(source.sceneIds, `${path}.sceneIds`, { nonEmpty: true, unique: true }),
@@ -173,13 +186,18 @@ const directiveBase = (source: Record<string, unknown>, path: string) => ({
     visibleObjective: nonEmptyText(source.visibleObjective, `${path}.visibleObjective`),
     visibleConstraints: stringArray(source.visibleConstraints, `${path}.visibleConstraints`),
     expectedCostOrTradeoff: nonEmptyText(source.expectedCostOrTradeoff, `${path}.expectedCostOrTradeoff`),
+    ...(source.writerVisibleCounterplay === undefined ? {} : {
+        writerVisibleCounterplay: parseCounterplay(source.writerVisibleCounterplay, `${path}.writerVisibleCounterplay`),
+    }),
 });
 
 const commonDirectiveKeys = [
     'id', 'domain', 'sceneIds', 'actorCharacterId', 'visibleObjective', 'visibleConstraints', 'expectedCostOrTradeoff',
+    'writerVisibleCounterplay',
 ] as const;
 const validatorEvidenceKeys = [
     'opponentCharacterId', 'evidenceRefs', 'resourceKeys', 'actorKnowledgeFactIds', 'opponentKnowledgeFactIds',
+    'privilegedCountermove',
 ] as const;
 
 const parseWriterDirectiveRecord = (
@@ -269,6 +287,12 @@ const writerDirectiveFromAction = (action: StrategicActionPlan): WriterStrategic
         visibleObjective: action.objective,
         visibleConstraints: action.writerVisibleConstraints.map(value => value),
         expectedCostOrTradeoff: action.expectedCostOrTradeoff,
+        ...(action.writerVisibleCounterplay === undefined ? {} : { writerVisibleCounterplay: {
+            opponentCharacterId: action.writerVisibleCounterplay.opponentCharacterId,
+            action: action.writerVisibleCounterplay.action,
+            uncertainty: action.writerVisibleCounterplay.uncertainty,
+            costOrTradeoff: action.writerVisibleCounterplay.costOrTradeoff,
+        } }),
     };
     if (action.domain === 'politics') {
         return {
@@ -349,6 +373,12 @@ const evidenceFields = (action: StrategicActionPlan) => {
         resourceKeys,
         actorKnowledgeFactIds: [...new Set(action.actorKnowledgeFactIds)].sort(),
         opponentKnowledgeFactIds: [...new Set(action.countermove?.opponentKnowledgeFactIds ?? [])].sort(),
+        ...(action.countermove === undefined ? {} : { privilegedCountermove: {
+            opponentCharacterId: action.countermove.opponentCharacterId,
+            action: action.countermove.action,
+            uncertainty: action.countermove.uncertainty,
+            costOrTradeoff: action.countermove.costOrTradeoff,
+        } }),
     };
 };
 
@@ -363,7 +393,8 @@ const strategicItemCount = (view: ValidatorStrategicView): number => view.action
         + (action.domain === 'politics' ? action.dimensionStatuses.length + 1
             : action.domain === 'military' ? Number(action.movement !== undefined) + Number(action.logistics !== undefined)
                 : action.resourceFlows.length + 1);
-    return total + 1 + contractItems + action.evidenceRefs.length + action.resourceKeys.length
+    return total + 1 + contractItems + Number(action.writerVisibleCounterplay !== undefined)
+        + Number(action.privilegedCountermove !== undefined) + action.evidenceRefs.length + action.resourceKeys.length
         + action.actorKnowledgeFactIds.length + action.opponentKnowledgeFactIds.length;
 }, 0) + view.resourceEvidence.length + view.epistemicEvidence.length + view.deterministicIssues.length;
 
@@ -474,6 +505,8 @@ const parseValidatorAction = (
     const opponentCharacterId = source.opponentCharacterId === undefined ? undefined
         : nonEmptyText(source.opponentCharacterId, `${path}.opponentCharacterId`);
     const opponentKnowledgeFactIds = stringArray(source.opponentKnowledgeFactIds, `${path}.opponentKnowledgeFactIds`, { unique: true });
+    const privilegedCountermove = source.privilegedCountermove === undefined ? undefined
+        : parseCounterplay(source.privilegedCountermove, `${path}.privilegedCountermove`);
     if ((opponentCharacterId === undefined && opponentKnowledgeFactIds.length > 0)
         || (opponentCharacterId !== undefined && !context.availableCharacters.some(character => character.id === opponentCharacterId))) {
         fail(`${path}.opponentCharacterId`, 'does not identify an available opponent');
@@ -483,12 +516,29 @@ const parseValidatorAction = (
             fail(`${path}.opponentKnowledgeFactIds.${index}`, 'is not canonical opponent knowledge');
         }
     });
+    if ((opponentCharacterId === undefined) !== (privilegedCountermove === undefined)) {
+        fail(`${path}.privilegedCountermove`, 'must accompany the privileged opponent descriptor');
+    }
+    if (privilegedCountermove !== undefined
+        && (opponentCharacterId === undefined || privilegedCountermove.opponentCharacterId !== opponentCharacterId)) {
+        fail(`${path}.privilegedCountermove.opponentCharacterId`, 'must match the privileged opponent descriptor');
+    }
+    if (privilegedCountermove !== undefined
+        && (!isMeaningfulText(privilegedCountermove.action) || !isMeaningfulText(privilegedCountermove.uncertainty)
+            || !isMeaningfulText(privilegedCountermove.costOrTradeoff))) {
+        fail(`${path}.privilegedCountermove`, 'must contain meaningful action, uncertainty, and cost');
+    }
+    if (directive.writerVisibleCounterplay !== undefined && opponentCharacterId !== undefined
+        && directive.writerVisibleCounterplay.opponentCharacterId !== opponentCharacterId) {
+        fail(`${path}.writerVisibleCounterplay.opponentCharacterId`, 'must match the privileged opponent descriptor');
+    }
     if (!context.availableCharacters.some(character => character.id === directive.actorCharacterId)) {
         fail(`${path}.actorCharacterId`, 'does not identify an available actor');
     }
     return {
         ...directive,
         ...(opponentCharacterId === undefined ? {} : { opponentCharacterId }),
+        ...(privilegedCountermove === undefined ? {} : { privilegedCountermove }),
         evidenceRefs, resourceKeys, actorKnowledgeFactIds, opponentKnowledgeFactIds,
     } as ValidatorStrategicActionDescriptor;
 };
