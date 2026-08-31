@@ -10,6 +10,7 @@ import {
 } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
+import { parseWriterStrategicDirectives } from './strategicContext';
 import {
     DEFAULT_WRITER_CONTEXT_SELECTION_POLICY,
     WriterContext,
@@ -195,29 +196,65 @@ const clonePlan = (
         }
         return { relationshipId: delta.relationshipId, participantIds: participants, expectedState: text(delta.expectedState, `expectedRelationshipDeltas.${index}.expectedState`) };
     });
-    const strategicDirectives = (plan.strategicDirectives ?? []).map((directive, index) => {
-        if (!directive || typeof directive !== 'object') throw new WriterContextError(`strategicDirectives.${index} must be an object`);
-        text(directive.id, `strategicDirectives.${index}.id`);
-        text(directive.actorCharacterId, `strategicDirectives.${index}.actorCharacterId`);
-        text(directive.visibleObjective, `strategicDirectives.${index}.visibleObjective`);
-        text(directive.expectedCostOrTradeoff, `strategicDirectives.${index}.expectedCostOrTradeoff`);
-        if (!['politics', 'military', 'commerce'].includes(directive.domain)) throw new WriterContextError(`strategicDirectives.${index}.domain is invalid`);
-        const sceneIds = ids(directive.sceneIds, `strategicDirectives.${index}.sceneIds`);
-        if (sceneIds.length === 0) throw new WriterContextError(`strategicDirectives.${index}.sceneIds must not be empty`);
-        noDuplicates(sceneIds, `strategicDirectives.${index}.sceneIds`);
-        const visibleConstraints = ids(directive.visibleConstraints, `strategicDirectives.${index}.visibleConstraints`);
-        const visibleOperationalRequirements = ids(directive.visibleOperationalRequirements, `strategicDirectives.${index}.visibleOperationalRequirements`);
+    let strategicDirectives: ReturnType<typeof parseWriterStrategicDirectives>;
+    try {
+        strategicDirectives = parseWriterStrategicDirectives(plan.strategicDirectives ?? []);
+    } catch (error) {
+        throw new WriterContextError(error instanceof Error ? error.message : 'strategicDirectives are invalid');
+    }
+    const resourceExists = (characterId: string, resourceId: string): boolean =>
+        safe.state.resources[characterId]?.some(resource => resource.id === resourceId) ?? false;
+    const expectedResourceTotals = new Map<string, number>();
+    resourceDeltas.forEach((delta) => {
+        if (delta.quantityDelta === undefined) return;
+        const key = `${delta.characterId}\u0000${delta.resourceId}`;
+        expectedResourceTotals.set(key, (expectedResourceTotals.get(key) ?? 0) + delta.quantityDelta);
+    });
+    const writerVisibleStrategicTotals = new Map<string, number>();
+    const addStrategicTotal = (characterId: string, resourceId: string, quantity: number): void => {
+        const key = `${characterId}\u0000${resourceId}`;
+        writerVisibleStrategicTotals.set(key, (writerVisibleStrategicTotals.get(key) ?? 0) + quantity);
+    };
+    strategicDirectives.forEach((directive, index) => {
         if (!chapterParticipants.includes(directive.actorCharacterId)
-            || !sceneIds.every(id => plan.scenes.some(scene => scene.id === id && scene.purposeTags.includes(directive.domain)))) {
+            || !directive.sceneIds.every(id => plan.scenes.some(scene => scene.id === id && scene.purposeTags.includes(directive.domain)))) {
             throw new WriterContextError(`strategicDirectives.${index} contains an undeclared actor or scene`);
         }
-        return {
-            id: directive.id, domain: directive.domain, sceneIds, actorCharacterId: directive.actorCharacterId,
-            visibleObjective: directive.visibleObjective, visibleConstraints,
-            expectedCostOrTradeoff: directive.expectedCostOrTradeoff, visibleOperationalRequirements,
-        };
+        if (directive.domain === 'military') {
+            const refs = directive.logistics === undefined ? [] : [
+                directive.logistics.supplyResource,
+                ...(directive.logistics.mobilityResource === undefined ? [] : [directive.logistics.mobilityResource]),
+            ];
+            if (refs.some(ref => !chapterParticipants.includes(ref.characterId) || !resourceExists(ref.characterId, ref.resourceId))) {
+                throw new WriterContextError(`strategicDirectives.${index}.logistics contains an undeclared or nonexistent resource`);
+            }
+            const consumption = directive.logistics?.expectedSupplyConsumption;
+            if (typeof consumption === 'number' && directive.logistics !== undefined) {
+                const supply = directive.logistics.supplyResource;
+                addStrategicTotal(supply.characterId, supply.resourceId, -consumption);
+            }
+        } else if (directive.domain === 'commerce') {
+            const referencedCharacters = [directive.counterpartyCharacterId, directive.competitorCharacterId]
+                .filter((id): id is string => id !== undefined);
+            if (referencedCharacters.some(id => !chapterParticipants.includes(id))) {
+                throw new WriterContextError(`strategicDirectives.${index} contains an undeclared commercial character`);
+            }
+            directive.resourceFlows.forEach((flow) => {
+                if (!chapterParticipants.includes(flow.characterId) || !resourceExists(flow.characterId, flow.resourceId)) {
+                    throw new WriterContextError(`strategicDirectives.${index}.resourceFlows contains an undeclared or nonexistent resource`);
+                }
+                addStrategicTotal(flow.characterId, flow.resourceId, flow.quantityDelta);
+            });
+            if (directive.fundingResource !== undefined
+                && (!chapterParticipants.includes(directive.fundingResource.characterId)
+                    || !resourceExists(directive.fundingResource.characterId, directive.fundingResource.resourceId))) {
+                throw new WriterContextError(`strategicDirectives.${index}.fundingResource is undeclared or nonexistent`);
+            }
+        }
     });
-    noDuplicates(strategicDirectives.map(value => value.id), 'strategicDirectives');
+    if ([...writerVisibleStrategicTotals].some(([key, quantity]) => expectedResourceTotals.get(key) !== quantity)) {
+        throw new WriterContextError('writer-visible strategic resource quantities do not match expectedResourceDeltas');
+    }
     (['politics', 'military', 'commerce'] as const).forEach((domain) => plan.scenes.forEach((scene, index) => {
         if (scene.purposeTags.includes(domain)
             && !strategicDirectives.some(directive => directive.domain === domain && directive.sceneIds.includes(scene.id))) {

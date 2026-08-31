@@ -11,6 +11,7 @@ import {
     strategicCharacterKnowsFact,
     collectActionEvidence,
     evidenceIdentity,
+    isMeaningfulText,
     relationshipExists,
     resourceFor,
     resourceKey,
@@ -51,8 +52,17 @@ const validateCountermove = (
     if ((action.countermove === undefined) === (action.noCountermoveReason === undefined)) {
         issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', path, 'action requires exactly one structured countermove or explicit no-countermove reason'));
     }
+    if (!isMeaningfulText(action.expectedCostOrTradeoff)) {
+        issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.expectedCostOrTradeoff`, 'strategic action requires a meaningful cost or tradeoff'));
+    }
+    if (action.noCountermoveReason !== undefined && !isMeaningfulText(action.noCountermoveReason)) {
+        issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.noCountermoveReason`, 'no-countermove reason must be meaningful'));
+    }
     const counter = action.countermove;
     if (!counter) return issues;
+    if (!isMeaningfulText(counter.action) || !isMeaningfulText(counter.costOrTradeoff)) {
+        issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.countermove`, 'countermove action and cost must be meaningful'));
+    }
     if (!context.availableCharacters.some(character => character.id === counter.opponentCharacterId)) {
         issues.push(strategicIssue('STRATEGIC_REFERENCE_INVALID', `${path}.countermove.opponentCharacterId`, 'countermove opponent is unavailable at the target chapter'));
     }

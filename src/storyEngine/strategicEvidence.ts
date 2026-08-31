@@ -13,8 +13,11 @@ export const strategicIssue = (
 ): PlanValidationIssue => ({ code, path, message, severity: 'error' });
 
 export const isMeaningfulText = (value: string): boolean => {
-    const normalized = value.normalize('NFKC').trim().toLocaleLowerCase('en-US');
-    return !['none', 'no cost', 'no tradeoff', 'not applicable', 'n/a', 'na'].includes(normalized);
+    const normalized = value.normalize('NFKC').toLocaleLowerCase('en-US')
+        .replace(/[\p{P}\p{S}]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return !['none', 'no cost', 'no tradeoff', 'not applicable', 'n a', 'na'].includes(normalized);
 };
 
 export const factExists = (context: PlannerContext, factId: string): boolean =>

@@ -5,7 +5,6 @@ import { WriterChapterPlan } from './plannerTypes';
 import { buildValidatorContext, ValidatorContext, ValidatorContextCapacityError, ValidatorContextSelectionPolicy } from './validatorContext';
 import { buildSemanticValidatorPrompt, parseSemanticValidationResult, SemanticValidatorModel } from './semanticValidator';
 import { buildValidationReport, createValidationIssue, RepairCandidateSnapshot, ValidationIssue, ValidationIssueCode, ValidationReport } from './validationTypes';
-import type { ValidatorStrategicView } from './strategicTypes';
 
 const controlMarkup = /<\/?(?:CHAPTER|STORY_SUMMARY|NEW_CHARACTER|WRITER_CONTEXT|WRITER_CHAPTER_PLAN|PLANNER_CONTEXT|FULL_STORY_CONTROL|STORY_STATE)\b[^>]*>/i;
 const metadataAssignment = /\b(?:STORY_SUMMARY|NEW_CHARACTER)\b\s*[:=]/i;
@@ -57,7 +56,8 @@ export interface ValidateWriterChapterRequest {
     readonly semanticModel: SemanticValidatorModel;
     readonly validationPass?: number;
     readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
-    readonly strategicView?: ValidatorStrategicView;
+    /** Runtime-untrusted input. buildValidatorContext strictly reconstructs the privileged view. */
+    readonly strategicView?: unknown;
 }
 
 export interface ParsedWriterChapterValidationResult {

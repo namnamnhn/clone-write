@@ -3,8 +3,13 @@ import { WriterChapterPlan } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { buildWriterContext } from './writerContext';
 import { WriterContext } from './writerTypes';
+import { buildPlannerContext } from './contextBuilder';
 import { buildValidatorPlotView, PlotGuidanceCapacityError, ValidatorPlotView } from './plotContext';
-import { cloneValidatorStrategicView, StrategicContextCapacityError } from './strategicContext';
+import {
+    parseValidatorStrategicView,
+    StrategicContextCapacityError,
+    writerStrategicDirectiveMatchesValidatorAction,
+} from './strategicContext';
 import type { ValidatorStrategicView } from './strategicTypes';
 
 export interface ValidatorContextSelectionPolicy {
@@ -101,7 +106,7 @@ export const buildValidatorContext = (
     state: StoryState,
     plan: WriterChapterPlan,
     selectionPolicy: ValidatorContextSelectionPolicy = DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
-    suppliedStrategicView?: ValidatorStrategicView,
+    suppliedStrategicView?: unknown,
 ): ValidatorContext => {
     const policy = normalizeSelectionPolicy(selectionPolicy);
     const writerContext = buildWriterContext(control, state, plan);
@@ -150,8 +155,12 @@ export const buildValidatorContext = (
     }
     let strategicView: ValidatorStrategicView | undefined;
     try {
-        strategicView = suppliedStrategicView === undefined ? undefined
-            : cloneValidatorStrategicView(suppliedStrategicView, chapter, policy.maxStrategicItems ?? 256);
+        if (suppliedStrategicView !== undefined) {
+            const plannerContext = buildPlannerContext(control, state, chapter);
+            strategicView = parseValidatorStrategicView(
+                suppliedStrategicView, chapter, policy.maxStrategicItems ?? 256, plannerContext,
+            );
+        }
     } catch (error) {
         if (error instanceof StrategicContextCapacityError) throw new ValidatorContextCapacityError(error.message);
         throw error;
@@ -161,8 +170,7 @@ export const buildValidatorContext = (
         const directives = writerContext.chapterPlan.strategicDirectives ?? [];
         if (directives.length !== strategicView.actions.length || strategicView.actions.some((action) => {
             const directive = directives.find(candidate => candidate.id === action.id);
-            return !directive || directive.domain !== action.domain || directive.actorCharacterId !== action.actorCharacterId
-                || directive.sceneIds.join('\u0000') !== action.sceneIds.join('\u0000');
+            return directive === undefined || !writerStrategicDirectiveMatchesValidatorAction(directive, action);
         })) throw new Error('validator strategic view does not match the writer-safe plan projection');
     }
     return {

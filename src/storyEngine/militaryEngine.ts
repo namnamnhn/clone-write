@@ -19,13 +19,24 @@ const firstSceneOrder = (action: MilitaryActionPlan, plan: InternalChapterPlan):
     return Math.min(...orders);
 };
 
-const hasPriorMovement = (action: MilitaryActionPlan, plan: InternalChapterPlan): boolean =>
-    (plan.strategicActions ?? []).some(candidate => candidate.domain === 'military'
-        && candidate.id !== action.id
-        && candidate.actorCharacterId === action.actorCharacterId
-        && candidate.operationType === 'march'
-        && candidate.movement?.toLocation === action.location
-        && firstSceneOrder(candidate, plan) <= firstSceneOrder(action, plan));
+const resolvedLocationBeforeAction = (
+    action: MilitaryActionPlan,
+    plan: InternalChapterPlan,
+    canonicalLocation: string,
+): string => (plan.strategicActions ?? [])
+    .map((candidate, index) => ({ candidate, index }))
+    .filter((entry): entry is { readonly candidate: MilitaryActionPlan; readonly index: number } =>
+        entry.candidate.domain === 'military'
+        && entry.candidate.id !== action.id
+        && entry.candidate.actorCharacterId === action.actorCharacterId
+        && firstSceneOrder(entry.candidate, plan) < firstSceneOrder(action, plan))
+    .sort((left, right) => firstSceneOrder(left.candidate, plan) - firstSceneOrder(right.candidate, plan)
+        || left.index - right.index)
+    .reduce((location, entry) => {
+        const movement = entry.candidate.movement;
+        return movement?.transitChapters === 0 && movement.fromLocation === location
+            ? movement.toLocation : location;
+    }, canonicalLocation);
 
 /** Pure logistics/epistemic checks. No combat winner or probability is produced. */
 export const validateMilitaryAction = (
@@ -81,21 +92,35 @@ export const validateMilitaryAction = (
                 issues.push(strategicIssue('MILITARY_LOGISTICS_VIOLATION', `${path}.resourceEffects`, 'numeric supply consumption must be represented exactly as a resource effect'));
             }
         }
+        if (!isMeaningfulText(logistics.resupplyOrFallback)) {
+            issues.push(strategicIssue('MILITARY_LOGISTICS_VIOLATION', `${path}.logistics.resupplyOrFallback`, 'logistics requires a meaningful resupply or fallback plan'));
+        }
     }
 
     const actor = context.availableCharacters.find(character => character.id === action.actorCharacterId);
-    if (actor?.location !== undefined && actor.location !== action.location) {
-        const hasInlineMovement = action.movement?.fromLocation === actor.location
-            && action.movement.toLocation === action.location;
-        if (!hasInlineMovement && !hasPriorMovement(action, plan)) {
-            issues.push(strategicIssue('MILITARY_LOCATION_VIOLATION', `${path}.location`, 'operation location conflicts with canonical actor location and has no movement step'));
-        }
-    }
     if (action.movement !== undefined) {
         const transit = action.movement.transitChapters;
         if (transit !== 'unknown' && (!Number.isSafeInteger(transit) || transit < 0)) {
             issues.push(strategicIssue('MILITARY_LOCATION_VIOLATION', `${path}.movement.transitChapters`, 'movement time must be a non-negative safe integer or unknown'));
         }
+    }
+    if (actor?.location !== undefined) {
+        const resolvedLocation = resolvedLocationBeforeAction(action, plan, actor.location);
+        const movementStartsHere = action.movement?.fromLocation === resolvedLocation;
+        const movementTargetsOperation = action.movement?.toLocation === action.location;
+        const completesThisChapter = action.movement?.transitChapters === 0;
+        const validJourneyStart = action.operationType === 'march' && movementStartsHere && movementTargetsOperation;
+        const validInlineArrival = movementStartsHere && movementTargetsOperation && completesThisChapter;
+        if (resolvedLocation !== action.location && !validJourneyStart && !validInlineArrival) {
+            issues.push(strategicIssue('MILITARY_LOCATION_VIOLATION', `${path}.location`, 'operation location is not reached by a strictly earlier or current-chapter-completable movement'));
+        } else if (action.movement !== undefined && resolvedLocation === action.location
+            && action.movement.fromLocation !== resolvedLocation) {
+            issues.push(strategicIssue('MILITARY_LOCATION_VIOLATION', `${path}.movement.fromLocation`, 'movement must start at the deterministically resolved same-plan location'));
+        }
+    }
+
+    if (!isMeaningfulText(action.retreatOrFailurePlan)) {
+        issues.push(strategicIssue('MILITARY_LOGISTICS_VIOLATION', `${path}.retreatOrFailurePlan`, 'military action requires a meaningful retreat or failure plan'));
     }
 
     const hasNumericCost = action.resourceEffects.some(effect => effect.quantityDelta < 0)

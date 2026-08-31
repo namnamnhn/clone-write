@@ -191,8 +191,7 @@ export interface StrategicValidationResult {
     readonly issues: readonly PlanValidationIssue[];
 }
 
-/** Deliberately reduced prose-facing projection. It excludes evidence and opponent epistemics. */
-export interface WriterStrategicDirective {
+interface WriterStrategicDirectiveBase {
     readonly id: StoryId;
     readonly domain: StrategicDomain;
     readonly sceneIds: readonly StoryId[];
@@ -200,20 +199,60 @@ export interface WriterStrategicDirective {
     readonly visibleObjective: string;
     readonly visibleConstraints: readonly string[];
     readonly expectedCostOrTradeoff: string;
-    readonly visibleOperationalRequirements: readonly string[];
 }
 
-export interface ValidatorStrategicActionDescriptor {
-    readonly id: StoryId;
-    readonly domain: StrategicDomain;
-    readonly sceneIds: readonly StoryId[];
-    readonly actorCharacterId: StoryId;
+export interface WriterPoliticalDirective extends WriterStrategicDirectiveBase {
+    readonly domain: 'politics';
+    readonly dimensionStatuses: readonly {
+        readonly dimension: PoliticalDimension;
+        readonly status: StrategicAssessmentStatus;
+    }[];
+    readonly timing: PoliticalTiming;
+}
+
+export interface WriterMilitaryDirective extends WriterStrategicDirectiveBase {
+    readonly domain: 'military';
+    readonly operationType: MilitaryOperationType;
+    readonly location: string;
+    readonly movement?: MilitaryMovementPlan;
+    readonly logistics?: MilitaryLogisticsPlan;
+    readonly expectedLossOrCost: string;
+    readonly retreatOrFailurePlan: string;
+}
+
+export interface WriterCommerceDirective extends WriterStrategicDirectiveBase {
+    readonly domain: 'commerce';
+    readonly actionType: CommerceActionType;
+    readonly resourceFlows: readonly CommerceResourceFlow[];
+    readonly counterpartyCharacterId?: StoryId;
+    readonly marketSource?: string;
+    readonly serviceOrContractBasis?: string;
+    readonly logistics: string;
+    readonly timing: CommerceTiming;
+    readonly risk: string;
+    readonly competitorCharacterId?: StoryId;
+    readonly fundingResource?: { readonly characterId: StoryId; readonly resourceId: StoryId };
+}
+
+/** Deliberately reduced prose-facing projection. It excludes evidence and opponent epistemics. */
+export type WriterStrategicDirective =
+    | WriterPoliticalDirective
+    | WriterMilitaryDirective
+    | WriterCommerceDirective;
+
+interface ValidatorStrategicEvidenceDescriptor {
     readonly opponentCharacterId?: StoryId;
     readonly evidenceRefs: readonly StrategicEvidenceRef[];
     readonly resourceKeys: readonly string[];
     readonly actorKnowledgeFactIds: readonly StoryId[];
     readonly opponentKnowledgeFactIds: readonly StoryId[];
 }
+
+/** Privileged, bounded descriptor: Writer contract plus evidence identities, never evidence prose. */
+export type ValidatorStrategicActionDescriptor =
+    | (WriterPoliticalDirective & ValidatorStrategicEvidenceDescriptor)
+    | (WriterMilitaryDirective & ValidatorStrategicEvidenceDescriptor)
+    | (WriterCommerceDirective & ValidatorStrategicEvidenceDescriptor);
 
 export interface ValidatorStrategicView {
     readonly kind: 'validator-strategic-view';

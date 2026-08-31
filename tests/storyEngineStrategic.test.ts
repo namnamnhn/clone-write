@@ -6,6 +6,7 @@ import {
     buildWriterContext,
     compileStoryControl,
     createInitialStoryState,
+    generateWriterDraft,
     InternalChapterPlan,
     MILITARY_READINESS_DIMENSIONS,
     parseInternalChapterPlan,
@@ -15,6 +16,7 @@ import {
     StrategicActionPlan,
     StoryBlueprint,
     validateAndRepairWriterChapter,
+    validateWriterChapter,
     validateInternalChapterPlan,
     validateStrategicActions,
 } from '../src/storyEngine';
@@ -140,11 +142,11 @@ const militaryAction = (): Extract<StrategicActionPlan, { domain: 'military' }> 
     resourceEffects: [{ characterId: 'a', resourceId: 'supply', quantityDelta: -20 }],
     logistics: {
         supplyResource: { characterId: 'a', resourceId: 'supply' }, expectedSupplyConsumption: 20,
-        mobilityResource: { characterId: 'a', resourceId: 'mobility' }, movementConstraint: 'Wagons use the pass.',
-        operationalTimeChapters: 2, resupplyOrFallback: 'Withdraw to the depot if supply fails.',
+        mobilityResource: { characterId: 'a', resourceId: 'mobility' }, movementConstraint: 'Wagons use the northern pass.',
+        operationalTimeChapters: 2, resupplyOrFallback: 'Withdraw to the river depot.',
     },
-    movement: { fromLocation: 'Capital', toLocation: 'Frontier', method: 'march', transitChapters: 2 },
-    expectedLossOrCost: 'The assault risks casualties.', retreatOrFailurePlan: 'Withdraw to the depot.',
+    movement: { fromLocation: 'Capital', toLocation: 'Frontier', method: 'march', transitChapters: 0 },
+    expectedLossOrCost: 'The vanguard may be depleted.', retreatOrFailurePlan: 'Withdraw to the river depot.',
 });
 
 const militaryPlan = (action = militaryAction()): InternalChapterPlan => ({
@@ -242,6 +244,69 @@ describe('WORK 07 military logistics engine', () => {
         };
         expect(codesFor({ ...militaryPlan(free), expectedResourceDeltas: [] })).toContain('MILITARY_COST_MISSING');
     });
+
+    it('defines transitChapters as later transitions and only permits inline current-chapter arrival at zero', () => {
+        const action = militaryAction();
+        for (const transitChapters of [2, 'unknown'] as const) {
+            expect(codesFor(militaryPlan({
+                ...action, movement: { ...action.movement!, transitChapters },
+            }))).toContain('MILITARY_LOCATION_VIOLATION');
+        }
+        expect(codesFor(militaryPlan({
+            ...action, movement: { ...action.movement!, transitChapters: 0 },
+        }))).not.toContain('MILITARY_LOCATION_VIOLATION');
+        expect(codesFor(militaryPlan({ ...action, movement: undefined }), {
+            ...stateFor(), characterLocations: { ...stateFor().characterLocations, a: 'Frontier' },
+        })).not.toContain('MILITARY_LOCATION_VIOLATION');
+    });
+
+    it('replays only completed movement from strictly earlier scenes', () => {
+        const assault = { ...militaryAction(), movement: undefined, sceneIds: ['assault-scene'] };
+        const march = (transitChapters: number) => ({
+            ...militaryAction(), id: 'march-action', sceneIds: ['march-scene'], importance: 'minor' as const,
+            operationType: 'march' as const, resourceEffects: [], logistics: undefined,
+            movement: { fromLocation: 'Capital', toLocation: 'Frontier', method: 'march', transitChapters },
+            expectedCostOrTradeoff: 'The march consumes time.', expectedLossOrCost: 'The column risks fatigue.',
+            retreatOrFailurePlan: 'Return to the capital.', countermove: undefined,
+            noCountermoveReason: 'No organized response occurs during the march.',
+        });
+        const twoScenePlan = (transitChapters: number): InternalChapterPlan => {
+            const original = militaryPlan();
+            const conflict = original.scenes[0].intelligentConflict;
+            return {
+                ...original,
+                scenes: [
+                    { ...original.scenes[0], id: 'march-scene', order: 1, conflictImportance: 'minor', intelligentConflict: undefined },
+                    { ...original.scenes[0], id: 'assault-scene', order: 2, intelligentConflict: conflict },
+                ],
+                strategicActions: [march(transitChapters), assault],
+                expectedResourceDeltas: assault.resourceEffects.map(effect => ({ ...effect })),
+            };
+        };
+        expect(codesFor(twoScenePlan(0))).not.toContain('MILITARY_LOCATION_VIOLATION');
+        expect(codesFor(twoScenePlan(2))).toContain('MILITARY_LOCATION_VIOLATION');
+
+        const sameScene = militaryPlan();
+        const sameSceneMarch = { ...march(0), sceneIds: ['military-scene'] };
+        expect(codesFor({ ...sameScene, strategicActions: [sameSceneMarch, { ...militaryAction(), movement: undefined }] }))
+            .toContain('MILITARY_LOCATION_VIOLATION');
+    });
+
+    it('rejects punctuation-only variants of fake costs and fallback text', () => {
+        const action = militaryAction();
+        const fake = {
+            ...action,
+            expectedCostOrTradeoff: 'none.', expectedLossOrCost: 'no cost.', retreatOrFailurePlan: 'N/A.',
+            resourceEffects: [],
+            logistics: {
+                ...action.logistics!, expectedSupplyConsumption: 'unknown' as const,
+                operationalTimeChapters: 'unknown' as const, resupplyOrFallback: 'no tradeoff!',
+            },
+        };
+        const codes = codesFor({ ...militaryPlan(fake), expectedResourceDeltas: [] });
+        expect(codes).toContain('MILITARY_COST_MISSING');
+        expect(codes).toContain('MILITARY_LOGISTICS_VIOLATION');
+    });
 });
 
 describe('WORK 07 commerce engine', () => {
@@ -293,6 +358,159 @@ describe('WORK 07 commerce engine', () => {
 });
 
 describe('WORK 07 shared contracts and boundaries', () => {
+    it('preserves concrete writer-safe domain contracts through WriterModelRequest', async () => {
+        const requests: unknown[] = [];
+        const model = {
+            async write(request: unknown) {
+                requests.push(request);
+                return { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A executes the supplied plan.' };
+            },
+        };
+        for (const plan of [militaryPlan(), commercePlan(), basePlan('politics', politicalAction())]) {
+            await generateWriterDraft({ control, state: stateFor(), plan: sanitizeWriterChapterPlan(plan, control, stateFor()), model });
+        }
+        const [militaryRequest, commerceRequest, politicsRequest] = requests.map(request => JSON.stringify(request));
+        expect(militaryRequest).toContain('Wagons use the northern pass.');
+        expect(militaryRequest).toContain('Withdraw to the river depot.');
+        expect(militaryRequest).toContain('The vanguard may be depleted.');
+        expect(militaryRequest).toContain('"transitChapters":0');
+        expect(commerceRequest).toContain('"counterpartyCharacterId":"b"');
+        expect(commerceRequest).toContain('B delivers grain by cart.');
+        expect(commerceRequest).toContain('"settlementChapters":1');
+        expect(commerceRequest).toContain('The carts may be delayed.');
+        expect(politicsRequest).toContain('"preparationChapters":2');
+        expect(politicsRequest).toContain('"dimensionStatuses"');
+        requests.forEach((request) => {
+            const payload = JSON.stringify(request);
+            expect(payload).not.toContain('evidenceRefs');
+            expect(payload).not.toContain('opponentKnowledgeFactIds');
+            expect(payload).not.toContain('opponent-fact');
+        });
+    });
+
+    it('runtime-revalidates every discriminated Writer strategic directive field', () => {
+        const militaryWriterPlan = sanitizeWriterChapterPlan(militaryPlan(), control, stateFor());
+        const directive = militaryWriterPlan.strategicDirectives![0];
+        if (directive.domain !== 'military') throw new Error('expected military fixture');
+        const malformed: readonly unknown[] = [
+            { ...directive, unsupported: { hidden: true } },
+            { ...directive, domain: 'politics' },
+            { ...directive, movement: { ...directive.movement!, transitChapters: Number.NaN } },
+            { ...directive, logistics: { ...directive.logistics!, expectedSupplyConsumption: Number.POSITIVE_INFINITY } },
+            { ...directive, sceneIds: ['unknown-scene'] },
+            { ...directive, actorCharacterId: 'future' },
+        ];
+        malformed.forEach((entry) => {
+            const runtimePlan = { ...militaryWriterPlan, strategicDirectives: [entry] } as unknown as typeof militaryWriterPlan;
+            expect(() => buildWriterContext(control, stateFor(), runtimePlan)).toThrow();
+        });
+
+        const commerceWriterPlan = sanitizeWriterChapterPlan(commercePlan(), control, stateFor());
+        const commerceDirective = commerceWriterPlan.strategicDirectives![0];
+        if (commerceDirective.domain !== 'commerce') throw new Error('expected commerce fixture');
+        const inconsistent = {
+            ...commerceDirective,
+            resourceFlows: commerceDirective.resourceFlows.map((flow, index) => index === 0 ? { ...flow, quantityDelta: 999 } : flow),
+        };
+        expect(() => buildWriterContext(control, stateFor(), {
+            ...commerceWriterPlan, strategicDirectives: [inconsistent],
+        })).toThrow('do not match expectedResourceDeltas');
+    });
+
+    it('retains the same operational contract in ValidatorStrategicView', () => {
+        const plannerContext = buildPlannerContext(control, stateFor(), 100);
+        const militaryView = JSON.stringify(buildValidatorStrategicView(militaryPlan(), plannerContext));
+        const commerceView = JSON.stringify(buildValidatorStrategicView(commercePlan(), plannerContext));
+        expect(militaryView).toContain('Wagons use the northern pass.');
+        expect(militaryView).toContain('Withdraw to the river depot.');
+        expect(militaryView).toContain('The vanguard may be depleted.');
+        expect(commerceView).toContain('"counterpartyCharacterId":"b"');
+        expect(commerceView).toContain('B delivers grain by cart.');
+        expect(commerceView).toContain('The carts may be delayed.');
+    });
+
+    it('rejects a stale same-identity strategic view before SemanticValidatorModel', async () => {
+        const source = militaryPlan();
+        const strategicView = buildValidatorStrategicView(source, buildPlannerContext(control, stateFor(), 100));
+        const changedAction = {
+            ...militaryAction(),
+            logistics: { ...militaryAction().logistics!, resupplyOrFallback: 'Withdraw to the eastern depot.' },
+        };
+        const changedPlan = militaryPlan(changedAction);
+        const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const result = await validateWriterChapter({
+            control, state: stateFor(), plan: sanitizeWriterChapterPlan(changedPlan, control, stateFor()), strategicView,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A attacks.' },
+            semanticModel: { validate: semantic },
+        });
+        expect(result.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+        expect(semantic).not.toHaveBeenCalled();
+    });
+
+    it('strictly rejects malformed privileged strategic views before Validator or Repair models', async () => {
+        const internal = commercePlan();
+        const valid = buildValidatorStrategicView(internal, buildPlannerContext(control, stateFor(), 100));
+        const firstAction = valid.actions[0];
+        const firstEvidence = firstAction.evidenceRefs[0];
+        const firstResource = valid.resourceEvidence[0];
+        const firstEpistemic = valid.epistemicEvidence[0];
+        const malformed: readonly unknown[] = [
+            { ...valid, unsupportedTopLevel: true },
+            { ...valid, actions: [{ ...firstAction, evidenceRefs: [{ ...firstEvidence, extra: 'blocked' }] }] },
+            { ...valid, actions: [{ ...firstAction, evidenceRefs: [{ ...firstEvidence, hiddenPayload: { nested: { arbitrary: 'blocked' } } }] }] },
+            { ...valid, actions: [{ ...firstAction, evidenceRefs: [{ type: 'fake-evidence', id: 'x' }] }] },
+            { ...valid, resourceEvidence: [{ ...firstResource, quantity: Number.NaN }] },
+            { ...valid, resourceEvidence: [{ ...firstResource, quantity: Number.POSITIVE_INFINITY }] },
+            { ...valid, resourceEvidence: [{ characterId: 'a', resourceId: 'invented', quantity: 999 }] },
+            { ...valid, epistemicEvidence: [{ characterId: 'b', factId: 'actor-fact' }] },
+            { ...valid, actions: [{ ...firstAction, evidenceRefs: [firstEvidence, firstEvidence] }] },
+            { ...valid, actions: [{ ...firstAction, resourceKeys: [firstAction.resourceKeys[0], firstAction.resourceKeys[0]] }] },
+            { ...valid, resourceEvidence: [firstResource, firstResource] },
+            { ...valid, epistemicEvidence: [firstEpistemic, firstEpistemic] },
+            { ...valid, deterministicIssues: [{ code: 'ARBITRARY_ISSUE', path: 'x', severity: 'error' }] },
+        ];
+        for (const strategicView of malformed) {
+            const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+            const result = await validateWriterChapter({
+                control, state: stateFor(), plan: sanitizeWriterChapterPlan(internal, control, stateFor()), strategicView,
+                draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A purchases grain.' },
+                semanticModel: { validate: semantic },
+            });
+            expect(result.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+            expect(semantic).not.toHaveBeenCalled();
+        }
+
+        const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const repair = vi.fn(async () => ({ kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'repaired' }));
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(), plan: sanitizeWriterChapterPlan(internal, control, stateFor()), strategicView: malformed[1],
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A purchases grain.' },
+            semanticModel: { validate: semantic }, repairModel: { repair }, maxRepairAttempts: 2,
+        });
+        expect(result.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+        expect(semantic).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
+    });
+
+    it('classifies sanitized strategic-view overflow as validator capacity failure', async () => {
+        const internal = commercePlan();
+        const strategicView = buildValidatorStrategicView(internal, buildPlannerContext(control, stateFor(), 100));
+        const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const repair = vi.fn(async () => ({ kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'repaired' }));
+        const result = await validateAndRepairWriterChapter({
+            control, state: stateFor(), plan: sanitizeWriterChapterPlan(internal, control, stateFor()), strategicView,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A purchases grain.' },
+            semanticModel: { validate: semantic }, repairModel: { repair }, maxRepairAttempts: 2,
+            validatorContextSelectionPolicy: {
+                maxLockedCharacters: 64, maxLockedReveals: 128, maxLockedRelationshipEvents: 128,
+                maxLockedStoryEvents: 128, maxSecretValidationItems: 128, maxPlotItems: 256, maxStrategicItems: 1,
+            },
+        });
+        expect(result.report.issues.map(issue => issue.code)).toContain('VALIDATOR_CONTEXT_CAPACITY_EXCEEDED');
+        expect(semantic).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
+    });
+
     it('normalizes legacy plans to no actions and requires exact domain scene coverage', () => {
         const legacy = { ...basePlan('politics') } as Record<string, unknown>;
         delete legacy.strategicActions;
