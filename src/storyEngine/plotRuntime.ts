@@ -179,6 +179,7 @@ export const validatePlotReferences = (plot: PlotLedgers, currentChapter: number
         if (!thread) fail('REFERENTIAL_INTEGRITY_FAILURE', 'unknown foreshadow thread', `${path}.threadId`);
         if (value.chapterNumber > currentChapter || value.chapterNumber < thread.openedChapter) fail('TEMPORAL_VIOLATION', 'invalid foreshadow lifecycle chapter', path);
         if (value.status === 'paid' && !(seedCuesByThread.get(value.threadId) ?? []).some(seed => seed.chapterNumber <= value.chapterNumber)) fail('REFERENTIAL_INTEGRITY_FAILURE', 'paid foreshadow thread lacks a prior seed', path);
+        if (plot.foreshadowCues.some(cue => cue.threadId === value.threadId && cue.chapterNumber > value.chapterNumber)) fail('TEMPORAL_VIOLATION', 'foreshadow cue occurs after thread closure', path);
     });
     const lifecycleThreadIds = plot.foreshadowLifecycle.map(value => value.threadId); if (new Set(lifecycleThreadIds).size !== lifecycleThreadIds.length) fail('CONFLICTING_OPERATION', 'foreshadow thread already closed', 'state.ledgers.foreshadowLifecycle');
     plot.payoffObligations.forEach((value, index) => {

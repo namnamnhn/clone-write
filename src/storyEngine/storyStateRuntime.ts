@@ -542,6 +542,9 @@ function validateCanonicalSecretIsolation(control: FullStoryControl, state: Stor
         ...state.ledgers.foreshadowThreads.map(value => [value.writerLabel, 'state.ledgers.foreshadowThreads'] as [string, string]),
         ...state.ledgers.foreshadowCues.map(value => [value.writerText, 'state.ledgers.foreshadowCues'] as [string, string]),
         ...state.ledgers.payoffObligations.map(value => [value.writerLabel, 'state.ledgers.payoffObligations'] as [string, string]),
+        ...[state.continuity.timelinePosition, state.continuity.lastScene]
+            .filter((text): text is string => text !== undefined)
+            .map(text => [text, 'state.continuity'] as [string, string]),
     ];
     values.forEach(([value, path]) => rejectRawSecretText(control, value, path));
 }

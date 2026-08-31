@@ -18,7 +18,10 @@ import {
     isStoryEventAllowed,
 } from './gates';
 import { isValidChapter } from './storyControl';
-import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
+import {
+    assertModelBoundaryStringsSecretSafe,
+    assertWriterFacingControlSecretSafe,
+} from './secretTextSafety';
 import { buildPlannerPlotGuidance } from './plotContext';
 import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
@@ -187,7 +190,7 @@ export const buildPlannerContext = (
     const makeGateStatus = (ids: readonly StoryId[], allowed: (id: StoryId) => boolean) => ids
         .map(id => ({ id, allowed: allowed(id) }));
 
-    return {
+    const context: PlannerContext = {
         kind: 'planner-context',
         storyControlId: control.id,
         targetChapter,
@@ -245,4 +248,6 @@ export const buildPlannerContext = (
         narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
         plotGuidance: buildPlannerPlotGuidance(control, state, targetChapter),
     };
+    assertModelBoundaryStringsSecretSafe(control, context, 'plannerContext');
+    return context;
 };

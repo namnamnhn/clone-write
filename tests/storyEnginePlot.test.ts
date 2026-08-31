@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-    applyStoryStateDelta, buildPlannerContext, buildPlannerPlotGuidance, buildValidatorPlotView, buildWriterContext, buildWriterSafeContext, createInitialStoryState,
+    applyStoryStateDelta, buildPlannerContext, buildPlannerPlotGuidance, buildValidatorPlotView, buildWriterContext, buildWriterSafeContext, createInitialStoryState, createStructuredPlanner,
     generateWriterDraft, getAuthorSecretStatus, getDuePayoffs, getForeshadowCues, getForeshadowReinforcementAge,
     getForeshadowThreadStatus, getOpenForeshadowThreads, getOverduePayoffs, getPayoffStatus,
     getPayoffUrgency, getRevealOccurrence, hasRevealOccurred, parseStoryState, parseStoryStateDelta, PlotGuidanceCapacityError,
@@ -49,6 +49,79 @@ const writerPlan = (revealText = 'LOCKED_REVEAL_WRITER_TEXT'): WriterChapterPlan
 });
 
 describe('Story Engine V4 canonical plot control', () => {
+    it('protects the complete PlannerContext boundary, including selected narrative memory', async () => {
+        const rawSecret = 'RAW_AUTHOR_SECRET_ABC';
+        const unsafeMemories = [
+            { recentRawChapters: [{ chapterNumber: 559, text: rawSecret }] },
+            { structuredRecentSummaries: [{ chapterNumber: 559, summary: `Summary: ${rawSecret}` }] },
+            { selectedLongTermMemories: [{ id: 'memory', establishedChapter: 559, summary: rawSecret }] },
+        ];
+        let unsafePlannerCalls = 0;
+        for (const memory of unsafeMemories) {
+            try {
+                const unsafeContext = buildPlannerContext(control, state560, 560, memory);
+                await createStructuredPlanner({ async plan() { unsafePlannerCalls += 1; return {}; } }).plan(unsafeContext);
+                throw new Error('expected PlannerContext secret rejection');
+            } catch (error) {
+                expect(error).toMatchObject({ name: 'WriterFacingSecretBoundaryError' });
+                expect((error as Error).message).not.toContain(rawSecret);
+            }
+        }
+        expect(unsafePlannerCalls).toBe(0);
+
+        const safeContext = buildPlannerContext(control, state560, 560, {
+            recentRawChapters: [{ chapterNumber: 559, text: 'A safe recent scene.' }],
+            structuredRecentSummaries: [{ chapterNumber: 559, summary: 'A safe structured summary.' }],
+            selectedLongTermMemories: [{ id: 'safe-memory', establishedChapter: 500, summary: 'A safe long-term memory.' }],
+        });
+        let plannerRequest = '';
+        await createStructuredPlanner({ async plan(context) {
+            plannerRequest = JSON.stringify(context);
+            return {
+                kind: 'internal-chapter-plan', chapterNumber: 560, arcId: 'arc', primaryGoal: 'Advance safely.',
+                povCharacterId: 'a', participantIds: ['a'], scenes: [{ id: 'scene', order: 1, goal: 'Advance.', location: 'Road', povCharacterId: 'a', participantIds: ['a'], conflictOrObstacle: 'Delay.', uncertainty: 'Timing.', expectedConsequence: 'Progress.', purposeTags: ['plot'], conflictImportance: 'minor' }],
+                activeConstraintIds: [], allowedRevealIds: [], plannedRevealIds: [], relationshipEventIds: [], storyEventIds: [], cluesPlantedIds: [], cluesPaidOffIds: [],
+                expectedResourceDeltas: [], expectedRelationshipDeltas: [], expectedContinuityConsequences: [], endStateIntent: 'Stop after progress.',
+            };
+        } }).plan(safeContext);
+        expect(plannerRequest).not.toContain(rawSecret);
+    });
+
+    it('protects final PlannerPlotGuidance projections from fabricated state text', () => {
+        const rawSecret = 'RAW_AUTHOR_SECRET_ABC';
+        const base = advance(25);
+        const variants: StoryState[] = [
+            { ...base, ledgers: { ...base.ledgers, foreshadowThreads: [{ id: 'unsafe-thread', writerLabel: rawSecret, openedChapter: 10, provenance: provenance(10) }] } },
+            { ...base, ledgers: { ...base.ledgers, payoffObligations: [{ id: 'unsafe-payoff', writerLabel: `Resolve ${rawSecret}`, openedChapter: 10, targetPayoffChapter: 25, provenance: provenance(10) }] } },
+        ];
+        variants.forEach((state) => {
+            try {
+                buildPlannerPlotGuidance(control, state, 25);
+                throw new Error('expected PlannerPlotGuidance secret rejection');
+            } catch (error) {
+                expect(error).toMatchObject({ name: 'WriterFacingSecretBoundaryError' });
+                expect((error as Error).message).not.toContain(rawSecret);
+            }
+        });
+    });
+
+    it('rejects protected text in independent legacy continuity fields without echoing it', () => {
+        const rawSecret = 'RAW_AUTHOR_SECRET_ABC';
+        const base = advance(25);
+        for (const continuity of [
+            { ...base.continuity, timelinePosition: rawSecret },
+            { ...base.continuity, lastScene: `Scene marker: ${rawSecret}` },
+        ]) {
+            try {
+                parseStoryState({ ...base, continuity }, control);
+                throw new Error('expected continuity secret rejection');
+            } catch (error) {
+                expect(error).toBeInstanceOf(StoryStateTransitionError);
+                expect((error as Error).message).not.toContain(rawSecret);
+            }
+        }
+    });
+
     it('blocks exact and embedded raw secrets in writer-facing control text at validation and runtime boundaries', async () => {
         const unsafe = (writerText: string): FullStoryControl => ({ ...control, reveals: [{ ...control.reveals[0], writerText }] });
         ['RAW_AUTHOR_SECRET_ABC', 'Public phrasing: RAW_AUTHOR_SECRET_ABC'].forEach((writerText) => {
@@ -228,6 +301,22 @@ describe('Story Engine V4 canonical plot control', () => {
         expect(() => parsePlot({ foreshadowThreads: [thread('f', 10, 'p')], payoffObligations: [payoff('p', 10, 'f')] })).not.toThrow();
         expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], payoffObligations: [payoff('p', 20, 'f')] })).not.toThrow();
         expect(() => parsePlot({ foreshadowThreads: [thread('f', 10)], foreshadowCues: [cue('seed', 'f', 10)], payoffObligations: [payoff('p', 10, 'f', true)], payoffLifecycle: [{ id: 'p-paid', payoffId: 'p', chapterNumber: 20, status: 'paid', provenance: provenance(20) }] })).not.toThrow();
+    });
+
+    it('rejects persisted foreshadow cues after closure and accepts same-chapter cues', () => {
+        const base = advance(25);
+        const thread = { id: 'f', writerLabel: 'Safe thread', openedChapter: 10, provenance: provenance(10) };
+        const seed = { id: 'seed', threadId: 'f', chapterNumber: 10, cueType: 'seed' as const, writerText: 'Safe seed.', provenance: provenance(10) };
+        const reinforcement = (id: string, chapterNumber: number) => ({ id, threadId: 'f', chapterNumber, cueType: 'reinforcement' as const, writerText: 'Safe reinforcement.', provenance: provenance(chapterNumber) });
+        const parseHistory = (status: 'paid' | 'superseded', cues: StoryState['ledgers']['foreshadowCues']) => parseStoryState({
+            ...base,
+            ledgers: { ...base.ledgers, foreshadowThreads: [thread], foreshadowCues: cues, foreshadowLifecycle: [{ id: `close-${status}`, threadId: 'f', chapterNumber: 20, status, provenance: provenance(20) }] },
+        }, control);
+        expect(() => parseHistory('paid', [seed, reinforcement('late-paid', 21)])).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
+        expect(() => parseHistory('superseded', [seed, reinforcement('late-superseded', 21)])).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
+        expect(() => parseHistory('paid', [seed, reinforcement('before-close', 15), reinforcement('second-after-close', 21)])).toThrowError(expect.objectContaining({ code: 'TEMPORAL_VIOLATION' }));
+        expect(() => parseHistory('paid', [seed, reinforcement('same-chapter', 20)])).not.toThrow();
+        expect(() => parseHistory('paid', [seed])).not.toThrow();
     });
 
     it('rejects state-independent plot conflicts during V2 parsing', () => {

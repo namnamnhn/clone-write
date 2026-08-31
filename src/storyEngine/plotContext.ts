@@ -4,6 +4,7 @@ import {
     getOpenForeshadowThreads, getOverduePayoffs, getPayoffStatus,
 } from './plotQueries';
 import type { FullStoryControl, StoryState } from './types';
+import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 
 export interface PlotGuidanceSelectionPolicy {
     readonly maxOpenForeshadowThreads: number;
@@ -74,7 +75,7 @@ export const buildPlannerPlotGuidance = (
     })).filter(value => value.chaptersSinceLastCue >= policy.reinforcementAfterChapters)
         .sort((a, b) => b.chaptersSinceLastCue - a.chaptersSinceLastCue || a.threadId.localeCompare(b.threadId))
         .slice(0, policy.maxReinforcementCandidates);
-    return {
+    const guidance: PlannerPlotGuidance = {
         targetChapter,
         eligibleReveals: getEligibleUnrevealedReveals(control, state, targetChapter).slice(0, policy.maxEligibleReveals),
         openForeshadowThreads: openProjection.slice(0, policy.maxOpenForeshadowThreads),
@@ -82,6 +83,8 @@ export const buildPlannerPlotGuidance = (
         duePayoffs: due.map(value => ({ id: value.id, writerLabel: value.writerLabel, urgency: 'due' as const })),
         overduePayoffs: overdue.map(value => ({ id: value.id, writerLabel: value.writerLabel, urgency: 'overdue' as const })),
     };
+    assertModelBoundaryStringsSecretSafe(control, guidance, 'plannerPlotGuidance');
+    return guidance;
 };
 
 export interface ValidatorPlotView {
