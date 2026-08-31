@@ -1,6 +1,11 @@
 import { CanonicalChapterCursor, ChapterNumber, StoryState } from './types';
 import { isValidChapter } from './storyControl';
 
+/**
+ * With no argument, creates the only canonical new-story state (cursor/revision 0).
+ * A positive cursor is retained solely for legacy context fixtures; revision remains zero,
+ * so strict canonical parsing deliberately rejects it as skipped history.
+ */
 export const createInitialStoryState = (currentChapter: CanonicalChapterCursor = 0): StoryState => {
     if (currentChapter !== 0 && !isValidChapter(currentChapter)) throw new Error('currentChapter must be zero or a positive integer');
     return {
@@ -23,7 +28,7 @@ export const createInitialStoryState = (currentChapter: CanonicalChapterCursor =
             notes: [],
         },
         ledgers: {
-            facts: [], epistemic: [], locations: [], statuses: [], relationships: [],
+            facts: [], epistemic: [], locations: [], statuses: [], characterStates: [], relationships: [],
             resources: [], continuity: [], events: [],
         },
         projections: { characters: [], relationships: [], resources: [] },

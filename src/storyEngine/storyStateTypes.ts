@@ -75,6 +75,16 @@ export interface CharacterStateProjection {
     readonly activeStatusIds: readonly StoryId[];
 }
 
+/** Authoritative append-only history behind CharacterStateProjection.active/lifeStatus. */
+export interface CharacterLifecycleRecord {
+    readonly id: StoryId;
+    readonly characterId: StoryId;
+    readonly chapterNumber: ChapterNumber;
+    readonly active: boolean;
+    readonly lifeStatus: 'unknown' | 'alive' | 'dead';
+    readonly provenance: FactProvenance;
+}
+
 export interface RelationshipHistoryRecord {
     readonly id: StoryId;
     readonly relationshipId: StoryId;
@@ -128,7 +138,7 @@ export interface CanonicalContinuityEntry {
 
 export const CANONICAL_EVENT_TYPES = [
     'fact-added', 'knowledge-added', 'belief-added', 'character-moved',
-    'status-added', 'status-resolved', 'relationship-changed', 'resource-changed',
+    'character-state-changed', 'status-added', 'status-resolved', 'relationship-changed', 'resource-changed',
     'continuity-opened', 'continuity-resolved', 'continuity-superseded',
 ] as const;
 export type CanonicalEventType = typeof CANONICAL_EVENT_TYPES[number];
@@ -146,6 +156,7 @@ export interface CanonicalLedgers {
     readonly epistemic: readonly EpistemicEntry[];
     readonly locations: readonly CharacterLocationRecord[];
     readonly statuses: readonly CharacterStatusRecord[];
+    readonly characterStates: readonly CharacterLifecycleRecord[];
     readonly relationships: readonly RelationshipHistoryRecord[];
     readonly resources: readonly ResourceLedgerRecord[];
     readonly continuity: readonly CanonicalContinuityEntry[];
