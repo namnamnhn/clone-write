@@ -19,6 +19,11 @@ import {
 } from './gates';
 import { isValidChapter } from './storyControl';
 import {
+    assertModelBoundaryStringsSecretSafe,
+    assertWriterFacingControlSecretSafe,
+} from './secretTextSafety';
+import { buildPlannerPlotGuidance } from './plotContext';
+import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
     LongTermMemory,
     NarrativeMemoryInput,
@@ -163,6 +168,7 @@ export const buildPlannerContext = (
     memoryInput?: NarrativeMemoryInput,
     memoryPolicy: NarrativeMemorySelectionPolicy = DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
 ): PlannerContext => {
+    assertWriterFacingControlSecretSafe(control);
     if (!isValidChapter(targetChapter) || targetChapter > control.engine.plannedChapterCount) {
         throw new Error('target chapter must be within the planned story range');
     }
@@ -184,7 +190,7 @@ export const buildPlannerContext = (
     const makeGateStatus = (ids: readonly StoryId[], allowed: (id: StoryId) => boolean) => ids
         .map(id => ({ id, allowed: allowed(id) }));
 
-    return {
+    const context: PlannerContext = {
         kind: 'planner-context',
         storyControlId: control.id,
         targetChapter,
@@ -240,5 +246,8 @@ export const buildPlannerContext = (
                 .map(rule => ({ id: rule.id, type: 'canon-rule' as const, referenceId: rule.id, writerText: rule.text })),
         ],
         narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
+        plotGuidance: buildPlannerPlotGuidance(control, state, targetChapter),
     };
+    assertModelBoundaryStringsSecretSafe(control, context, 'plannerContext');
+    return context;
 };

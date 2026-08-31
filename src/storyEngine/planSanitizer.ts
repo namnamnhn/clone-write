@@ -3,6 +3,7 @@ import { getArcForChapter, getBeatForChapter, isCharacterDirectAppearanceAllowed
 import { ChapterPlanValidationError, parseInternalChapterPlan, validateInternalChapterPlan } from './planValidator';
 import { InternalChapterPlan, PlanValidationIssue, WriterChapterPlan } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
+import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
 
 const gateIssue = (code: string, path: string, message: string): PlanValidationIssue => ({ code, path, message, severity: 'error' });
 
@@ -15,6 +16,7 @@ export const sanitizeWriterChapterPlan = (
     control: FullStoryControl,
     state: StoryState,
 ): WriterChapterPlan => {
+    assertWriterFacingControlSecretSafe(control);
     const parsed = parseInternalChapterPlan(internalPlan);
     if (!parsed.plan) throw new ChapterPlanValidationError(parsed.issues);
     const plan = parsed.plan;

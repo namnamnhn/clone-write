@@ -6,6 +6,7 @@ import {
     StoryId,
     WriterCharacterProfile,
 } from './types';
+import type { PlannerPlotGuidance } from './plotContext';
 
 export const SCENE_PURPOSE_TAGS = [
     'plot', 'character', 'resource', 'clue', 'relationship', 'consequence', 'world',
@@ -136,6 +137,7 @@ export interface PlannerContext {
     /** Only constraints currently applicable to this chapter; locked gates live in typed status/allow lists. */
     readonly activeHardConstraints: readonly PlannerHardConstraint[];
     readonly narrativeMemory: SelectedNarrativeMemory;
+    readonly plotGuidance: PlannerPlotGuidance;
 }
 
 export interface IntelligentConflictPlan {

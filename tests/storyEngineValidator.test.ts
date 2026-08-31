@@ -280,6 +280,28 @@ describe('Validator context and deterministic safety net', () => {
         expect(repair).not.toHaveBeenCalled();
     });
 
+    it('classifies validator plot-view overflow as context capacity infrastructure failure', async () => {
+        const sourceControl = structuredClone(control);
+        const state = stateFor(560);
+        const before = [sourceControl, state].map(value => JSON.stringify(value));
+        const validate = vi.fn();
+        const repair = vi.fn();
+        const result = await validateAndRepairWriterChapter({
+            control: sourceControl, state, plan: planFor(560), draft: draftFor(560), semanticModel: { validate }, repairModel: { repair },
+            validatorContextSelectionPolicy: { ...DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY, maxPlotItems: 0 },
+        });
+        expect(result.status).toBe('rejected');
+        expect(result.report.issues).toEqual([expect.objectContaining({
+            code: 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED', severity: 'critical', source: 'infrastructure', repairable: false,
+        })]);
+        expect(result.report.issues.map(issue => issue.code)).not.toContain('INVALID_SOURCE_PLAN');
+        expect(validate).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
+        expect([sourceControl, state].map(value => JSON.stringify(value))).toEqual(before);
+        expect(Object.isFrozen(sourceControl)).toBe(false);
+        expect(Object.isFrozen(state)).toBe(false);
+    });
+
     it('blocks a chapter 560 raw secret leak without echoing the secret in its report', async () => {
         const result = await validateWriterChapter({ control, state: stateFor(560), plan: planFor(560), draft: draftFor(560, `A realizes: ${RAW_SECRET}`), semanticModel: passingModel });
         expect(result.report.status).toBe('blocked');

@@ -3,6 +3,7 @@ import { WriterChapterPlan } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { buildWriterContext } from './writerContext';
 import { WriterContext } from './writerTypes';
+import { buildValidatorPlotView, PlotGuidanceCapacityError, ValidatorPlotView } from './plotContext';
 
 export interface ValidatorContextSelectionPolicy {
     readonly maxLockedCharacters: number;
@@ -10,6 +11,7 @@ export interface ValidatorContextSelectionPolicy {
     readonly maxLockedRelationshipEvents: number;
     readonly maxLockedStoryEvents: number;
     readonly maxSecretValidationItems: number;
+    readonly maxPlotItems?: number;
 }
 
 export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelectionPolicy = {
@@ -18,6 +20,7 @@ export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelecti
     maxLockedRelationshipEvents: 128,
     maxLockedStoryEvents: 128,
     maxSecretValidationItems: 128,
+    maxPlotItems: 256,
 };
 
 export class ValidatorContextCapacityError extends Error {
@@ -59,22 +62,25 @@ export interface ValidatorContext {
         readonly lockedStoryEvents: readonly LockedStoryEventDescriptor[];
     };
     readonly secretValidation: readonly ValidatorSecretDatum[];
+    readonly plotView: ValidatorPlotView;
 }
 
 /** Builds a target-scoped allow-list. It never spreads either source object or includes future arc prose. */
 const compareIds = (left: { readonly id: string }, right: { readonly id: string }): number => left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 
 const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): ValidatorContextSelectionPolicy => {
+    const normalized = { ...policy, maxPlotItems: policy.maxPlotItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxPlotItems };
     const keys: readonly (keyof ValidatorContextSelectionPolicy)[] = [
         'maxLockedCharacters', 'maxLockedReveals', 'maxLockedRelationshipEvents',
-        'maxLockedStoryEvents', 'maxSecretValidationItems',
+        'maxLockedStoryEvents', 'maxSecretValidationItems', 'maxPlotItems',
     ];
     keys.forEach((key) => {
-        if (!Number.isSafeInteger(policy[key]) || policy[key] < 0) {
+        const value = normalized[key];
+        if (!Number.isSafeInteger(value) || (value as number) < 0) {
             throw new ValidatorContextCapacityError(`validator context selection policy ${key} must be a non-negative safe integer`);
         }
     });
-    return { ...policy };
+    return normalized;
 };
 
 const requireCapacity = (label: string, count: number, maximum: number): void => {
@@ -125,6 +131,13 @@ export const buildValidatorContext = (
     requireCapacity('locked relationship events', lockedRelationshipEvents.length, policy.maxLockedRelationshipEvents);
     requireCapacity('locked story events', lockedStoryEvents.length, policy.maxLockedStoryEvents);
     requireCapacity('secret validation', secretValidation.length, policy.maxSecretValidationItems);
+    let plotView: ValidatorPlotView;
+    try {
+        plotView = buildValidatorPlotView(control, state, chapter, policy.maxPlotItems ?? 256);
+    } catch (error) {
+        if (error instanceof PlotGuidanceCapacityError) throw new ValidatorContextCapacityError(error.message);
+        throw error;
+    }
     return {
         kind: 'validator-context', targetChapter: chapter, currentArc: { id: arc.id, title: arc.title },
         ...(beat === undefined ? {} : { currentBeat: { id: beat.id, order: beat.order } }),
@@ -134,5 +147,6 @@ export const buildValidatorContext = (
             lockedReveals, lockedRelationshipEvents, lockedStoryEvents,
         },
         secretValidation,
+        plotView,
     };
 };

@@ -10,6 +10,7 @@ export const buildPlannerPrompt = (context: PlannerContext): string => [
     'Plan exactly the target chapter and current arc/beat in the context.',
     'Use IDs for reveals, relationship events, story events, clues, constraints, and secret references.',
     'Never invent a future arc, future beat, locked character, locked POV, locked event, or locked reveal.',
+    'Use plotGuidance only as safe timing memory. A due payoff or eligible reveal is not evidence that it already occurred.',
     'Every scene needs one or more purposeTags and conflictImportance. A major conflict must include protagonist and opponent objectives, opponent knowledge/beliefs, a rational countermove, uncertainty, and cost/tradeoff.',
     'Do not put author-secret values or reveal prose in the output. Reveal text is resolved separately after validation.',
     'Required JSON shape: InternalChapterPlan with kind="internal-chapter-plan", chapterNumber, arcId, optional beatId, primaryGoal, povCharacterId, participantIds, scenes, activeConstraintIds, allowedRevealIds, plannedRevealIds, relationshipEventIds, storyEventIds, cluesPlantedIds, cluesPaidOffIds, expectedResourceDeltas, expectedRelationshipDeltas, expectedContinuityConsequences, endStateIntent.',
