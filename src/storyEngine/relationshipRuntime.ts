@@ -102,14 +102,12 @@ const parseBoundary = (value: unknown, path: string): RelationshipBoundary => {
 export const parseRelationshipEvidenceRef = (value: unknown, path: string): RelationshipEvidenceRef => {
     const source = record(value, path);
     if (source.type === 'fact' || source.type === 'relationship' || source.type === 'relationship-history'
-        || source.type === 'relationship-event' || source.type === 'story-event' || source.type === 'strategic-action') {
+        || source.type === 'strategic-action') {
         strictKeys(source, ['type', 'id'], path);
         const id = text(source.id, `${path}.id`);
         if (source.type === 'fact') return { type: 'fact', id };
         if (source.type === 'relationship') return { type: 'relationship', id };
         if (source.type === 'relationship-history') return { type: 'relationship-history', id };
-        if (source.type === 'relationship-event') return { type: 'relationship-event', id };
-        if (source.type === 'story-event') return { type: 'story-event', id };
         return { type: 'strategic-action', id };
     }
     if (source.type === 'knowledge') {

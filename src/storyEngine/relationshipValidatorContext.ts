@@ -12,6 +12,7 @@ import { orderRelationshipActions, validateRelationshipActions } from './relatio
 import { buildWriterRelationshipDirectives } from './relationshipContext';
 import type { FullStoryControl } from './types';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
+import { buildRelationshipGateValidationView } from './relationshipGateValidation';
 
 export class RelationshipContextCapacityError extends Error {
     constructor(message: string) { super(message); this.name = 'RelationshipContextCapacityError'; }
@@ -51,8 +52,6 @@ const evidenceResolves = (reference: RelationshipEvidenceRef, context: PlannerCo
     if (reference.type === 'belief') return context.relationshipContext.participantBeliefs.some(value => value.id === reference.epistemicId && value.characterId === reference.characterId);
     if (reference.type === 'relationship') return context.relationships.some(value => value.id === reference.id);
     if (reference.type === 'relationship-history') return context.relationshipContext.relationships.some(value => value.recentHistory.some(history => history.id === reference.id));
-    if (reference.type === 'relationship-event') return context.relationshipContext.relationshipEvents.some(value => value.id === reference.id);
-    if (reference.type === 'story-event') return context.allowedStoryEventIds.includes(reference.id) || context.lockedStoryEventIds.includes(reference.id);
     if (reference.type === 'strategic-action') return actionIds.has(reference.id);
     const character = context.availableCharacters.find(value => value.id === reference.characterId);
     return character !== undefined && [character.status?.status, ...(character.status?.injuries ?? []), ...(character.status?.conditions ?? [])].includes(reference.value);
@@ -104,7 +103,8 @@ export const buildValidatorRelationshipView = (
             currentRomanceMilestone: value.currentRomanceMilestone,
         };
     });
-    const deterministicIssues = validateRelationshipActions(plan, context).map(value => ({ code: value.code, path: value.path, severity: value.severity }));
+    const deterministicIssues = validateRelationshipActions(plan, context, buildRelationshipGateValidationView(control, context.targetChapter))
+        .map(value => ({ code: value.code, path: value.path, severity: value.severity }));
     const view: ValidatorRelationshipView = {
         kind: 'validator-relationship-view', chapterNumber: context.targetChapter,
         actions: descriptors, canonicalRelationships, deterministicIssues,

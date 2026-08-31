@@ -134,6 +134,9 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         if (definition.participantIds.length < 2 || new Set(definition.participantIds).size !== definition.participantIds.length) {
             issue(`${path}.participantIds`, 'must contain at least two unique characters');
         }
+        if (definition.categories.includes('romantic') && definition.participantIds.length !== 2) {
+            issue(`${path}.participantIds`, 'romantic relationships must contain exactly two participants');
+        }
         definition.participantIds.forEach(id => { if (!characterIds.has(id)) issue(`${path}.participantIds`, `references unknown character ${id}`); });
         if (definition.categories.length === 0 || new Set(definition.categories).size !== definition.categories.length
             || definition.categories.some(value => !RELATIONSHIP_CATEGORIES.includes(value))) issue(`${path}.categories`, 'must contain unique supported categories');

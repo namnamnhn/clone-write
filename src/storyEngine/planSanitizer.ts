@@ -6,6 +6,7 @@ import { FullStoryControl, StoryState } from './types';
 import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
 import { buildWriterStrategicDirectives } from './strategicContext';
 import { buildWriterRelationshipDirectives } from './relationshipContext';
+import { buildRelationshipGateValidationView } from './relationshipGateValidation';
 
 const gateIssue = (code: string, path: string, message: string): PlanValidationIssue => ({ code, path, message, severity: 'error' });
 
@@ -26,7 +27,7 @@ export const sanitizeWriterChapterPlan = (
         throw new ChapterPlanValidationError([gateIssue('CHAPTER_OUT_OF_RANGE', 'chapterNumber', 'chapter exceeds the planned story')]);
     }
     const context = buildPlannerContext(control, state, plan.chapterNumber);
-    const issues: PlanValidationIssue[] = [...parsed.issues, ...validateInternalChapterPlan(plan, context)];
+    const issues: PlanValidationIssue[] = [...parsed.issues, ...validateInternalChapterPlan(plan, context, buildRelationshipGateValidationView(control, plan.chapterNumber))];
     const arc = getArcForChapter(control, plan.chapterNumber);
     const beat = getBeatForChapter(control, plan.chapterNumber);
     if (!arc || arc.id !== plan.arcId) issues.push(gateIssue('FUTURE_ARC', 'arcId', 'plan arc is not the source-of-truth current arc'));

@@ -16,6 +16,7 @@ import {
 } from './gates';
 import { isValidChapter } from './storyControl';
 import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
+import { deriveCurrentRomanceMilestone } from './relationshipMilestone';
 
 const pickRecord = <T>(source: Readonly<Record<string, T>>, allowedIds: ReadonlySet<string>): Record<string, T> => {
     const output: Record<string, T> = {};
@@ -135,6 +136,12 @@ export const buildWriterSafeContext = (
             relationships: state.relationships.filter(relationship =>
                 relationship.establishedChapter <= chapter &&
                 relationship.participantIds.every(id => allowedCharacterIds.has(id))),
+            relationshipMilestones: control.relationshipDefinitions
+                .filter(definition => definition.participantIds.every(id => allowedCharacterIds.has(id)))
+                .map(definition => ({
+                    relationshipId: definition.id,
+                    currentRomanceMilestone: deriveCurrentRomanceMilestone(definition, state, chapter),
+                })),
             unresolvedClues: safeThreads(state.unresolvedClues, chapter),
             unresolvedPromises: safeThreads(state.unresolvedPromises, chapter),
             resources: pickRecord(state.resources, allowedCharacterIds),

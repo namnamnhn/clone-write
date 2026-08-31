@@ -14,6 +14,7 @@ import { parseWriterStrategicDirectives } from './strategicContext';
 import { validateWriterStrategicDirectives } from './writerStrategicValidator';
 import { parseWriterRelationshipDirectives } from './relationshipRuntime';
 import { validateWriterRelationshipDirectives } from './writerRelationshipValidator';
+import { buildRelationshipGateValidationView } from './relationshipGateValidation';
 import {
     DEFAULT_WRITER_CONTEXT_SELECTION_POLICY,
     WriterContext,
@@ -239,7 +240,7 @@ const clonePlan = (
             expectedRelationshipDeltas: relationshipDeltas,
             relationshipEventIds: relationshipEvents.map(value => value.id),
             directives: relationshipDirectives,
-        }, safe);
+        }, safe, buildRelationshipGateValidationView(control, safe.chapter));
     } catch (error) {
         throw new WriterContextError(error instanceof Error ? error.message : 'relationship directives are infeasible');
     }

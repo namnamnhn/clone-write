@@ -2,6 +2,13 @@ import type { ExpectedRelationshipDelta, WriterPlanScene } from './plannerTypes'
 import { ROMANCE_MILESTONES } from './relationshipTypes';
 import type { WriterRelationshipDirective } from './relationshipTypes';
 import type { WriterSafeContext } from './types';
+import type { RelationshipGateValidationView } from './relationshipGateValidation';
+import {
+    orphanIntermediateActionIds,
+    relationshipContractContradictions,
+    requiresFinalCanonicalRelationshipConsequence,
+    romanceMilestoneChanged,
+} from './relationshipContract';
 
 export interface WriterRelationshipValidationInput {
     readonly participantIds: readonly string[];
@@ -21,6 +28,7 @@ const nonRomanticActions = new Set(['cooperate', 'professional-respect', 'allian
 export const validateWriterRelationshipDirectives = (
     input: WriterRelationshipValidationInput,
     safe: WriterSafeContext,
+    gateView?: RelationshipGateValidationView,
 ): void => {
     const declaredParticipants = new Set(input.participantIds);
     const definitions = new Map(safe.relationshipDefinitions.map(value => [value.id, value]));
@@ -28,6 +36,7 @@ export const validateWriterRelationshipDirectives = (
     const sceneById = new Map(input.scenes.map(value => [value.id, value]));
     const actionById = new Map(input.directives.map((value, index) => [value.id, { value, index }]));
     if (actionById.size !== input.directives.length) fail('relationship directives must not contain duplicate action IDs');
+    if (input.directives.length > 0 && (!gateView || gateView.targetChapter !== safe.chapter)) fail('trusted relationship gate validation data is required');
 
     input.directives.forEach((directive, index) => {
         const definition = definitions.get(directive.relationshipId);
@@ -42,18 +51,23 @@ export const validateWriterRelationshipDirectives = (
         const event = directive.relationshipEventId === undefined ? undefined : allowedEvents.get(directive.relationshipEventId);
         if (directive.relationshipEventId !== undefined && (!event || event.relationshipId !== directive.relationshipId)) fail(`relationshipDirectives.${index} relationship event is unavailable`);
         if (directive.relationshipEventId !== undefined && !input.relationshipEventIds.includes(directive.relationshipEventId)) fail(`relationshipDirectives.${index} relationship event is not declared by the Writer plan`);
-        const currentState = safe.state.relationships.find(value => value.id === directive.relationshipId)?.state;
-        const derivedMilestone = currentState !== undefined && ROMANCE_MILESTONES.includes(currentState as typeof ROMANCE_MILESTONES[number])
-            ? currentState : definition.initialRomanceMilestone;
+        const trustedEvent = directive.relationshipEventId === undefined ? undefined : gateView?.events.find(value => value.id === directive.relationshipEventId);
+        const gatedEvents = gateView?.events.filter(value => value.relationshipId === directive.relationshipId && value.eventType === directive.actionType) ?? [];
+        if (directive.relationshipEventId !== undefined && (!trustedEvent || !trustedEvent.allowed || trustedEvent.relationshipId !== directive.relationshipId)) fail(`relationshipDirectives.${index} relationship event is unavailable`);
+        if (gatedEvents.length > 0 && (!trustedEvent || trustedEvent.eventType !== directive.actionType)) fail(`relationshipDirectives.${index} requires its allowed control event`);
+        const derivedMilestone = safe.state.relationshipMilestones.find(value => value.relationshipId === directive.relationshipId)?.currentRomanceMilestone
+            ?? definition.initialRomanceMilestone;
         if (directive.currentRomanceMilestone !== derivedMilestone) fail(`relationshipDirectives.${index} current milestone is stale`);
         const currentIndex = indexOfMilestone(directive.currentRomanceMilestone);
         const nextIndex = indexOfMilestone(directive.intendedProgression.romanticMilestone);
         const advance = nextIndex - currentIndex;
-        const authorizedJump = event?.authorizedRomanceMilestone === directive.intendedProgression.romanticMilestone;
+        const authorizedJump = trustedEvent?.authorizedRomanceMilestone === directive.intendedProgression.romanticMilestone;
         if (advance > definition.progressionPolicy.maxMajorMilestoneAdvancePerChapter && !authorizedJump) fail(`relationshipDirectives.${index} advances too many romantic milestones`);
         if (nextIndex > 0 && !definition.categories.includes('romantic')) fail(`relationshipDirectives.${index} invents non-canon romance`);
         if (romanticActions.has(directive.actionType) && (directive.category !== 'romantic' || !definition.categories.includes('romantic'))) fail(`relationshipDirectives.${index} uses unsupported romantic action`);
         if (nonRomanticActions.has(directive.actionType) && nextIndex !== currentIndex) fail(`relationshipDirectives.${index} converts professional or strategic progress into romance`);
+        relationshipContractContradictions({ ...directive, boundaries: directive.visibleBoundaries })
+            .forEach(message => fail(`relationshipDirectives.${index} ${message}`));
         if (definition.dynamicProfile.coreDynamicTags.includes('unequal-power')
             && !['unequal', 'contested'].includes(directive.visiblePowerBalance)) fail(`relationshipDirectives.${index} erases the declared power imbalance`);
 
@@ -70,13 +84,19 @@ export const validateWriterRelationshipDirectives = (
                 && !directive.participantChoices.some(value => value.characterId === boundary.characterId && value.willingness === 'yes')) fail(`relationshipDirectives.${index} changes a boundary without the owner's willing choice`);
         });
         const delta = input.expectedRelationshipDeltas.find(value => value.relationshipId === directive.relationshipId);
-        if (directive.intendedProgression.expectedState !== undefined && !directive.intendedProgression.intermediate
-            && (!delta || delta.expectedState !== directive.intendedProgression.expectedState || !sameIds(delta.participantIds, directive.participantIds))) fail(`relationshipDirectives.${index} does not reconcile with expectedRelationshipDeltas`);
+        if (!directive.intendedProgression.intermediate && romanceMilestoneChanged({ ...directive, boundaries: directive.visibleBoundaries })
+            && directive.intendedProgression.expectedState !== directive.intendedProgression.romanticMilestone) fail(`relationshipDirectives.${index} must persist the exact romantic milestone literal`);
+        if (requiresFinalCanonicalRelationshipConsequence({ ...directive, boundaries: directive.visibleBoundaries })
+            && (directive.intendedProgression.expectedState === undefined || !delta
+                || delta.expectedState !== directive.intendedProgression.expectedState
+                || !sameIds(delta.participantIds, directive.participantIds))) fail(`relationshipDirectives.${index} requires a matching final expectedRelationshipDelta`);
         if (directive.dependsOnActionId !== undefined) {
             const prior = actionById.get(directive.dependsOnActionId);
             if (!prior || prior.index >= index || prior.value.relationshipId !== directive.relationshipId) fail(`relationshipDirectives.${index} has an invalid causal predecessor`);
         }
     });
+    const contractActions = input.directives.map(directive => ({ ...directive, boundaries: directive.visibleBoundaries }));
+    if (orphanIntermediateActionIds(contractActions).length > 0) fail('meaningful intermediate relationship directive requires a causally linked later final directive');
     input.scenes.forEach((scene, index) => {
         if (scene.purposeTags.includes('relationship') && !input.directives.some(value => value.sceneIds.includes(scene.id))) fail(`scenes.${index} lacks a matching relationship directive`);
     });

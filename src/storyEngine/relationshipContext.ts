@@ -1,11 +1,11 @@
 import { isCharacterDirectAppearanceAllowed, isRelationshipEventAllowed } from './gates';
-import type { PlannerRelationshipContext, RomanceMilestone } from './relationshipTypes';
+import type { PlannerRelationshipContext } from './relationshipTypes';
 import type { RelationshipActionPlan, WriterRelationshipDirective } from './relationshipTypes';
-import { ROMANCE_MILESTONES } from './relationshipTypes';
 import type { FullStoryControl, StoryState } from './types';
 import type { InternalChapterPlan } from './plannerTypes';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 import { orderRelationshipActions } from './relationshipValidator';
+import { deriveCurrentRomanceMilestone, isRomanceMilestone } from './relationshipMilestone';
 
 export interface RelationshipContextSelectionPolicy {
     readonly maxRelationships: number;
@@ -28,13 +28,9 @@ const normalizePolicy = (policy: RelationshipContextSelectionPolicy): Relationsh
     return { ...policy };
 };
 
-const milestoneFrom = (states: readonly string[], fallback: RomanceMilestone): RomanceMilestone => {
-    for (let index = states.length - 1; index >= 0; index -= 1) {
-        const state = states[index];
-        if (ROMANCE_MILESTONES.includes(state as RomanceMilestone)) return state as RomanceMilestone;
-    }
-    return fallback;
-};
+export class RelationshipHistoryCapacityError extends Error {
+    constructor(message: string) { super(message); this.name = 'RelationshipHistoryCapacityError'; }
+}
 
 /**
  * Deterministic bounded relationship intelligence. It derives from control plus canonical
@@ -65,11 +61,19 @@ export const buildPlannerRelationshipContext = (
             .filter(entry => entry.relationshipId === value.id && entry.chapterNumber <= targetChapter)
             .slice()
             .sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
-        const selectedHistory = history.slice(-policy.maxRecentHistoryPerRelationship);
-        const currentRomanceMilestone = milestoneFrom(
-            [...history.map(entry => entry.state), ...(canonical === undefined ? [] : [canonical.state])],
-            value.initialRomanceMilestone,
-        );
+        const milestoneHistory = history.filter(entry => isRomanceMilestone(entry.state));
+        const requiredMilestoneCount = Math.min(milestoneHistory.length, value.progressionPolicy.maxConsecutiveProgressionChapters + 1);
+        const slowBurnHistoryComplete = policy.maxRecentHistoryPerRelationship >= requiredMilestoneCount;
+        if (policy.maxRecentHistoryPerRelationship !== 0 && !slowBurnHistoryComplete) {
+            throw new RelationshipHistoryCapacityError(`relationship ${value.id} needs ${requiredMilestoneCount} history records to enforce its slow-burn policy, but capacity is ${policy.maxRecentHistoryPerRelationship}`);
+        }
+        const mandatoryIds = new Set(policy.maxRecentHistoryPerRelationship === 0 ? [] : milestoneHistory.slice(-requiredMilestoneCount).map(entry => entry.id));
+        const remainingCapacity = policy.maxRecentHistoryPerRelationship - mandatoryIds.size;
+        const selectedHistory = policy.maxRecentHistoryPerRelationship === 0 ? [] : [
+            ...history.filter(entry => mandatoryIds.has(entry.id)),
+            ...(remainingCapacity === 0 ? [] : history.filter(entry => !mandatoryIds.has(entry.id)).slice(-remainingCapacity)),
+        ].sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
+        const currentRomanceMilestone = deriveCurrentRomanceMilestone(value, state, targetChapter);
         return {
             id: value.id,
             participantIds: [...value.participantIds],
@@ -84,6 +88,7 @@ export const buildPlannerRelationshipContext = (
                 prohibitedShortcuts: [...value.dynamicProfile.prohibitedShortcuts],
             },
             progressionPolicy: { ...value.progressionPolicy },
+            slowBurnHistoryComplete,
             recentHistory: selectedHistory.map(entry => ({ id: entry.id, state: entry.state, chapterNumber: entry.chapterNumber })),
         };
     });
@@ -95,17 +100,6 @@ export const buildPlannerRelationshipContext = (
             id: event.id,
             relationshipId: event.relationshipId,
             eventType: event.eventType,
-            ...(event.authorizedRomanceMilestone === undefined ? {} : { authorizedRomanceMilestone: event.authorizedRomanceMilestone }),
-        }));
-    const relationshipEvents = control.relationshipEvents
-        .filter(event => selectedIds.has(event.relationshipId))
-        .slice()
-        .sort((left, right) => left.relationshipId.localeCompare(right.relationshipId) || left.id.localeCompare(right.id))
-        .map(event => ({
-            id: event.id,
-            relationshipId: event.relationshipId,
-            eventType: event.eventType,
-            allowed: isRelationshipEventAllowed(control, event.id, targetChapter),
             ...(event.authorizedRomanceMilestone === undefined ? {} : { authorizedRomanceMilestone: event.authorizedRomanceMilestone }),
         }));
     const selectedParticipantIds = new Set(relationships.flatMap(value => value.participantIds));
@@ -120,7 +114,6 @@ export const buildPlannerRelationshipContext = (
     return {
         relationships,
         allowedRelationshipEvents,
-        relationshipEvents,
         participantBeliefs,
         maxRelationships: policy.maxRelationships,
         maxRecentHistoryPerRelationship: policy.maxRecentHistoryPerRelationship,

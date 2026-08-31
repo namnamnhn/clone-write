@@ -90,8 +90,6 @@ export type RelationshipEvidenceRef =
     | { readonly type: 'belief'; readonly characterId: StoryId; readonly epistemicId: StoryId }
     | { readonly type: 'relationship'; readonly id: StoryId }
     | { readonly type: 'relationship-history'; readonly id: StoryId }
-    | { readonly type: 'relationship-event'; readonly id: StoryId }
-    | { readonly type: 'story-event'; readonly id: StoryId }
     | { readonly type: 'strategic-action'; readonly id: StoryId }
     | { readonly type: 'character-status'; readonly characterId: StoryId; readonly value: string };
 
@@ -118,7 +116,7 @@ export interface RelationshipBoundary {
 export interface RelationshipProgressionIntent {
     readonly direction: RelationshipDirection;
     readonly romanticMilestone: RomanceMilestone;
-    /** Omit when the action intentionally has no canonical relationship-state consequence. */
+    /** Required on final changing actions; milestone changes use the exact new milestone literal. */
     readonly expectedState?: string;
     readonly mutual: boolean;
     /** Earlier same-chapter step; only a later causal action may declare the final delta. */
@@ -164,6 +162,8 @@ export interface PlannerRelationshipDescriptor {
     readonly currentRomanceMilestone: RomanceMilestone;
     readonly dynamicProfile: RelationshipDynamicProfile;
     readonly progressionPolicy: RelationshipProgressionPolicy;
+    /** False only when the requested zero-history projection cannot prove the slow-burn window. */
+    readonly slowBurnHistoryComplete: boolean;
     readonly recentHistory: readonly {
         readonly id: StoryId;
         readonly state: string;
@@ -177,13 +177,6 @@ export interface PlannerRelationshipContext {
         readonly id: StoryId;
         readonly relationshipId: StoryId;
         readonly eventType: string;
-        readonly authorizedRomanceMilestone?: RomanceMilestone;
-    }[];
-    readonly relationshipEvents: readonly {
-        readonly id: StoryId;
-        readonly relationshipId: StoryId;
-        readonly eventType: string;
-        readonly allowed: boolean;
         readonly authorizedRomanceMilestone?: RomanceMilestone;
     }[];
     readonly participantBeliefs: readonly {

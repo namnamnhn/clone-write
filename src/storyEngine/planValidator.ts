@@ -16,6 +16,7 @@ import { parseStrategicActions } from './strategicRuntime';
 import { validateStrategicActions } from './strategicValidator';
 import { parseRelationshipActions } from './relationshipRuntime';
 import { validateRelationshipActions } from './relationshipValidator';
+import type { RelationshipGateValidationView } from './relationshipGateValidation';
 
 export class ChapterPlanValidationError extends Error {
     constructor(public readonly issues: readonly PlanValidationIssue[]) {
@@ -213,6 +214,7 @@ const hasCompleteIntelligentConflict = (conflict: IntelligentConflictPlan | unde
 export const validateInternalChapterPlan = (
     plan: InternalChapterPlan,
     context: PlannerContext,
+    relationshipGateView?: RelationshipGateValidationView,
 ): readonly PlanValidationIssue[] => {
     const issues: PlanValidationIssue[] = [];
     const add = (code: string, path: string, message: string) => issue(issues, code, path, message);
@@ -273,6 +275,6 @@ export const validateInternalChapterPlan = (
         if (delta.participantIds.length < 2 || !hasOnlyKnown(delta.participantIds, availableCharacters)) add('RELATIONSHIP_PARTICIPANTS_INVALID', `expectedRelationshipDeltas.${index}.participantIds`, 'relationship delta needs at least two available participants');
     });
     issues.push(...validateStrategicActions(plan, context));
-    issues.push(...validateRelationshipActions(plan, context));
+    issues.push(...validateRelationshipActions(plan, context, relationshipGateView));
     return issues;
 };
