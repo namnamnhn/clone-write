@@ -12,6 +12,8 @@ import {
     SCENE_PURPOSE_TAGS,
     ScenePurposeTag,
 } from './plannerTypes';
+import { parseStrategicActions } from './strategicRuntime';
+import { validateStrategicActions } from './strategicValidator';
 
 export class ChapterPlanValidationError extends Error {
     constructor(public readonly issues: readonly PlanValidationIssue[]) {
@@ -59,6 +61,7 @@ const parseIntelligentConflict = (
         return undefined;
     }
     const protagonistObjective = requiredText(value, 'protagonistObjective', path, issues);
+    const opponentCharacterId = value.opponentCharacterId === undefined ? undefined : requiredText(value, 'opponentCharacterId', path, issues);
     const opponentObjective = requiredText(value, 'opponentObjective', path, issues);
     const opponentKnowledge = requiredIds(value, 'opponentKnowledge', path, issues);
     const opponentBeliefs = requiredIds(value, 'opponentBeliefs', path, issues);
@@ -66,7 +69,7 @@ const parseIntelligentConflict = (
     const uncertainty = requiredText(value, 'uncertainty', path, issues);
     const expectedCostOrTradeoff = requiredText(value, 'expectedCostOrTradeoff', path, issues);
     if (!protagonistObjective || !opponentObjective || !opponentKnowledge || !opponentBeliefs || !rationalCountermove || !uncertainty || !expectedCostOrTradeoff) return undefined;
-    return { protagonistObjective, opponentObjective, opponentKnowledge, opponentBeliefs, rationalCountermove, uncertainty, expectedCostOrTradeoff };
+    return { ...(opponentCharacterId === undefined ? {} : { opponentCharacterId }), protagonistObjective, opponentObjective, opponentKnowledge, opponentBeliefs, rationalCountermove, uncertainty, expectedCostOrTradeoff };
 };
 
 const parseScene = (value: unknown, path: string, issues: PlanValidationIssue[]): InternalPlanScene | undefined => {
@@ -179,15 +182,16 @@ export const parseInternalChapterPlan = (value: unknown): InternalPlanParseResul
     const expectedResourceDeltas = parseResourceDeltas(value.expectedResourceDeltas, 'expectedResourceDeltas', issues);
     const expectedRelationshipDeltas = parseRelationshipDeltas(value.expectedRelationshipDeltas, 'expectedRelationshipDeltas', issues);
     const expectedContinuityConsequences = parseContinuityConsequences(value.expectedContinuityConsequences, 'expectedContinuityConsequences', issues);
+    const strategicActions = parseStrategicActions(value.strategicActions, 'strategicActions', issues);
     const endStateIntent = requiredText(value, 'endStateIntent', '$', issues);
     if (issues.length > 0 || kind !== 'internal-chapter-plan' || !Number.isSafeInteger(chapterNumber) || (chapterNumber as number) < 1
         || !arcId || !primaryGoal || !povCharacterId || !participantIds || !activeConstraintIds || !allowedRevealIds || !plannedRevealIds
         || !relationshipEventIds || !storyEventIds || !cluesPlantedIds || !cluesPaidOffIds || !expectedResourceDeltas || !expectedRelationshipDeltas
-        || !expectedContinuityConsequences || !endStateIntent) return { issues };
+        || !expectedContinuityConsequences || !strategicActions || !endStateIntent) return { issues };
     return { plan: {
         kind: 'internal-chapter-plan', chapterNumber: chapterNumber as number, arcId, ...(beatId === undefined ? {} : { beatId }), primaryGoal, povCharacterId,
         participantIds, scenes, activeConstraintIds, allowedRevealIds, plannedRevealIds, relationshipEventIds, storyEventIds,
-        cluesPlantedIds, cluesPaidOffIds, expectedResourceDeltas, expectedRelationshipDeltas, expectedContinuityConsequences, endStateIntent,
+        cluesPlantedIds, cluesPaidOffIds, expectedResourceDeltas, expectedRelationshipDeltas, expectedContinuityConsequences, strategicActions, endStateIntent,
     }, issues };
 };
 
@@ -250,6 +254,14 @@ export const validateInternalChapterPlan = (
         } else if (scene.intelligentConflict !== undefined && !hasCompleteIntelligentConflict(scene.intelligentConflict)) {
             add('INTELLIGENT_CONFLICT_INCOMPLETE', `scenes.${index}.intelligentConflict`, 'intelligent conflict must include all required strategic fields');
         }
+        if (scene.intelligentConflict?.opponentCharacterId !== undefined) {
+            const opponent = scene.intelligentConflict.opponentCharacterId;
+            if (!availableCharacters.has(opponent)) add('CHARACTER_LOCKED', `scenes.${index}.intelligentConflict.opponentCharacterId`, 'opponent is unavailable');
+            const known = new Set(context.characterKnowledge.find(entry => entry.characterId === opponent)?.factIds ?? []);
+            scene.intelligentConflict.opponentKnowledge.forEach((factId, knowledgeIndex) => {
+                if (!known.has(factId)) add('OPPONENT_KNOWLEDGE_VIOLATION', `scenes.${index}.intelligentConflict.opponentKnowledge.${knowledgeIndex}`, 'opponent knowledge is not canonical for the identified opponent');
+            });
+        }
     });
     plan.expectedResourceDeltas.forEach((delta, index) => {
         if (!availableCharacters.has(delta.characterId)) add('CHARACTER_LOCKED', `expectedResourceDeltas.${index}.characterId`, 'resource delta uses unavailable character');
@@ -257,5 +269,6 @@ export const validateInternalChapterPlan = (
     plan.expectedRelationshipDeltas.forEach((delta, index) => {
         if (delta.participantIds.length < 2 || !hasOnlyKnown(delta.participantIds, availableCharacters)) add('RELATIONSHIP_PARTICIPANTS_INVALID', `expectedRelationshipDeltas.${index}.participantIds`, 'relationship delta needs at least two available participants');
     });
+    issues.push(...validateStrategicActions(plan, context));
     return issues;
 };

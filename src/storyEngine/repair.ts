@@ -80,6 +80,7 @@ export interface ValidateAndRepairRequest {
     readonly repairModel: RepairModel;
     readonly maxRepairAttempts?: number;
     readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
+    readonly strategicView?: unknown;
 }
 
 const rejectValidation = (

@@ -7,9 +7,11 @@ import {
     WriterCharacterProfile,
 } from './types';
 import type { PlannerPlotGuidance } from './plotContext';
+import type { StrategicActionPlan, WriterStrategicDirective } from './strategicTypes';
 
 export const SCENE_PURPOSE_TAGS = [
     'plot', 'character', 'resource', 'clue', 'relationship', 'consequence', 'world',
+    'politics', 'military', 'commerce',
 ] as const;
 
 export type ScenePurposeTag = typeof SCENE_PURPOSE_TAGS[number];
@@ -141,6 +143,7 @@ export interface PlannerContext {
 }
 
 export interface IntelligentConflictPlan {
+    readonly opponentCharacterId?: StoryId;
     readonly protagonistObjective: string;
     readonly opponentObjective: string;
     readonly opponentKnowledge: readonly StoryId[];
@@ -203,6 +206,8 @@ export interface InternalChapterPlan {
     readonly expectedResourceDeltas: readonly ExpectedResourceDelta[];
     readonly expectedRelationshipDeltas: readonly ExpectedRelationshipDelta[];
     readonly expectedContinuityConsequences: readonly ExpectedContinuityConsequence[];
+    /** Legacy runtime plans may omit this field; parsing normalizes omission to an empty list. */
+    readonly strategicActions?: readonly StrategicActionPlan[];
     readonly endStateIntent: string;
 }
 
@@ -239,6 +244,8 @@ export interface WriterChapterPlan {
     readonly expectedResourceDeltas: readonly ExpectedResourceDelta[];
     readonly expectedRelationshipDeltas: readonly ExpectedRelationshipDelta[];
     readonly expectedContinuityConsequences: readonly ExpectedContinuityConsequence[];
+    /** Safe strategic projection only; internal evidence and opponent epistemics are excluded. */
+    readonly strategicDirectives?: readonly WriterStrategicDirective[];
     readonly endStateIntent: string;
 }
 

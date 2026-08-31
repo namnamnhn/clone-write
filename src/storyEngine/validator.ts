@@ -56,6 +56,8 @@ export interface ValidateWriterChapterRequest {
     readonly semanticModel: SemanticValidatorModel;
     readonly validationPass?: number;
     readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
+    /** Runtime-untrusted input. buildValidatorContext strictly reconstructs the privileged view. */
+    readonly strategicView?: unknown;
 }
 
 export interface ParsedWriterChapterValidationResult {
@@ -80,7 +82,7 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
     const validationPass = request.validationPass ?? 1;
     let context: ValidatorContext;
     try {
-        context = buildValidatorContext(request.control, request.state, request.plan, request.validatorContextSelectionPolicy);
+        context = buildValidatorContext(request.control, request.state, request.plan, request.validatorContextSelectionPolicy, request.strategicView);
     } catch (error) {
         const code = error instanceof ValidatorContextCapacityError ? 'VALIDATOR_CONTEXT_CAPACITY_EXCEEDED' : 'INVALID_SOURCE_PLAN';
         const targetChapter = planTargetChapter(request.plan);

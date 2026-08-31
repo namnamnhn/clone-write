@@ -4,6 +4,7 @@ import { ChapterPlanValidationError, parseInternalChapterPlan, validateInternalC
 import { InternalChapterPlan, PlanValidationIssue, WriterChapterPlan } from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
+import { buildWriterStrategicDirectives } from './strategicContext';
 
 const gateIssue = (code: string, path: string, message: string): PlanValidationIssue => ({ code, path, message, severity: 'error' });
 
@@ -122,6 +123,7 @@ export const sanitizeWriterChapterPlan = (
             expectedState: delta.expectedState,
         })),
         expectedContinuityConsequences: plan.expectedContinuityConsequences.map(consequence => ({ id: consequence.id, text: consequence.text })),
+        strategicDirectives: buildWriterStrategicDirectives(control, plan),
         endStateIntent: plan.endStateIntent,
     };
 };
