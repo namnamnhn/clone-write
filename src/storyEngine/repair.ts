@@ -6,6 +6,7 @@ import { SemanticValidatorModel } from './semanticValidator';
 import { validateWriterChapter, WriterChapterValidationResult } from './validator';
 import { ValidatorContextSelectionPolicy } from './validatorContext';
 import { buildValidationReport, createValidationIssue, RepairCandidateSnapshot, ValidationIssueCode, ValidationPipelineResult, ValidationReport } from './validationTypes';
+import type { ValidatorStrategicView } from './strategicTypes';
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
 
@@ -80,6 +81,7 @@ export interface ValidateAndRepairRequest {
     readonly repairModel: RepairModel;
     readonly maxRepairAttempts?: number;
     readonly validatorContextSelectionPolicy?: ValidatorContextSelectionPolicy;
+    readonly strategicView?: ValidatorStrategicView;
 }
 
 const rejectValidation = (

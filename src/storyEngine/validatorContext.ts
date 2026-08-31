@@ -4,6 +4,8 @@ import { FullStoryControl, StoryState } from './types';
 import { buildWriterContext } from './writerContext';
 import { WriterContext } from './writerTypes';
 import { buildValidatorPlotView, PlotGuidanceCapacityError, ValidatorPlotView } from './plotContext';
+import { cloneValidatorStrategicView, StrategicContextCapacityError } from './strategicContext';
+import type { ValidatorStrategicView } from './strategicTypes';
 
 export interface ValidatorContextSelectionPolicy {
     readonly maxLockedCharacters: number;
@@ -12,6 +14,7 @@ export interface ValidatorContextSelectionPolicy {
     readonly maxLockedStoryEvents: number;
     readonly maxSecretValidationItems: number;
     readonly maxPlotItems?: number;
+    readonly maxStrategicItems?: number;
 }
 
 export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelectionPolicy = {
@@ -21,6 +24,7 @@ export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelecti
     maxLockedStoryEvents: 128,
     maxSecretValidationItems: 128,
     maxPlotItems: 256,
+    maxStrategicItems: 256,
 };
 
 export class ValidatorContextCapacityError extends Error {
@@ -63,16 +67,21 @@ export interface ValidatorContext {
     };
     readonly secretValidation: readonly ValidatorSecretDatum[];
     readonly plotView: ValidatorPlotView;
+    readonly strategicView?: ValidatorStrategicView;
 }
 
 /** Builds a target-scoped allow-list. It never spreads either source object or includes future arc prose. */
 const compareIds = (left: { readonly id: string }, right: { readonly id: string }): number => left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 
 const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): ValidatorContextSelectionPolicy => {
-    const normalized = { ...policy, maxPlotItems: policy.maxPlotItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxPlotItems };
+    const normalized = {
+        ...policy,
+        maxPlotItems: policy.maxPlotItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxPlotItems,
+        maxStrategicItems: policy.maxStrategicItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxStrategicItems,
+    };
     const keys: readonly (keyof ValidatorContextSelectionPolicy)[] = [
         'maxLockedCharacters', 'maxLockedReveals', 'maxLockedRelationshipEvents',
-        'maxLockedStoryEvents', 'maxSecretValidationItems', 'maxPlotItems',
+        'maxLockedStoryEvents', 'maxSecretValidationItems', 'maxPlotItems', 'maxStrategicItems',
     ];
     keys.forEach((key) => {
         const value = normalized[key];
@@ -92,6 +101,7 @@ export const buildValidatorContext = (
     state: StoryState,
     plan: WriterChapterPlan,
     selectionPolicy: ValidatorContextSelectionPolicy = DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
+    suppliedStrategicView?: ValidatorStrategicView,
 ): ValidatorContext => {
     const policy = normalizeSelectionPolicy(selectionPolicy);
     const writerContext = buildWriterContext(control, state, plan);
@@ -138,6 +148,23 @@ export const buildValidatorContext = (
         if (error instanceof PlotGuidanceCapacityError) throw new ValidatorContextCapacityError(error.message);
         throw error;
     }
+    let strategicView: ValidatorStrategicView | undefined;
+    try {
+        strategicView = suppliedStrategicView === undefined ? undefined
+            : cloneValidatorStrategicView(suppliedStrategicView, chapter, policy.maxStrategicItems ?? 256);
+    } catch (error) {
+        if (error instanceof StrategicContextCapacityError) throw new ValidatorContextCapacityError(error.message);
+        throw error;
+    }
+    if (strategicView?.deterministicIssues.length) throw new Error('strategic plan contains deterministic blockers');
+    if (strategicView !== undefined) {
+        const directives = writerContext.chapterPlan.strategicDirectives ?? [];
+        if (directives.length !== strategicView.actions.length || strategicView.actions.some((action) => {
+            const directive = directives.find(candidate => candidate.id === action.id);
+            return !directive || directive.domain !== action.domain || directive.actorCharacterId !== action.actorCharacterId
+                || directive.sceneIds.join('\u0000') !== action.sceneIds.join('\u0000');
+        })) throw new Error('validator strategic view does not match the writer-safe plan projection');
+    }
     return {
         kind: 'validator-context', targetChapter: chapter, currentArc: { id: arc.id, title: arc.title },
         ...(beat === undefined ? {} : { currentBeat: { id: beat.id, order: beat.order } }),
@@ -148,5 +175,6 @@ export const buildValidatorContext = (
         },
         secretValidation,
         plotView,
+        ...(strategicView === undefined ? {} : { strategicView }),
     };
 };

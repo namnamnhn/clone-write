@@ -94,7 +94,11 @@ const clonePlan = (
     [
         'participantIds', 'scenes', 'canonConstraints', 'reveals', 'relationshipEvents', 'storyEvents',
         'cluesPlantedIds', 'cluesPaidOffIds', 'expectedResourceDeltas', 'expectedRelationshipDeltas', 'expectedContinuityConsequences',
-    ].forEach((field) => { if (!Array.isArray(plan[field as keyof WriterChapterPlan])) throw new WriterContextError(`plan.${field} must be an array`); });
+        'strategicDirectives',
+    ].forEach((field) => {
+        if (field === 'strategicDirectives' && plan.strategicDirectives === undefined) return;
+        if (!Array.isArray(plan[field as keyof WriterChapterPlan])) throw new WriterContextError(`plan.${field} must be an array`);
+    });
     if (plan.chapterNumber !== safe.chapter) throw new WriterContextError('plan chapter must match target chapter');
     if (plan.arc.id !== safe.arc.id || plan.arc.title !== safe.arc.title) throw new WriterContextError('plan arc must match current arc');
     if ((plan.beat?.id ?? undefined) !== (safe.beat?.id ?? undefined)) throw new WriterContextError('plan beat must match current beat');
@@ -191,6 +195,35 @@ const clonePlan = (
         }
         return { relationshipId: delta.relationshipId, participantIds: participants, expectedState: text(delta.expectedState, `expectedRelationshipDeltas.${index}.expectedState`) };
     });
+    const strategicDirectives = (plan.strategicDirectives ?? []).map((directive, index) => {
+        if (!directive || typeof directive !== 'object') throw new WriterContextError(`strategicDirectives.${index} must be an object`);
+        text(directive.id, `strategicDirectives.${index}.id`);
+        text(directive.actorCharacterId, `strategicDirectives.${index}.actorCharacterId`);
+        text(directive.visibleObjective, `strategicDirectives.${index}.visibleObjective`);
+        text(directive.expectedCostOrTradeoff, `strategicDirectives.${index}.expectedCostOrTradeoff`);
+        if (!['politics', 'military', 'commerce'].includes(directive.domain)) throw new WriterContextError(`strategicDirectives.${index}.domain is invalid`);
+        const sceneIds = ids(directive.sceneIds, `strategicDirectives.${index}.sceneIds`);
+        if (sceneIds.length === 0) throw new WriterContextError(`strategicDirectives.${index}.sceneIds must not be empty`);
+        noDuplicates(sceneIds, `strategicDirectives.${index}.sceneIds`);
+        const visibleConstraints = ids(directive.visibleConstraints, `strategicDirectives.${index}.visibleConstraints`);
+        const visibleOperationalRequirements = ids(directive.visibleOperationalRequirements, `strategicDirectives.${index}.visibleOperationalRequirements`);
+        if (!chapterParticipants.includes(directive.actorCharacterId)
+            || !sceneIds.every(id => plan.scenes.some(scene => scene.id === id && scene.purposeTags.includes(directive.domain)))) {
+            throw new WriterContextError(`strategicDirectives.${index} contains an undeclared actor or scene`);
+        }
+        return {
+            id: directive.id, domain: directive.domain, sceneIds, actorCharacterId: directive.actorCharacterId,
+            visibleObjective: directive.visibleObjective, visibleConstraints,
+            expectedCostOrTradeoff: directive.expectedCostOrTradeoff, visibleOperationalRequirements,
+        };
+    });
+    noDuplicates(strategicDirectives.map(value => value.id), 'strategicDirectives');
+    (['politics', 'military', 'commerce'] as const).forEach((domain) => plan.scenes.forEach((scene, index) => {
+        if (scene.purposeTags.includes(domain)
+            && !strategicDirectives.some(directive => directive.domain === domain && directive.sceneIds.includes(scene.id))) {
+            throw new WriterContextError(`scenes.${index} lacks a matching strategic directive`);
+        }
+    }));
 
     return {
         kind: 'writer-chapter-plan', chapterNumber: plan.chapterNumber,
@@ -202,6 +235,7 @@ const clonePlan = (
         cluesPlantedIds: ids(plan.cluesPlantedIds, 'cluesPlantedIds'), cluesPaidOffIds: ids(plan.cluesPaidOffIds, 'cluesPaidOffIds'),
         expectedResourceDeltas: resourceDeltas, expectedRelationshipDeltas: relationshipDeltas,
         expectedContinuityConsequences: plan.expectedContinuityConsequences.map((value, index) => ({ id: text(value.id, `expectedContinuityConsequences.${index}.id`), text: text(value.text, `expectedContinuityConsequences.${index}.text`) })),
+        strategicDirectives,
         endStateIntent: text(plan.endStateIntent, 'endStateIntent'),
     };
 };
