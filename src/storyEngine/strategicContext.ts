@@ -532,6 +532,10 @@ const parseValidatorAction = (
         && directive.writerVisibleCounterplay.opponentCharacterId !== opponentCharacterId) {
         fail(`${path}.writerVisibleCounterplay.opponentCharacterId`, 'must match the privileged opponent descriptor');
     }
+    if (directive.writerVisibleCounterplay !== undefined
+        && (opponentCharacterId === undefined || privilegedCountermove === undefined)) {
+        fail(`${path}.writerVisibleCounterplay`, 'requires a privileged opponent and countermove counterpart');
+    }
     if (!context.availableCharacters.some(character => character.id === directive.actorCharacterId)) {
         fail(`${path}.actorCharacterId`, 'does not identify an available actor');
     }

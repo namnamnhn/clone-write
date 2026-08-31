@@ -560,6 +560,169 @@ describe('WORK 07 shared contracts and boundaries', () => {
         })).toContain('STRATEGIC_REFERENCE_INVALID');
     });
 
+    it('enforces aggregate finite capacity for fabricated Writer strategic plans', async () => {
+        const military = directMilitaryDirective();
+        const militaryOverdraw = directWriterPlan('military', {
+            ...military,
+            logistics: { ...military.logistics!, expectedSupplyConsumption: 150 },
+        }, [{ characterId: 'a', resourceId: 'supply', quantityDelta: -150 }], true);
+        const militaryExact = directWriterPlan('military', {
+            ...military,
+            logistics: { ...military.logistics!, expectedSupplyConsumption: 100 },
+        }, [{ characterId: 'a', resourceId: 'supply', quantityDelta: -100 }], true);
+
+        const commerce = directCommerceDirective();
+        const purchaseWithCash = (cashSpend: number) => directWriterPlan('commerce', {
+            ...commerce,
+            resourceFlows: [
+                { characterId: 'a', resourceId: 'inventory', quantityDelta: 10, role: 'inventory' },
+                { characterId: 'a', resourceId: 'cash', quantityDelta: -cashSpend, role: 'cash' },
+            ],
+        }, [
+            { characterId: 'a', resourceId: 'inventory', quantityDelta: 10 },
+            { characterId: 'a', resourceId: 'cash', quantityDelta: -cashSpend },
+        ]);
+        const commerceOverdraw = purchaseWithCash(150);
+        const commerceExact = purchaseWithCash(100);
+        const nettedPurchase = directWriterPlan('commerce', {
+            ...commerce,
+            resourceFlows: [
+                { characterId: 'a', resourceId: 'inventory', quantityDelta: 10, role: 'inventory' },
+                { characterId: 'a', resourceId: 'cash', quantityDelta: 100, role: 'cash' },
+                { characterId: 'a', resourceId: 'cash', quantityDelta: -150, role: 'cash' },
+            ],
+        }, [
+            { characterId: 'a', resourceId: 'inventory', quantityDelta: 10 },
+            { characterId: 'a', resourceId: 'cash', quantityDelta: -50 },
+        ]);
+
+        expect(() => buildWriterContext(control, stateFor(), militaryOverdraw)).toThrow('finite resource capacity');
+        expect(() => buildWriterContext(control, stateFor(), commerceOverdraw)).toThrow('finite resource capacity');
+        expect(() => buildWriterContext(control, stateFor(), militaryExact)).not.toThrow();
+        expect(() => buildWriterContext(control, stateFor(), commerceExact)).not.toThrow();
+        expect(() => buildWriterContext(control, stateFor(), nettedPurchase)).not.toThrow();
+
+        const writerModel = vi.fn(async () => ({
+            kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'This must not be written.',
+        }));
+        await expect(generateWriterDraft({
+            control, state: stateFor(), plan: militaryOverdraw, model: { write: writerModel },
+        })).rejects.toThrow('finite resource capacity');
+        expect(writerModel).not.toHaveBeenCalled();
+    });
+
+    it('requires privileged strategicView for strategic plans while preserving legacy validation', async () => {
+        const internal = commercePlan();
+        const strategicPlan = sanitizeWriterChapterPlan(internal, control, stateFor());
+        const strategicView = buildValidatorStrategicView(
+            internal, buildPlannerContext(control, stateFor(), 100),
+        );
+        const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const missing = await validateWriterChapter({
+            control, state: stateFor(), plan: strategicPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A purchases grain.' },
+            semanticModel: { validate: semantic },
+        });
+        expect(missing.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+        expect(semantic).not.toHaveBeenCalled();
+
+        const repair = vi.fn(async () => ({ kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'repair' }));
+        const missingRepair = await validateAndRepairWriterChapter({
+            control, state: stateFor(), plan: strategicPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A purchases grain.' },
+            semanticModel: { validate: semantic }, repairModel: { repair }, maxRepairAttempts: 2,
+        });
+        expect(missingRepair.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+        expect(semantic).not.toHaveBeenCalled();
+        expect(repair).not.toHaveBeenCalled();
+
+        const legacyBase = directWriterPlan('politics', directPoliticalDirective());
+        const legacyPlan: WriterChapterPlan = {
+            ...legacyBase,
+            scenes: legacyBase.scenes.map(scene => ({ ...scene, purposeTags: ['plot'] })),
+            strategicDirectives: [],
+        };
+        const legacySemantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const legacy = await validateWriterChapter({
+            control, state: stateFor(), plan: legacyPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A advances the plot.' },
+            semanticModel: { validate: legacySemantic },
+        });
+        expect(legacy.report.issues.map(issue => issue.code)).not.toContain('INVALID_SOURCE_PLAN');
+        expect(legacySemantic).toHaveBeenCalledOnce();
+
+        const validSemantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const valid = await validateWriterChapter({
+            control, state: stateFor(), plan: strategicPlan, strategicView,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A purchases grain.' },
+            semanticModel: { validate: validSemantic },
+        });
+        expect(valid.report.issues.map(issue => issue.code)).not.toContain('INVALID_SOURCE_PLAN');
+        expect(validSemantic).toHaveBeenCalledOnce();
+    });
+
+    it('requires a privileged counterpart for every writer-visible counterplay', async () => {
+        const internal = militaryPlan();
+        const plan = sanitizeWriterChapterPlan(internal, control, stateFor());
+        const validView = buildValidatorStrategicView(
+            internal, buildPlannerContext(control, stateFor(), 100),
+        );
+        const descriptor = validView.actions[0];
+        if (descriptor.domain !== 'military' || descriptor.writerVisibleCounterplay === undefined
+            || descriptor.privilegedCountermove === undefined) {
+            throw new Error('expected military counterplay descriptor');
+        }
+        const missingPrivileged = {
+            ...validView,
+            actions: [{
+                ...descriptor,
+                opponentCharacterId: undefined,
+                opponentKnowledgeFactIds: [],
+                privilegedCountermove: undefined,
+            }],
+        };
+        const mismatchedPrivileged = {
+            ...validView,
+            actions: [{
+                ...descriptor,
+                opponentCharacterId: 'a',
+                opponentKnowledgeFactIds: ['actor-fact'],
+                privilegedCountermove: {
+                    ...descriptor.privilegedCountermove, opponentCharacterId: 'a',
+                },
+            }],
+        };
+        for (const strategicView of [missingPrivileged, mismatchedPrivileged]) {
+            const semantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+            const result = await validateWriterChapter({
+                control, state: stateFor(), plan, strategicView,
+                draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A attacks.' },
+                semanticModel: { validate: semantic },
+            });
+            expect(result.report.issues.map(issue => issue.code)).toContain('INVALID_SOURCE_PLAN');
+            expect(semantic).not.toHaveBeenCalled();
+        }
+
+        const minorAction = {
+            ...purchaseAction(), countermove: counter,
+            writerVisibleCounterplay: undefined, noCountermoveReason: undefined,
+        };
+        const minorInternal = commercePlan(minorAction);
+        expect(codesFor(minorInternal)).toEqual([]);
+        const minorSemantic = vi.fn(async () => ({ kind: 'semantic-validation-result', chapterNumber: 100, issues: [] }));
+        const minor = await validateWriterChapter({
+            control, state: stateFor(),
+            plan: sanitizeWriterChapterPlan(minorInternal, control, stateFor()),
+            strategicView: buildValidatorStrategicView(
+                minorInternal, buildPlannerContext(control, stateFor(), 100),
+            ),
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 100, prose: 'A purchases grain.' },
+            semanticModel: { validate: minorSemantic },
+        });
+        expect(minor.report.issues.map(issue => issue.code)).not.toContain('INVALID_SOURCE_PLAN');
+        expect(minorSemantic).toHaveBeenCalledOnce();
+    });
+
     it('preserves concrete writer-safe domain contracts through WriterModelRequest', async () => {
         const requests: unknown[] = [];
         const model = {

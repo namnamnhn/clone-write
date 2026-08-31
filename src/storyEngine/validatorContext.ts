@@ -111,6 +111,10 @@ export const buildValidatorContext = (
 ): ValidatorContext => {
     const policy = normalizeSelectionPolicy(selectionPolicy);
     const writerContext = buildWriterContext(control, state, plan);
+    const writerStrategicDirectives = writerContext.chapterPlan.strategicDirectives ?? [];
+    if (writerStrategicDirectives.length > 0 && suppliedStrategicView === undefined) {
+        throw new Error('strategic Writer plan requires a privileged strategic view');
+    }
     const chapter = writerContext.targetChapter;
     const arc = getArcForChapter(control, chapter);
     const beat = getBeatForChapter(control, chapter);
@@ -169,9 +173,8 @@ export const buildValidatorContext = (
     }
     if (strategicView?.deterministicIssues.length) throw new Error('strategic plan contains deterministic blockers');
     if (strategicView !== undefined) {
-        const directives = writerContext.chapterPlan.strategicDirectives ?? [];
-        if (directives.length !== strategicView.actions.length || strategicView.actions.some((action) => {
-            const directive = directives.find(candidate => candidate.id === action.id);
+        if (writerStrategicDirectives.length !== strategicView.actions.length || strategicView.actions.some((action) => {
+            const directive = writerStrategicDirectives.find(candidate => candidate.id === action.id);
             return directive === undefined || !writerStrategicDirectiveMatchesValidatorAction(directive, action);
         })) throw new Error('validator strategic view does not match the writer-safe plan projection');
     }

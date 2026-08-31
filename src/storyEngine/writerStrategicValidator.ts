@@ -239,4 +239,13 @@ export const validateWriterStrategicDirectives = (
     if ([...writerVisibleTotals].some(([key, quantity]) => expectedTotals.get(key) !== quantity)) {
         fail('writer-visible strategic resource quantities do not match expectedResourceDeltas');
     }
+    writerVisibleTotals.forEach((strategicTotal, key) => {
+        const [characterId, resourceId] = key.split('\u0000');
+        const currentQuantity = safe.state.resources[characterId]
+            ?.find(resource => resource.id === resourceId)?.quantity;
+        if (typeof currentQuantity === 'number' && Number.isFinite(currentQuantity)
+            && currentQuantity + strategicTotal < 0) {
+            fail('writer-visible strategic effects exceed current finite resource capacity');
+        }
+    });
 };
