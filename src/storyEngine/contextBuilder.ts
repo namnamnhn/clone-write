@@ -18,6 +18,7 @@ import {
     isStoryEventAllowed,
 } from './gates';
 import { isValidChapter } from './storyControl';
+import { buildPlannerPlotGuidance } from './plotContext';
 import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
     LongTermMemory,
@@ -240,5 +241,6 @@ export const buildPlannerContext = (
                 .map(rule => ({ id: rule.id, type: 'canon-rule' as const, referenceId: rule.id, writerText: rule.text })),
         ],
         narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
+        plotGuidance: buildPlannerPlotGuidance(control, state, targetChapter),
     };
 };

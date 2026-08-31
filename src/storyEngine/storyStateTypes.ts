@@ -1,4 +1,5 @@
 import { ChapterNumber, StoryId } from './types';
+import type { PlotDeltaOperations, PlotLedgers } from './plotTypes';
 
 export const FACT_SOURCE_TYPES = ['chapter', 'canon-rule', 'imported-setup', 'state-transition'] as const;
 export type FactSourceType = typeof FACT_SOURCE_TYPES[number];
@@ -140,6 +141,8 @@ export const CANONICAL_EVENT_TYPES = [
     'fact-added', 'knowledge-added', 'belief-added', 'character-moved',
     'character-state-changed', 'status-added', 'status-resolved', 'relationship-changed', 'resource-changed',
     'continuity-opened', 'continuity-resolved', 'continuity-superseded',
+    'reveal-recorded', 'foreshadow-opened', 'foreshadow-cue-added',
+    'foreshadow-paid', 'foreshadow-superseded', 'payoff-opened', 'payoff-resolved', 'payoff-superseded',
 ] as const;
 export type CanonicalEventType = typeof CANONICAL_EVENT_TYPES[number];
 
@@ -151,7 +154,7 @@ export interface CanonicalStateEvent {
     readonly provenance: FactProvenance;
 }
 
-export interface CanonicalLedgers {
+export interface CanonicalLedgers extends PlotLedgers {
     readonly facts: readonly CanonicalStoryFact[];
     readonly epistemic: readonly EpistemicEntry[];
     readonly locations: readonly CharacterLocationRecord[];
@@ -224,6 +227,13 @@ export interface StoryStateDelta {
     readonly resourceChanges: readonly ResourceChange[];
     readonly continuityChanges: readonly ContinuityChange[];
 }
+
+/** Explicit V2 extension. V1 remains accepted and normalizes to empty plot operations. */
+export interface StoryStateDeltaV2 extends Omit<StoryStateDelta, 'schemaVersion'>, PlotDeltaOperations {
+    readonly schemaVersion: 2;
+}
+
+export type NormalizedStoryStateDelta = StoryStateDeltaV2;
 
 export type StoryStateTransitionIssueCode =
     | 'INVALID_STATE' | 'INVALID_DELTA' | 'CHAPTER_SEQUENCE_VIOLATION'

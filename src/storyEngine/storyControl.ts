@@ -112,7 +112,12 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         if (nextChapter !== arc.endChapter + 1) issue(`beats.${arc.id}`, `must cover through chapter ${arc.endChapter}`);
     });
 
-    const revealIds = new Set(control.reveals.map(reveal => reveal.id));
+    const revealIds = new Set<string>();
+    control.reveals.forEach((reveal, index) => {
+        if (!reveal.id.trim() || revealIds.has(reveal.id)) issue(`reveals.${index}.id`, 'must be non-empty and unique');
+        if (!reveal.writerText.trim()) issue(`reveals.${index}.writerText`, 'must not be empty');
+        revealIds.add(reveal.id);
+    });
     const relationshipEventIds = new Set(control.relationshipEvents.map(event => event.id));
     const storyEventIds = new Set(control.storyEvents.map(event => event.id));
     const checkAllowedFrom = (path: string, chapter: number) => {
@@ -155,8 +160,10 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         if (!revealIds.has(entry.revealId)) issue(`forbiddenReveals.${index}.revealId`, `references unknown reveal ${entry.revealId}`);
         if (!Number.isSafeInteger(entry.forbiddenThroughChapter) || entry.forbiddenThroughChapter < 0) issue(`forbiddenReveals.${index}.forbiddenThroughChapter`, 'must be a non-negative integer');
     });
+    const secretIds = new Set<string>();
     control.authorOnlySecrets.forEach((secret, index) => {
-        if (!secret.id.trim() || !secret.value.trim()) issue(`authorOnlySecrets.${index}`, 'must have a non-empty id and value');
+        if (!secret.id.trim() || !secret.value.trim() || secretIds.has(secret.id)) issue(`authorOnlySecrets.${index}`, 'must have a non-empty unique id and value');
+        secretIds.add(secret.id);
         if (secret.revealId && !revealIds.has(secret.revealId)) issue(`authorOnlySecrets.${index}.revealId`, `references unknown reveal ${secret.revealId}`);
     });
     control.relationshipEvents.forEach((event, index) => {

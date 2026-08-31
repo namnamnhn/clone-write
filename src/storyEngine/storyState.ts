@@ -29,7 +29,8 @@ export const createInitialStoryState = (currentChapter: CanonicalChapterCursor =
         },
         ledgers: {
             facts: [], epistemic: [], locations: [], statuses: [], characterStates: [], relationships: [],
-            resources: [], continuity: [], events: [],
+            resources: [], continuity: [], events: [], revealOccurrences: [], foreshadowThreads: [],
+            foreshadowCues: [], foreshadowLifecycle: [], payoffObligations: [], payoffLifecycle: [],
         },
         projections: { characters: [], relationships: [], resources: [] },
         extensions: {},
