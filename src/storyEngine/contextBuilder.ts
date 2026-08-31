@@ -166,7 +166,7 @@ export const buildPlannerContext = (
     if (!isValidChapter(targetChapter) || targetChapter > control.engine.plannedChapterCount) {
         throw new Error('target chapter must be within the planned story range');
     }
-    if (!isValidChapter(state.currentChapter) || state.currentChapter > targetChapter) {
+    if ((state.currentChapter !== 0 && !isValidChapter(state.currentChapter)) || state.currentChapter > targetChapter) {
         throw new Error('state current chapter must not be later than the target chapter');
     }
     const arc = getArcForChapter(control, targetChapter);

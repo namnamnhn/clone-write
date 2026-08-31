@@ -1,9 +1,17 @@
-import { ChapterNumber, StoryState } from './types';
+import { CanonicalChapterCursor, ChapterNumber, StoryState } from './types';
 import { isValidChapter } from './storyControl';
 
-export const createInitialStoryState = (currentChapter: ChapterNumber = 1): StoryState => {
-    if (!isValidChapter(currentChapter)) throw new Error('currentChapter must be a positive integer');
+/**
+ * With no argument, creates the only canonical new-story state (cursor/revision 0).
+ * A positive cursor is retained solely for legacy context fixtures; revision remains zero,
+ * so strict canonical parsing deliberately rejects it as skipped history.
+ */
+export const createInitialStoryState = (currentChapter: CanonicalChapterCursor = 0): StoryState => {
+    if (currentChapter !== 0 && !isValidChapter(currentChapter)) throw new Error('currentChapter must be zero or a positive integer');
     return {
+        kind: 'story-state',
+        schemaVersion: 4,
+        revision: 0,
         currentChapter,
         knownCharacterIds: [],
         activeCharacterIds: [],
@@ -19,12 +27,18 @@ export const createInitialStoryState = (currentChapter: ChapterNumber = 1): Stor
             pendingThreads: [],
             notes: [],
         },
+        ledgers: {
+            facts: [], epistemic: [], locations: [], statuses: [], characterStates: [], relationships: [],
+            resources: [], continuity: [], events: [],
+        },
+        projections: { characters: [], relationships: [], resources: [] },
         extensions: {},
     };
 };
 
-/** Immutable chapter transition primitive; advanced reducers intentionally belong to later work. */
+/** @deprecated Canonical chapter movement requires a runtime-validated StoryStateDelta. */
 export const moveStoryStateToChapter = (state: StoryState, currentChapter: ChapterNumber): StoryState => {
     if (!isValidChapter(currentChapter)) throw new Error('currentChapter must be a positive integer');
-    return { ...state, currentChapter };
+    void state;
+    throw new Error('direct chapter movement is disabled; use applyStoryStateDelta');
 };
