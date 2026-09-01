@@ -142,8 +142,8 @@ export interface StoryStudioRelationshipView {
     readonly participantNames: readonly string[];
     readonly categories: readonly string[];
     readonly currentState?: string;
-    readonly currentRomanceMilestone: string;
-    readonly slowBurnStatus: 'stable' | 'progressing' | 'not-applicable';
+    readonly currentRomanceMilestone?: string;
+    readonly slowBurnStatus?: 'stable' | 'progressing' | 'not-applicable';
     readonly dynamicTags: readonly string[];
     readonly recentChanges: readonly { readonly id: string; readonly chapterNumber: number; readonly state: string }[];
 }

@@ -59,6 +59,51 @@ const characterName = (control: FullStoryControl, id: string): string => control
 const sameOrderedIds = (left: readonly string[], right: readonly string[]): boolean =>
     left.length === right.length && left.every((value, index) => value === right[index]);
 
+const structuralValuesEquivalent = (left: unknown, right: unknown): boolean => {
+    if (Object.is(left, right)) return true;
+    if (Array.isArray(left) || Array.isArray(right)) {
+        return Array.isArray(left) && Array.isArray(right)
+            && left.length === right.length
+            && left.every((value, index) => structuralValuesEquivalent(value, right[index]));
+    }
+    if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) return false;
+    const leftRecord = left as Readonly<Record<string, unknown>>;
+    const rightRecord = right as Readonly<Record<string, unknown>>;
+    const leftKeys = Object.keys(leftRecord).filter(key => leftRecord[key] !== undefined).sort();
+    const rightKeys = Object.keys(rightRecord).filter(key => rightRecord[key] !== undefined).sort();
+    return sameOrderedIds(leftKeys, rightKeys)
+        && leftKeys.every(key => structuralValuesEquivalent(leftRecord[key], rightRecord[key]));
+};
+
+const orderedValuesEquivalent = <T>(
+    left: readonly T[],
+    right: readonly T[],
+    equivalent: (leftValue: T, rightValue: T) => boolean = structuralValuesEquivalent,
+): boolean => left.length === right.length && left.every((value, index) => equivalent(value, right[index]));
+
+/** Complete, property-order-independent equality for the typed WriterChapterPlan contract. */
+export const writerPlansEquivalent = (left: WriterChapterPlan, right: WriterChapterPlan): boolean =>
+    left.kind === right.kind
+    && left.chapterNumber === right.chapterNumber
+    && structuralValuesEquivalent(left.arc, right.arc)
+    && structuralValuesEquivalent(left.beat, right.beat)
+    && left.primaryGoal === right.primaryGoal
+    && left.povCharacterId === right.povCharacterId
+    && sameOrderedIds(left.participantIds, right.participantIds)
+    && orderedValuesEquivalent(left.scenes, right.scenes)
+    && orderedValuesEquivalent(left.canonConstraints, right.canonConstraints)
+    && orderedValuesEquivalent(left.reveals, right.reveals)
+    && orderedValuesEquivalent(left.relationshipEvents, right.relationshipEvents)
+    && orderedValuesEquivalent(left.storyEvents, right.storyEvents)
+    && sameOrderedIds(left.cluesPlantedIds, right.cluesPlantedIds)
+    && sameOrderedIds(left.cluesPaidOffIds, right.cluesPaidOffIds)
+    && orderedValuesEquivalent(left.expectedResourceDeltas, right.expectedResourceDeltas)
+    && orderedValuesEquivalent(left.expectedRelationshipDeltas, right.expectedRelationshipDeltas)
+    && orderedValuesEquivalent(left.expectedContinuityConsequences, right.expectedContinuityConsequences)
+    && orderedValuesEquivalent(left.strategicDirectives ?? [], right.strategicDirectives ?? [])
+    && orderedValuesEquivalent(left.relationshipDirectives ?? [], right.relationshipDirectives ?? [])
+    && left.endStateIntent === right.endStateIntent;
+
 const internalAndWriterPlanIdentitiesMatch = (
     internalPlan: NonNullable<StoryStudioSession['internalPlan']>,
     writerPlan: WriterChapterPlan,
@@ -115,6 +160,9 @@ const validateConsistency = (session: StoryStudioSession): readonly string[] => 
     const issues: string[] = [];
     if (!session.control || !session.state) issues.push('Phiên Studio thiếu Story Control hoặc Canon hiện tại.');
     if (session.writerDraft && !session.writerPlan) issues.push('Bản nháp không có kế hoạch Writer tương ứng.');
+    if (session.writerContext && !session.writerPlan) issues.push('Writer Context requires a Writer plan artifact.');
+    if (session.validatorStrategicView && !session.writerPlan) issues.push('Validator strategic view requires a Writer plan artifact.');
+    if (session.validatorRelationshipView && !session.writerPlan) issues.push('Validator relationship view requires a Writer plan artifact.');
     if (session.validationReport && !session.writerDraft) issues.push('Báo cáo kiểm định không có bản nháp tương ứng.');
     if (session.approvalStatus && !session.validationReport) issues.push('Trạng thái duyệt không có báo cáo kiểm định.');
     if (session.approvalStatus === 'approved-not-canon' && session.validationReport?.status !== 'passed') {
@@ -129,23 +177,23 @@ const validateConsistency = (session: StoryStudioSession): readonly string[] => 
         issues.push('Chương mục tiêu phải nằm sau Canon hiện tại.');
     }
     if (session.writerContext && session.writerPlan
-        && JSON.stringify(session.writerContext.chapterPlan) !== JSON.stringify(session.writerPlan)) {
+        && !writerPlansEquivalent(session.writerContext.chapterPlan, session.writerPlan)) {
         issues.push('Writer Context contains a stale same-chapter Writer plan.');
     }
     if (session.internalPlan && session.writerPlan
         && !internalAndWriterPlanIdentitiesMatch(session.internalPlan, session.writerPlan)) {
         issues.push('Internal and Writer plans do not share stable chapter identities.');
     }
-    if (session.validatorStrategicView) {
-        const directives = session.writerPlan?.strategicDirectives ?? [];
+    if (session.validatorStrategicView && session.writerPlan) {
+        const directives = session.writerPlan.strategicDirectives ?? [];
         if (directives.length !== session.validatorStrategicView.actions.length
             || session.validatorStrategicView.actions.some((action) => {
                 const directive = directives.find(candidate => candidate.id === action.id);
                 return directive === undefined || !strategicDirectiveMatches(directive, action);
             })) issues.push('Validator strategic view is stale relative to the Writer plan.');
     }
-    if (session.validatorRelationshipView) {
-        const directives = session.writerPlan?.relationshipDirectives ?? [];
+    if (session.validatorRelationshipView && session.writerPlan) {
+        const directives = session.writerPlan.relationshipDirectives ?? [];
         if (directives.length !== session.validatorRelationshipView.actions.length
             || session.validatorRelationshipView.actions.some((action) => {
                 const directive = directives.find(candidate => candidate.id === action.id);
@@ -334,7 +382,7 @@ const buildRelationships = (
                 .sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
             const milestone = definition
                 ? deriveCurrentRomanceMilestone(definition, state, state.currentChapter || targetChapter)
-                : 'none';
+                : undefined;
             const romantic = definition?.categories.includes('romantic') === true;
             const consecutive = romantic ? countConsecutiveRomanticProgressions(history, targetChapter) : 0;
             return {
@@ -343,8 +391,10 @@ const buildRelationships = (
                 participantNames: canonical.participantIds.map(id => characterName(control, id)),
                 categories: definition?.categories.slice() ?? [],
                 currentState: canonical.state,
-                currentRomanceMilestone: milestone,
-                slowBurnStatus: romantic ? (consecutive > 0 ? 'progressing' : 'stable') : 'not-applicable',
+                ...(milestone === undefined ? {} : { currentRomanceMilestone: milestone }),
+                ...(definition === undefined ? {} : {
+                    slowBurnStatus: romantic ? (consecutive > 0 ? 'progressing' as const : 'stable' as const) : 'not-applicable' as const,
+                }),
                 dynamicTags: definition?.dynamicProfile.coreDynamicTags.slice() ?? [],
                 recentChanges: history.slice(-3).map(item => ({ id: item.id, chapterNumber: item.chapterNumber, state: item.state })),
             };
@@ -596,8 +646,9 @@ export const buildStoryStudioViewModel = (
     const control = session.control;
     const state = session.state;
     const chapters = artifactChapters(session);
-    const targetChapter = chapters[0] ?? Math.min(state.currentChapter + 1, control.engine.plannedChapterCount);
+    const canonicalNextChapter = Math.min(state.currentChapter + 1, control.engine.plannedChapterCount);
     const consistencyOk = consistencyIssues.length === 0;
+    const targetChapter = consistencyOk ? (chapters[0] ?? canonicalNextChapter) : canonicalNextChapter;
     const safeSession: StoryStudioSession = consistencyOk ? session : { mode: session.mode, projectTitle: session.projectTitle, control, state };
     const artifactStatus = artifactStatusFor(safeSession);
     const characters = buildCharacters(control, state, targetChapter, suppliedLimits.maxCharacters);

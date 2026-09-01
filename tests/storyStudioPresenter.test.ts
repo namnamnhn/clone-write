@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { createValidationIssue } from '../src/storyEngine';
+import { createValidationIssue, parseStoryState, sanitizeWriterChapterPlan } from '../src/storyEngine';
 import type {
     FullStoryControl,
     ValidationReport,
     ValidatorRelationshipView,
     ValidatorStrategicView,
+    WriterChapterPlan,
     WriterContext,
 } from '../src/storyEngine';
 import { STORY_STUDIO_DEMO_VIEW_MODEL } from '../src/storyStudio/storyStudioDemoViewModel';
 import { STORY_STUDIO_PRESENTER_FIXTURE } from './fixtures/storyStudioPresenterFixture';
-import { buildStoryStudioViewModel } from '../src/storyStudio/storyStudioPresenter';
+import { buildStoryStudioViewModel, writerPlansEquivalent } from '../src/storyStudio/storyStudioPresenter';
 import { DEFAULT_STORY_STUDIO_DISPLAY_LIMITS } from '../src/storyStudio/storyStudioTypes';
 
 const demo = STORY_STUDIO_PRESENTER_FIXTURE;
@@ -43,6 +44,15 @@ const matchingRelationshipView = (): ValidatorRelationshipView => ({
 });
 
 describe('Story Studio presenter', () => {
+    it('uses a strict canonical Chapter 12 StoryState fixture', () => {
+        expect(() => parseStoryState(demo.state, demo.control)).not.toThrow();
+        expect(demo.state).toMatchObject({ currentChapter: 12, revision: 12 });
+    });
+
+    it('uses the exact sanitizer-produced Writer plan fixture', () => {
+        expect(sanitizeWriterChapterPlan(demo.internalPlan!, demo.control!, demo.state!)).toEqual(demo.writerPlan);
+    });
+
     it('is deterministic for the same engine artifacts', () => {
         expect(buildStoryStudioViewModel(demo)).toEqual(buildStoryStudioViewModel(demo));
     });
@@ -61,12 +71,12 @@ describe('Story Studio presenter', () => {
         const marker = 'RAW_AUTHOR_SECRET_ABC';
         const control: FullStoryControl = {
             ...demo.control!,
-            authorOnlySecrets: [{ id: 'protected-secret', value: marker, revealId: 'reveal-ban-do' }],
+            authorOnlySecrets: [{ id: 'protected-secret', value: marker, revealId: 'future-reveal' }],
         };
         const view = buildStoryStudioViewModel({ ...demo, control });
         expect(JSON.stringify(view)).not.toContain(marker);
         expect(view.intelligence.secrets.items).toEqual([
-            expect.objectContaining({ id: 'protected-secret', revealId: 'reveal-ban-do' }),
+            expect.objectContaining({ id: 'protected-secret', revealId: 'future-reveal' }),
         ]);
     });
 
@@ -79,11 +89,11 @@ describe('Story Studio presenter', () => {
 
     it('keeps global facts separate from character knowledge and belief', () => {
         const view = buildStoryStudioViewModel(demo);
-        const fuelFact = view.intelligence.facts.items.find(fact => fact.id === 'fact-kho-dau');
-        expect(fuelFact?.knownBy.map(holder => holder.id)).toEqual(['linh', 'yen']);
-        expect(fuelFact?.knownBy.some(holder => holder.id === 'minh')).toBe(false);
+        const scheduleFact = view.intelligence.facts.items.find(fact => fact.id === 'actor-fact');
+        expect(scheduleFact?.knownBy.map(holder => holder.id)).toEqual(['minh']);
+        expect(scheduleFact?.knownBy.some(holder => holder.id === 'linh')).toBe(false);
         expect(view.intelligence.beliefs.items).toEqual([
-            expect.objectContaining({ characterId: 'yen', id: 'belief-yen-cang' }),
+            expect.objectContaining({ characterId: 'linh', id: 'belief-linh-weather' }),
         ]);
     });
 
@@ -91,18 +101,17 @@ describe('Story Studio presenter', () => {
         const view = buildStoryStudioViewModel(demo);
         const relationship = view.intelligence.relationships.items.find(item => item.id === 'linh-minh');
         expect(relationship?.participantIds).toEqual(['linh', 'minh']);
-        expect(relationship?.currentRomanceMilestone).toBe('interest');
+        expect(relationship?.currentRomanceMilestone).toBe('awareness');
         expect(JSON.stringify(relationship)).not.toMatch(/affection|harem|score/i);
     });
 
-    it('preserves Writer-safe military logistics, fallback, and cost only', () => {
+    it('preserves only the Writer-safe strategic projection', () => {
         const view = buildStoryStudioViewModel(demo);
-        const military = view.workflow.writerPlan?.strategicDirectives.items.find(item => item.domain === 'military');
-        expect(military).toEqual(expect.objectContaining({
-            domain: 'military',
-            logistics: expect.stringContaining('tiếp tế/dự phòng'),
-            fallback: expect.stringContaining('vịnh nhỏ phía tây'),
-            cost: expect.stringContaining('tiêu hao'),
+        const politics = view.workflow.writerPlan?.strategicDirectives.items.find(item => item.domain === 'politics');
+        expect(politics).toEqual(expect.objectContaining({
+            domain: 'politics',
+            objective: 'Secure a lawful council decision.',
+            cost: 'Minh spends political capital.',
         }));
         expect(JSON.stringify(view.workflow.writerPlan)).not.toMatch(/opponentKnowledgeFactIds|privilegedCountermove|evidenceRefs/);
     });
@@ -161,10 +170,9 @@ describe('Story Studio presenter', () => {
         expect(view.validation.status).toBe('not-run');
     });
 
-    it('marks demo data visibly in the project projection', () => {
-        const view = buildStoryStudioViewModel(demo);
-        expect(view.project.mode).toBe('demo');
-        expect(view.project.isDemo).toBe(true);
+    it('marks presenter-only demo data visibly in the project projection', () => {
+        expect(STORY_STUDIO_DEMO_VIEW_MODEL.project.mode).toBe('demo');
+        expect(STORY_STUDIO_DEMO_VIEW_MODEL.project.isDemo).toBe(true);
     });
 
     it('always exposes Make Canon as unavailable without a mutation callback', () => {
@@ -232,6 +240,41 @@ describe('Story Studio presenter', () => {
         expect(view.workflow.writerPlan).toBeUndefined();
     });
 
+    it('requires a Writer plan whenever WriterContext exists', () => {
+        const writerContext = {
+            kind: 'writer-context', targetChapter: 13, chapterPlan: demo.writerPlan!,
+        } as WriterContext;
+        const view = buildStoryStudioViewModel({
+            ...demo, writerPlan: undefined, writerDraft: undefined, validationReport: undefined,
+            approvalStatus: undefined, writerContext,
+        });
+        expect(view.consistency.issues).toContain('Writer Context requires a Writer plan artifact.');
+        expect(view.workflow.writerPlan).toBeUndefined();
+    });
+
+    it('requires a Writer plan for an empty ValidatorStrategicView', () => {
+        const validatorStrategicView: ValidatorStrategicView = {
+            kind: 'validator-strategic-view', chapterNumber: 13, actions: [], deterministicIssues: [],
+            resourceEvidence: [], epistemicEvidence: [],
+        };
+        const view = buildStoryStudioViewModel({
+            ...demo, writerPlan: undefined, writerDraft: undefined, validationReport: undefined,
+            approvalStatus: undefined, validatorStrategicView,
+        });
+        expect(view.consistency.issues).toContain('Validator strategic view requires a Writer plan artifact.');
+    });
+
+    it('requires a Writer plan for an empty ValidatorRelationshipView', () => {
+        const validatorRelationshipView: ValidatorRelationshipView = {
+            kind: 'validator-relationship-view', chapterNumber: 13, actions: [], canonicalRelationships: [], deterministicIssues: [],
+        };
+        const view = buildStoryStudioViewModel({
+            ...demo, writerPlan: undefined, writerDraft: undefined, validationReport: undefined,
+            approvalStatus: undefined, validatorRelationshipView,
+        });
+        expect(view.consistency.issues).toContain('Validator relationship view requires a Writer plan artifact.');
+    });
+
     it('rejects Internal and Writer plans with stale stable identities', () => {
         const internalPlan = { ...demo.internalPlan!, povCharacterId: 'minh' };
         const view = buildStoryStudioViewModel({ ...demo, internalPlan });
@@ -290,7 +333,7 @@ describe('Story Studio presenter', () => {
         expect(view.intelligence.relationships.items).toContainEqual(expect.objectContaining({
             id: 'linh-minh',
             categories: expect.arrayContaining(['romantic']),
-            currentState: 'interest',
+            currentState: 'awareness',
         }));
     });
 
@@ -300,16 +343,51 @@ describe('Story Studio presenter', () => {
             ledgers: {
                 ...demo.state!.ledgers,
                 relationships: [...demo.state!.ledgers.relationships, {
-                    id: 'legacy-history-12', relationshipId: 'legacy-canonical', participantIds: ['linh', 'tuan'],
+                    id: 'legacy-history-12', relationshipId: 'legacy-canonical', participantIds: ['linh', 'minh'],
                     state: 'allies', chapterNumber: 12,
                     provenance: { sourceChapter: 12, sourceType: 'chapter' as const, sourceId: 'chapter-12' },
                 }],
             },
         };
         const view = buildStoryStudioViewModel({ ...demo, state });
-        expect(view.intelligence.relationships.items).toContainEqual(expect.objectContaining({
-            id: 'legacy-canonical', categories: [], currentState: 'allies', currentRomanceMilestone: 'none', dynamicTags: [],
+        const legacy = view.intelligence.relationships.items.find(item => item.id === 'legacy-canonical');
+        expect(legacy).toEqual(expect.objectContaining({
+            id: 'legacy-canonical', categories: [], currentState: 'allies', dynamicTags: [],
         }));
+        expect(legacy).not.toHaveProperty('currentRomanceMilestone');
+        expect(legacy).not.toHaveProperty('slowBurnStatus');
+    });
+
+    it('uses canonical-next target gates after inconsistent future artifacts', () => {
+        const internalPlan = { ...demo.internalPlan!, chapterNumber: 100 };
+        const view = buildStoryStudioViewModel({ ...demo, internalPlan });
+        expect(view.consistency.status).toBe('error');
+        expect(view.project.targetChapter).toBe(13);
+        expect(view.intelligence.characters.items.some(character => character.id === 'future')).toBe(false);
+        expect(view.intelligence.reveals.items.find(reveal => reveal.id === 'future-reveal')?.status).toBe('locked');
+        expect(view.intelligence.secrets.items.find(secret => secret.id === 'future-secret')?.status).toBe('locked');
+        expect(view.overview.activeConstraintCount).toBe(1);
+    });
+
+    it('keeps presenter-only demo overview counts coherent with complete collections', () => {
+        const view = STORY_STUDIO_DEMO_VIEW_MODEL;
+        expect(view.overview.activeCharacterCount).toBe(view.intelligence.characters.items.filter(character => character.active).length);
+        expect(view.overview.relationshipCount).toBe(view.intelligence.relationships.totalCount);
+        expect(view.overview.factCount).toBe(view.intelligence.facts.totalCount);
+        expect(view.overview.strategicActionCount).toBe(view.workflow.writerPlan?.strategicDirectives.totalCount ?? 0);
+    });
+
+    it('compares complete Writer plans independently of object property insertion order', () => {
+        const reordered = Object.fromEntries(Object.entries(demo.writerPlan!).reverse()) as unknown as WriterChapterPlan;
+        expect(writerPlansEquivalent(demo.writerPlan!, reordered)).toBe(true);
+        const changed = {
+            ...reordered,
+            scenes: reordered.scenes.map((scene, index) => index === 0 ? { ...scene, goal: 'Changed nested goal.' } : scene),
+        };
+        expect(writerPlansEquivalent(demo.writerPlan!, changed)).toBe(false);
+
+        const writerContext = { kind: 'writer-context', targetChapter: 13, chapterPlan: reordered } as WriterContext;
+        expect(buildStoryStudioViewModel({ ...demo, writerContext }).consistency).toEqual({ status: 'ok', issues: [] });
     });
 
     it('counts active characters before presentation truncation', () => {

@@ -28,13 +28,13 @@ export const STORY_STUDIO_DEMO_VIEW_MODEL: StoryStudioViewModel = {
     overview: {
         privilege: 'canon-safe',
         plannedChapterCount: 180,
-        activeCharacterCount: 4,
-        relationshipCount: 2,
+        activeCharacterCount: 2,
+        relationshipCount: 1,
         activeConstraintCount: 2,
-        factCount: 2,
+        factCount: 1,
         openForeshadowCount: 1,
         outstandingPayoffCount: 1,
-        strategicActionCount: 1,
+        strategicActionCount: 0,
         validationIssueCount: 0,
     },
     workflow: {
@@ -87,8 +87,7 @@ export const STORY_STUDIO_DEMO_VIEW_MODEL: StoryStudioViewModel = {
         relationships: complete([
             {
                 id: 'demo-relationship', participantIds: ['linh', 'minh'], participantNames: ['Linh An', 'Minh Kha'],
-                categories: ['professional'], currentState: 'minh họa', currentRomanceMilestone: 'none',
-                slowBurnStatus: 'not-applicable', dynamicTags: [], recentChanges: [],
+                categories: ['professional'], currentState: 'minh họa', dynamicTags: [], recentChanges: [],
             },
         ]),
         facts: complete([{ id: 'demo-fact', text: 'Sự thật minh họa, không phải Canon.', establishedChapter: 12, visibility: 'writer', status: 'active', knownBy: [] }]),
