@@ -310,8 +310,10 @@ describe('Validator context and deterministic safety net', () => {
         expect(JSON.stringify(result.report)).not.toContain('omega-secret');
     });
 
-    it('allows the planned writer-facing reveal at chapter 561 without exposing the raw source secret', async () => {
-        expect(buildValidatorContext(control, stateFor(561), planFor(561, true)).secretValidation).toEqual([]);
+    it('allows the planned writer-facing reveal at chapter 561 while retaining privileged authorization evidence', async () => {
+        expect(buildValidatorContext(control, stateFor(561), planFor(561, true)).secretValidation).toEqual([{
+            id: 'omega-secret', revealId: 'omega-reveal', revealAllowed: true, rawValue: RAW_SECRET,
+        }]);
         const result = await validateWriterChapter({ control, state: stateFor(561), plan: planFor(561, true), draft: draftFor(561, 'At the price of the map, A learns that Omega owns a second key.'), semanticModel: passingModel });
         expect(result.report.status).toBe('passed');
         expect(result.report.issues.map(issue => issue.code)).not.toContain('AUTHOR_SECRET_LEAK');

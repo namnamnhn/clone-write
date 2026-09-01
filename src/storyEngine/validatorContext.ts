@@ -1,9 +1,17 @@
 import { getArcForChapter, getBeatForChapter, isCharacterDirectAppearanceAllowed, isRelationshipEventAllowed, isRevealAllowed, isStoryEventAllowed } from './gates';
-import { WriterChapterPlan } from './plannerTypes';
+import {
+    DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
+    PlannerContextSelectionPolicy,
+    WriterChapterPlan,
+} from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { buildWriterContext } from './writerContext';
 import { WriterContext } from './writerTypes';
-import { buildPlannerContext } from './contextBuilder';
+import {
+    buildPlannerContext,
+    normalizePlannerContextSelectionPolicy,
+    PlannerContextCapacityError,
+} from './contextBuilder';
 import { buildValidatorPlotView, PlotGuidanceCapacityError, ValidatorPlotView } from './plotContext';
 import {
     parseValidatorStrategicView,
@@ -34,6 +42,7 @@ export interface ValidatorContextSelectionPolicy {
     readonly maxStrategicItems?: number;
     readonly maxRelationshipItems?: number;
     readonly relationshipContextPolicy?: RelationshipContextSelectionPolicy;
+    readonly plannerContextSelectionPolicy?: PlannerContextSelectionPolicy;
 }
 
 export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelectionPolicy = {
@@ -46,6 +55,7 @@ export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelecti
     maxStrategicItems: 256,
     maxRelationshipItems: 256,
     relationshipContextPolicy: DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+    plannerContextSelectionPolicy: DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
 };
 
 export class ValidatorContextCapacityError extends Error {
@@ -97,6 +107,7 @@ const compareIds = (left: { readonly id: string }, right: { readonly id: string 
 
 const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): ValidatorContextSelectionPolicy => {
     let relationshipContextPolicy: RelationshipContextSelectionPolicy;
+    let plannerContextSelectionPolicy: PlannerContextSelectionPolicy;
     try {
         relationshipContextPolicy = normalizeRelationshipContextSelectionPolicy(
             policy.relationshipContextPolicy ?? DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
@@ -104,12 +115,23 @@ const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): Vali
     } catch {
         throw new ValidatorContextCapacityError('validator relationship context selection policy is invalid');
     }
+    try {
+        plannerContextSelectionPolicy = normalizePlannerContextSelectionPolicy(
+            policy.plannerContextSelectionPolicy ?? DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
+        );
+    } catch (error) {
+        if (error instanceof PlannerContextCapacityError) {
+            throw new ValidatorContextCapacityError('validator planner context selection policy is invalid');
+        }
+        throw error;
+    }
     const normalized = {
         ...policy,
         maxPlotItems: policy.maxPlotItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxPlotItems,
         maxStrategicItems: policy.maxStrategicItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxStrategicItems,
         maxRelationshipItems: policy.maxRelationshipItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxRelationshipItems,
         relationshipContextPolicy,
+        plannerContextSelectionPolicy,
     };
     const keys: readonly (keyof ValidatorContextSelectionPolicy)[] = [
         'maxLockedCharacters', 'maxLockedReveals', 'maxLockedRelationshipEvents',
@@ -121,7 +143,18 @@ const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): Vali
             throw new ValidatorContextCapacityError(`validator context selection policy ${key} must be a non-negative safe integer`);
         }
     });
-    return normalized;
+    return {
+        maxLockedCharacters: normalized.maxLockedCharacters,
+        maxLockedReveals: normalized.maxLockedReveals,
+        maxLockedRelationshipEvents: normalized.maxLockedRelationshipEvents,
+        maxLockedStoryEvents: normalized.maxLockedStoryEvents,
+        maxSecretValidationItems: normalized.maxSecretValidationItems,
+        maxPlotItems: normalized.maxPlotItems,
+        maxStrategicItems: normalized.maxStrategicItems,
+        maxRelationshipItems: normalized.maxRelationshipItems,
+        relationshipContextPolicy,
+        plannerContextSelectionPolicy,
+    };
 };
 
 const requireCapacity = (label: string, count: number, maximum: number): void => {
@@ -170,11 +203,18 @@ export const buildValidatorContext = (
         .filter(value => !isStoryEventAllowed(control, value.id, chapter))
         .map(value => ({ id: value.id, eventType: value.eventType, ...(value.writerText === undefined ? {} : { validationText: value.writerText }) }))
         .sort(compareIds);
+    const occurredRevealIds = new Set(state.ledgers.revealOccurrences
+        .filter(occurrence => occurrence.chapterNumber <= state.currentChapter)
+        .map(occurrence => occurrence.revealId));
+    const plannedRevealIds = new Set(writerContext.chapterPlan.reveals.map(reveal => reveal.id));
     const secretValidation = control.authorOnlySecrets
-        .filter(secret => secret.revealId === undefined || !isRevealAllowed(control, secret.revealId, chapter))
+        .filter(secret => secret.revealId === undefined || !occurredRevealIds.has(secret.revealId))
         .map(secret => ({
             id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }),
-            revealAllowed: false as const, rawValue: secret.value,
+            revealAllowed: secret.revealId !== undefined
+                && isRevealAllowed(control, secret.revealId, chapter)
+                && plannedRevealIds.has(secret.revealId),
+            rawValue: secret.value,
         }))
         .sort(compareIds);
     requireCapacity('locked characters', lockedCharacters.length, policy.maxLockedCharacters);
@@ -197,6 +237,7 @@ export const buildValidatorContext = (
             plannerContext = buildPlannerContext(
                 control, state, chapter, undefined, undefined,
                 policy.relationshipContextPolicy ?? DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+                policy.plannerContextSelectionPolicy ?? DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
             );
             strategicView = parseValidatorStrategicView(
                 suppliedStrategicView, chapter, policy.maxStrategicItems ?? 256, plannerContext,
@@ -212,6 +253,7 @@ export const buildValidatorContext = (
             plannerContext ??= buildPlannerContext(
                 control, state, chapter, undefined, undefined,
                 policy.relationshipContextPolicy ?? DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+                policy.plannerContextSelectionPolicy ?? DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
             );
             relationshipView = parseValidatorRelationshipView(
                 suppliedRelationshipView, chapter, policy.maxRelationshipItems ?? 256, plannerContext,
