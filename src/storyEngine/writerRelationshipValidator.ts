@@ -7,6 +7,8 @@ import {
     orphanIntermediateActionIds,
     relationshipContractContradictions,
     requiresFinalCanonicalRelationshipConsequence,
+    requiresFullParticipantChoices,
+    requiresPowerImbalanceAddressing,
     romanceMilestoneChanged,
 } from './relationshipContract';
 
@@ -36,7 +38,26 @@ export const validateWriterRelationshipDirectives = (
     const sceneById = new Map(input.scenes.map(value => [value.id, value]));
     const actionById = new Map(input.directives.map((value, index) => [value.id, { value, index }]));
     if (actionById.size !== input.directives.length) fail('relationship directives must not contain duplicate action IDs');
-    if (input.directives.length > 0 && (!gateView || gateView.targetChapter !== safe.chapter)) fail('trusted relationship gate validation data is required');
+    if ((input.directives.length > 0 || input.relationshipEventIds.length > 0) && (!gateView || gateView.targetChapter !== safe.chapter)) fail('trusted relationship gate validation data is required');
+    const deltaRelationshipIds = input.expectedRelationshipDeltas.map(value => value.relationshipId);
+    if (new Set(deltaRelationshipIds).size !== deltaRelationshipIds.length) fail('expectedRelationshipDeltas must contain at most one final delta per relationship');
+    input.expectedRelationshipDeltas.forEach((delta, index) => {
+        if (!definitions.has(delta.relationshipId)) return;
+        const matchingFinals = input.directives.filter(directive => !directive.intendedProgression.intermediate
+            && directive.relationshipId === delta.relationshipId
+            && sameIds(directive.participantIds, delta.participantIds)
+            && directive.intendedProgression.expectedState === delta.expectedState);
+        if (matchingFinals.length !== 1) fail(`expectedRelationshipDeltas.${index} requires exactly one matching final relationshipDirective`);
+    });
+    input.relationshipEventIds.forEach((eventId, index) => {
+        const event = allowedEvents.get(eventId);
+        if (!event || !definitions.has(event.relationshipId)) return;
+        const matchingDirectives = input.directives.filter(directive => directive.relationshipEventId === event.id
+            && directive.relationshipId === event.relationshipId
+            && sameIds(directive.participantIds, event.participantIds)
+            && directive.actionType === event.eventType);
+        if (matchingDirectives.length !== 1) fail(`relationshipEvents.${index} requires exactly one compatible relationshipDirective`);
+    });
 
     input.directives.forEach((directive, index) => {
         const definition = definitions.get(directive.relationshipId);
@@ -44,6 +65,7 @@ export const validateWriterRelationshipDirectives = (
         if (!sameIds(definition.participantIds, directive.participantIds)
             || !directive.participantIds.every(id => declaredParticipants.has(id))) fail(`relationshipDirectives.${index} participants do not match the declared relationship`);
         if (!definition.categories.includes(directive.category)) fail(`relationshipDirectives.${index} category is not canon-declared`);
+        if (definition.dynamicProfile.prohibitedShortcuts.includes(directive.actionType)) fail(`relationshipDirectives.${index} action is prohibited by the relationship dynamic profile`);
         const linkedScenes = directive.sceneIds.map(id => sceneById.get(id));
         if (linkedScenes.some(scene => scene === undefined || !scene.purposeTags.includes('relationship')
             || !directive.participantIds.every(id => scene.participantIds.includes(id)))) fail(`relationshipDirectives.${index} contains an invalid scene reference`);
@@ -55,8 +77,8 @@ export const validateWriterRelationshipDirectives = (
         const gatedEvents = gateView?.events.filter(value => value.relationshipId === directive.relationshipId && value.eventType === directive.actionType) ?? [];
         if (directive.relationshipEventId !== undefined && (!trustedEvent || !trustedEvent.allowed || trustedEvent.relationshipId !== directive.relationshipId)) fail(`relationshipDirectives.${index} relationship event is unavailable`);
         if (gatedEvents.length > 0 && (!trustedEvent || trustedEvent.eventType !== directive.actionType)) fail(`relationshipDirectives.${index} requires its allowed control event`);
-        const derivedMilestone = safe.state.relationshipMilestones.find(value => value.relationshipId === directive.relationshipId)?.currentRomanceMilestone
-            ?? definition.initialRomanceMilestone;
+        const progressionState = safe.state.relationshipMilestones.find(value => value.relationshipId === directive.relationshipId);
+        const derivedMilestone = progressionState?.currentRomanceMilestone ?? definition.initialRomanceMilestone;
         if (directive.currentRomanceMilestone !== derivedMilestone) fail(`relationshipDirectives.${index} current milestone is stale`);
         const currentIndex = indexOfMilestone(directive.currentRomanceMilestone);
         const nextIndex = indexOfMilestone(directive.intendedProgression.romanticMilestone);
@@ -73,6 +95,8 @@ export const validateWriterRelationshipDirectives = (
 
         const choiceIds = directive.participantChoices.map(value => value.characterId);
         if (new Set(choiceIds).size !== choiceIds.length || choiceIds.some(id => !directive.participantIds.includes(id))) fail(`relationshipDirectives.${index} contains malformed participant choices`);
+        if (requiresFullParticipantChoices({ ...directive, boundaries: directive.visibleBoundaries })
+            && !sameIds(choiceIds, directive.participantIds)) fail(`relationshipDirectives.${index} requires one participant choice for every relationship participant`);
         const mutualRequired = nextIndex >= indexOfMilestone('mutual-tension') || directive.actionType === 'accept-romance' || directive.intendedProgression.mutual;
         if (mutualRequired && (!directive.intendedProgression.mutual || !sameIds(choiceIds, directive.participantIds)
             || directive.participantChoices.some(value => value.willingness !== 'yes'))) fail(`relationshipDirectives.${index} lacks explicit mutual willingness`);
@@ -83,6 +107,18 @@ export const validateWriterRelationshipDirectives = (
             if (['revise', 'release'].includes(boundary.stance)
                 && !directive.participantChoices.some(value => value.characterId === boundary.characterId && value.willingness === 'yes')) fail(`relationshipDirectives.${index} changes a boundary without the owner's willing choice`);
         });
+        if (requiresPowerImbalanceAddressing(directive.importance, directive.category, directive.visiblePowerBalance)
+            && !directive.powerImbalanceAddressed) fail(`relationshipDirectives.${index} must address the major romantic power imbalance`);
+        if (advance > 0 && (!progressionState?.slowBurnHistoryComplete
+            || progressionState.consecutiveProgressionCount >= definition.progressionPolicy.maxConsecutiveProgressionChapters)) {
+            fail(`relationshipDirectives.${index} violates the canonical slow-burn progression guard`);
+        }
+        if (directive.actionType === 'jealousy') {
+            if (directive.jealousCharacterId === undefined || !directive.participantIds.includes(directive.jealousCharacterId)
+                || !directive.participantChoices.some(choice => choice.characterId === directive.jealousCharacterId)) {
+                fail(`relationshipDirectives.${index} requires a participant jealousy subject with a projected choice`);
+            }
+        } else if (directive.jealousCharacterId !== undefined) fail(`relationshipDirectives.${index} jealousy subject is only valid for jealousy`);
         const delta = input.expectedRelationshipDeltas.find(value => value.relationshipId === directive.relationshipId);
         if (!directive.intendedProgression.intermediate && romanceMilestoneChanged({ ...directive, boundaries: directive.visibleBoundaries })
             && directive.intendedProgression.expectedState !== directive.intendedProgression.romanticMilestone) fail(`relationshipDirectives.${index} must persist the exact romantic milestone literal`);

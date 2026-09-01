@@ -140,6 +140,9 @@ const parseRelationshipDeltas = (value: unknown, path: string, issues: PlanValid
         const expectedState = requiredText(entry, 'expectedState', entryPath, issues);
         if (relationshipId && participantIds && expectedState) result.push({ relationshipId, participantIds, expectedState });
     });
+    if (new Set(result.map(entry => entry.relationshipId)).size !== result.length) {
+        issue(issues, 'INVALID_RELATIONSHIP_DELTA', path, 'must contain at most one delta per relationship');
+    }
     return result;
 };
 

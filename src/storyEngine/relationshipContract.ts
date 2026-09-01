@@ -2,7 +2,9 @@ import { ROMANCE_MILESTONES } from './relationshipTypes';
 import type {
     RelationshipActionType,
     RelationshipBoundary,
+    RelationshipCategory,
     RelationshipProgressionIntent,
+    PowerBalanceState,
     RomanceMilestone,
 } from './relationshipTypes';
 
@@ -10,6 +12,7 @@ export interface RelationshipContractAction {
     readonly id: string;
     readonly relationshipId: string;
     readonly actionType: RelationshipActionType;
+    readonly importance: 'minor' | 'major';
     readonly currentRomanceMilestone: RomanceMilestone;
     readonly intendedProgression: RelationshipProgressionIntent;
     readonly boundaries: readonly RelationshipBoundary[];
@@ -22,6 +25,19 @@ const boundaryIncompatibleRomanticActions = new Set<RelationshipActionType>([
 
 export const romanceMilestoneChanged = (action: RelationshipContractAction): boolean =>
     action.currentRomanceMilestone !== action.intendedProgression.romanticMilestone;
+
+export const romanceMilestoneAdvances = (action: RelationshipContractAction): boolean =>
+    ROMANCE_MILESTONES.indexOf(action.intendedProgression.romanticMilestone)
+    > ROMANCE_MILESTONES.indexOf(action.currentRomanceMilestone);
+
+export const requiresFullParticipantChoices = (action: RelationshipContractAction): boolean =>
+    action.importance === 'major' || romanceMilestoneAdvances(action);
+
+export const requiresPowerImbalanceAddressing = (
+    importance: 'minor' | 'major',
+    category: RelationshipCategory,
+    powerBalance: PowerBalanceState,
+): boolean => importance === 'major' && category === 'romantic' && powerBalance === 'unequal';
 
 export const requiresFinalCanonicalRelationshipConsequence = (action: RelationshipContractAction): boolean =>
     !action.intendedProgression.intermediate && (

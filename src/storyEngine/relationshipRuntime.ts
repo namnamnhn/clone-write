@@ -138,6 +138,7 @@ const parseWriterContract = (value: unknown, path: string): RelationshipWriterVi
 
 const ACTION_KEYS = [
     'id', 'sceneIds', 'relationshipId', 'relationshipEventId', 'participantIds', 'category', 'actionType', 'importance',
+    'jealousCharacterId',
     'currentStateAssessment', 'currentRomanceMilestone', 'intendedProgression', 'participantAgency', 'boundaries',
     'evidenceRefs', 'counterpressure', 'uncertainty', 'expectedCostOrTradeoff', 'powerImbalanceAddressed',
     'writerVisibleContract', 'dependsOnActionId',
@@ -151,6 +152,9 @@ const parseAction = (value: unknown, path: string): RelationshipActionPlan => {
     const evidenceValues = Array.isArray(source.evidenceRefs) ? source.evidenceRefs : fail(path, 'contains malformed evidenceRefs');
     const participantAgency = agencyValues.map((entry, index) => parseAgency(entry, `${path}.participantAgency.${index}`));
     if (new Set(participantAgency.map(entry => entry.characterId)).size !== participantAgency.length) fail(`${path}.participantAgency`, 'must not contain duplicate characters');
+    const actionType = closed(source.actionType, RELATIONSHIP_ACTION_TYPES, `${path}.actionType`);
+    const jealousCharacterId = source.jealousCharacterId === undefined ? undefined : text(source.jealousCharacterId, `${path}.jealousCharacterId`);
+    if ((actionType === 'jealousy') !== (jealousCharacterId !== undefined)) fail(`${path}.jealousCharacterId`, 'is required exactly for jealousy actions');
     return {
         id: text(source.id, `${path}.id`),
         sceneIds: strings(source.sceneIds, `${path}.sceneIds`, true),
@@ -158,7 +162,8 @@ const parseAction = (value: unknown, path: string): RelationshipActionPlan => {
         ...(source.relationshipEventId === undefined ? {} : { relationshipEventId: text(source.relationshipEventId, `${path}.relationshipEventId`) }),
         participantIds: strings(source.participantIds, `${path}.participantIds`, true),
         category: closed(source.category, RELATIONSHIP_CATEGORIES, `${path}.category`),
-        actionType: closed(source.actionType, RELATIONSHIP_ACTION_TYPES, `${path}.actionType`),
+        actionType,
+        ...(jealousCharacterId === undefined ? {} : { jealousCharacterId }),
         importance: closed(source.importance, ['minor', 'major'] as const, `${path}.importance`),
         currentStateAssessment: parseAssessment(source.currentStateAssessment, `${path}.currentStateAssessment`),
         currentRomanceMilestone: closed(source.currentRomanceMilestone, ROMANCE_MILESTONES, `${path}.currentRomanceMilestone`),
@@ -198,6 +203,7 @@ export const parseRelationshipActions = (
 
 const DIRECTIVE_KEYS = [
     'id', 'relationshipId', 'relationshipEventId', 'sceneIds', 'participantIds', 'category', 'actionType', 'importance',
+    'jealousCharacterId',
     'currentRomanceMilestone', 'intendedProgression', 'participantChoices', 'visibleBoundaries', 'visibleCurrentDynamic',
     'visibleObjective', 'visibleConflict', 'expectedCostOrTradeoff', 'visibleUncertainty', 'visiblePowerBalance', 'powerImbalanceAddressed', 'dependsOnActionId',
 ] as const;
@@ -218,6 +224,9 @@ const parseDirective = (value: unknown, path: string): WriterRelationshipDirecti
         };
     });
     if (new Set(participantChoices.map(entry => entry.characterId)).size !== participantChoices.length) fail(`${path}.participantChoices`, 'must not contain duplicate characters');
+    const actionType = closed(source.actionType, RELATIONSHIP_ACTION_TYPES, `${path}.actionType`);
+    const jealousCharacterId = source.jealousCharacterId === undefined ? undefined : text(source.jealousCharacterId, `${path}.jealousCharacterId`);
+    if ((actionType === 'jealousy') !== (jealousCharacterId !== undefined)) fail(`${path}.jealousCharacterId`, 'is required exactly for jealousy actions');
     return {
         id: text(source.id, `${path}.id`),
         relationshipId: text(source.relationshipId, `${path}.relationshipId`),
@@ -225,7 +234,8 @@ const parseDirective = (value: unknown, path: string): WriterRelationshipDirecti
         sceneIds: strings(source.sceneIds, `${path}.sceneIds`, true),
         participantIds: strings(source.participantIds, `${path}.participantIds`, true),
         category: closed(source.category, RELATIONSHIP_CATEGORIES, `${path}.category`),
-        actionType: closed(source.actionType, RELATIONSHIP_ACTION_TYPES, `${path}.actionType`),
+        actionType,
+        ...(jealousCharacterId === undefined ? {} : { jealousCharacterId }),
         importance: closed(source.importance, ['minor', 'major'] as const, `${path}.importance`),
         currentRomanceMilestone: closed(source.currentRomanceMilestone, ROMANCE_MILESTONES, `${path}.currentRomanceMilestone`),
         intendedProgression: parseProgression(source.intendedProgression, `${path}.intendedProgression`),

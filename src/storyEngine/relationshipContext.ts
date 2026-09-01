@@ -5,7 +5,7 @@ import type { FullStoryControl, StoryState } from './types';
 import type { InternalChapterPlan } from './plannerTypes';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 import { orderRelationshipActions } from './relationshipValidator';
-import { deriveCurrentRomanceMilestone, isRomanceMilestone } from './relationshipMilestone';
+import { countConsecutiveRomanticProgressions, deriveCurrentRomanceMilestone, isRomanceMilestone } from './relationshipMilestone';
 
 export interface RelationshipContextSelectionPolicy {
     readonly maxRelationships: number;
@@ -89,6 +89,7 @@ export const buildPlannerRelationshipContext = (
             },
             progressionPolicy: { ...value.progressionPolicy },
             slowBurnHistoryComplete,
+            consecutiveProgressionCount: countConsecutiveRomanticProgressions(selectedHistory, targetChapter),
             recentHistory: selectedHistory.map(entry => ({ id: entry.id, state: entry.state, chapterNumber: entry.chapterNumber })),
         };
     });
@@ -129,6 +130,7 @@ const writerDirectiveFromAction = (action: RelationshipActionPlan): WriterRelati
     participantIds: action.participantIds.map(id => id),
     category: action.category,
     actionType: action.actionType,
+    ...(action.jealousCharacterId === undefined ? {} : { jealousCharacterId: action.jealousCharacterId }),
     importance: action.importance,
     currentRomanceMilestone: action.currentRomanceMilestone,
     intendedProgression: { ...action.intendedProgression },

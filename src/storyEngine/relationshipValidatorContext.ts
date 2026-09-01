@@ -13,6 +13,7 @@ import { buildWriterRelationshipDirectives } from './relationshipContext';
 import type { FullStoryControl } from './types';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 import { buildRelationshipGateValidationView } from './relationshipGateValidation';
+import { relationshipEvidenceAdequacyProblems } from './relationshipEvidence';
 
 export class RelationshipContextCapacityError extends Error {
     constructor(message: string) { super(message); this.name = 'RelationshipContextCapacityError'; }
@@ -35,6 +36,7 @@ const strings = (value: unknown, path: string): readonly string[] => {
 
 const directiveKeys = [
     'id', 'relationshipId', 'relationshipEventId', 'sceneIds', 'participantIds', 'category', 'actionType', 'importance',
+    'jealousCharacterId',
     'currentRomanceMilestone', 'intendedProgression', 'participantChoices', 'visibleBoundaries', 'visibleCurrentDynamic',
     'visibleObjective', 'visibleConflict', 'expectedCostOrTradeoff', 'visibleUncertainty', 'visiblePowerBalance', 'powerImbalanceAddressed', 'dependsOnActionId',
 ] as const;
@@ -141,6 +143,16 @@ const parseAction = (
     });
     const knowledgeIdentities = participantKnowledgeRefs.map(value => `${value.characterId}\u0000${value.factId}`);
     if (new Set(knowledgeIdentities).size !== knowledgeIdentities.length) fail(`${path}.participantKnowledgeRefs`, 'must not contain duplicates');
+    const adequacyProblems = relationshipEvidenceAdequacyProblems({
+        actionType: directive.actionType,
+        importance: directive.importance,
+        participantIds: directive.participantIds,
+        participantActorIds: directive.participantChoices.map(choice => choice.characterId),
+        ...(directive.jealousCharacterId === undefined ? {} : { jealousCharacterId: directive.jealousCharacterId }),
+        direction: directive.intendedProgression.direction,
+        evidenceRefs,
+    });
+    if (adequacyProblems.length > 0) fail(`${path}.evidenceRefs`, adequacyProblems[0]);
     return descriptorFrom(directive, evidenceRefs, participantKnowledgeRefs, strings(source.privilegedConstraints, `${path}.privilegedConstraints`));
 };
 

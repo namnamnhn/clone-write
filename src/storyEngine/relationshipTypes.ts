@@ -139,6 +139,8 @@ export interface RelationshipActionPlan {
     readonly participantIds: readonly StoryId[];
     readonly category: RelationshipCategory;
     readonly actionType: RelationshipActionType;
+    /** Required only for jealousy; identifies whose reaction and trigger are being planned. */
+    readonly jealousCharacterId?: StoryId;
     readonly importance: 'minor' | 'major';
     readonly currentStateAssessment: RelationshipCurrentAssessment;
     readonly currentRomanceMilestone: RomanceMilestone;
@@ -164,6 +166,7 @@ export interface PlannerRelationshipDescriptor {
     readonly progressionPolicy: RelationshipProgressionPolicy;
     /** False only when the requested zero-history projection cannot prove the slow-burn window. */
     readonly slowBurnHistoryComplete: boolean;
+    readonly consecutiveProgressionCount: number;
     readonly recentHistory: readonly {
         readonly id: StoryId;
         readonly state: string;
@@ -197,6 +200,7 @@ export interface WriterRelationshipDirective {
     readonly participantIds: readonly StoryId[];
     readonly category: RelationshipCategory;
     readonly actionType: RelationshipActionType;
+    readonly jealousCharacterId?: StoryId;
     readonly importance: 'minor' | 'major';
     readonly currentRomanceMilestone: RomanceMilestone;
     readonly intendedProgression: RelationshipProgressionIntent;

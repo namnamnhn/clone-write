@@ -23,7 +23,11 @@ import {
     assertWriterFacingControlSecretSafe,
 } from './secretTextSafety';
 import { buildPlannerPlotGuidance } from './plotContext';
-import { buildPlannerRelationshipContext } from './relationshipContext';
+import {
+    buildPlannerRelationshipContext,
+    DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+} from './relationshipContext';
+import type { RelationshipContextSelectionPolicy } from './relationshipContext';
 import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
     LongTermMemory,
@@ -168,6 +172,7 @@ export const buildPlannerContext = (
     targetChapter: number = state.currentChapter,
     memoryInput?: NarrativeMemoryInput,
     memoryPolicy: NarrativeMemorySelectionPolicy = DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
+    relationshipPolicy: RelationshipContextSelectionPolicy = DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
 ): PlannerContext => {
     assertWriterFacingControlSecretSafe(control);
     if (!isValidChapter(targetChapter) || targetChapter > control.engine.plannedChapterCount) {
@@ -248,7 +253,7 @@ export const buildPlannerContext = (
         ],
         narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
         plotGuidance: buildPlannerPlotGuidance(control, state, targetChapter),
-        relationshipContext: buildPlannerRelationshipContext(control, state, targetChapter),
+        relationshipContext: buildPlannerRelationshipContext(control, state, targetChapter, relationshipPolicy),
     };
     assertModelBoundaryStringsSecretSafe(control, context, 'plannerContext');
     return context;

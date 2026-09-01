@@ -6,8 +6,10 @@ import {
     orphanIntermediateActionIds,
     relationshipContractContradictions,
     requiresFinalCanonicalRelationshipConsequence,
+    requiresPowerImbalanceAddressing,
     romanceMilestoneChanged,
 } from './relationshipContract';
+import { relationshipEvidenceAdequacyProblems } from './relationshipEvidence';
 
 const romanticActions = new Set([
     'flirtation', 'romantic-tension', 'courtship', 'confession', 'accept-romance', 'reject-romance',
@@ -58,25 +60,6 @@ const validateEvidence = (
 const hasCanonicalKnowledge = (context: PlannerContext, characterId: string, factId: string): boolean =>
     context.characterKnowledge.some(entry => entry.characterId === characterId && entry.factIds.includes(factId));
 
-const recentConsecutiveProgressions = (action: RelationshipActionPlan, context: PlannerContext): number => {
-    const descriptor = context.relationshipContext.relationships.find(value => value.id === action.relationshipId);
-    if (!descriptor) return 0;
-    const milestoneHistory = descriptor.recentHistory
-        .filter(entry => milestoneIndex(entry.state) >= 0)
-        .slice()
-        .sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
-    let count = 0;
-    if (milestoneHistory.at(-1)?.chapterNumber !== context.targetChapter - 1) return count;
-    for (let index = milestoneHistory.length - 1; index > 0; index -= 1) {
-        const current = milestoneHistory[index];
-        const prior = milestoneHistory[index - 1];
-        if (current.chapterNumber !== prior.chapterNumber + 1
-            || milestoneIndex(current.state) <= milestoneIndex(prior.state)) break;
-        count += 1;
-    }
-    return count;
-};
-
 /** Pure deterministic validation. It inspects contracts only and never chooses outcomes or mutates canon. */
 export const validateRelationshipActions = (
     plan: InternalChapterPlan,
@@ -87,9 +70,12 @@ export const validateRelationshipActions = (
     const actions = orderRelationshipActions(plan.relationshipActions ?? [], plan);
     const sceneById = new Map(plan.scenes.map(scene => [scene.id, scene]));
     const definitions = new Map(context.relationshipContext.relationships.map(value => [value.id, value]));
-    if (actions.length > 0 && (!gateView || gateView.targetChapter !== context.targetChapter)) {
+    if ((actions.length > 0 || (plan.relationshipEventIds.length > 0 && definitions.size > 0))
+        && (!gateView || gateView.targetChapter !== context.targetChapter)) {
         issues.push(issue('RELATIONSHIP_GATE_VIOLATION', 'relationshipActions', 'trusted relationship gate validation data is required'));
     }
+    const work08Relationships = new Map((gateView?.relationships ?? [...definitions.values()])
+        .map(value => [value.id, value]));
     const knownRelationships = new Set([
         ...context.relationships.map(value => value.id), ...definitions.keys(),
         ...context.allowedRelationshipEvents.map(value => value.relationshipId),
@@ -101,6 +87,27 @@ export const validateRelationshipActions = (
             ?? context.relationships.find(value => value.id === delta.relationshipId)
             ?? context.allowedRelationshipEvents.find(value => value.relationshipId === delta.relationshipId);
         if (descriptor && !sameIds(descriptor.participantIds, delta.participantIds)) issues.push(issue('RELATIONSHIP_REFERENCE_INVALID', `expectedRelationshipDeltas.${index}.participantIds`, 'participants do not match the canonical relationship'));
+        if (work08Relationships.has(delta.relationshipId)) {
+            const matchingFinals = actions.filter(action => !action.intendedProgression.intermediate
+                && action.relationshipId === delta.relationshipId
+                && sameIds(action.participantIds, delta.participantIds)
+                && action.intendedProgression.expectedState === delta.expectedState);
+            if (matchingFinals.length !== 1) issues.push(issue('RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION', `expectedRelationshipDeltas.${index}`, 'WORK 08 relationship delta requires exactly one matching final RelationshipAction'));
+        }
+    });
+    const deltaRelationshipIds = plan.expectedRelationshipDeltas.map(value => value.relationshipId);
+    if (new Set(deltaRelationshipIds).size !== deltaRelationshipIds.length) {
+        issues.push(issue('RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION', 'expectedRelationshipDeltas', 'must contain at most one final delta per relationship'));
+    }
+
+    plan.relationshipEventIds.forEach((eventId, index) => {
+        const controlledEvent = gateView?.events.find(value => value.id === eventId);
+        if (!controlledEvent || !work08Relationships.has(controlledEvent.relationshipId)) return;
+        const matchingActions = actions.filter(action => action.relationshipEventId === controlledEvent.id
+            && action.relationshipId === controlledEvent.relationshipId
+            && sameIds(action.participantIds, controlledEvent.participantIds)
+            && action.actionType === controlledEvent.eventType);
+        if (matchingActions.length !== 1) issues.push(issue('RELATIONSHIP_GATE_VIOLATION', `relationshipEventIds.${index}`, 'controlled WORK 08 relationship event requires exactly one compatible RelationshipAction'));
     });
 
     actions.forEach((action, index) => {
@@ -149,20 +156,26 @@ export const validateRelationshipActions = (
             if (!hasCanonicalKnowledge(context, agency.characterId, factId)) issues.push(issue('RELATIONSHIP_KNOWLEDGE_VIOLATION', `${path}.participantAgency.${agencyIndex}.knowledgeBasisFactIds.${factIndex}`, 'fact is not canonical knowledge for this participant'));
         }));
 
-        const factEvidence = action.evidenceRefs.filter((value): value is Extract<RelationshipEvidenceRef, { type: 'fact' }> => value.type === 'fact');
-        if (factEvidence.length > 0 && action.intendedProgression.direction === 'strengthening'
-            && factEvidence.some(fact => action.participantIds.some(characterId => !action.evidenceRefs.some(reference =>
-                (reference.type === 'knowledge' && reference.characterId === characterId && reference.factId === fact.id)
-                || (reference.type === 'belief' && reference.characterId === characterId))))) {
-            issues.push(issue('RELATIONSHIP_KNOWLEDGE_VIOLATION', `${path}.evidenceRefs`, 'each reacting participant needs character-specific canonical knowledge or belief evidence'));
-        }
         const identities = action.evidenceRefs.map(evidenceIdentity);
         if (action.evidenceRefs.some(reference => reference.type === 'knowledge'
             && !hasCanonicalKnowledge(context, reference.characterId, reference.factId))) {
             issues.push(issue('RELATIONSHIP_KNOWLEDGE_VIOLATION', `${path}.evidenceRefs`, 'knowledge evidence must be canonical for its specific character'));
         }
         if (new Set(identities).size !== identities.length || action.evidenceRefs.some(reference => !validateEvidence(reference, plan, context))) issues.push(issue('RELATIONSHIP_REFERENCE_INVALID', `${path}.evidenceRefs`, 'evidence must be unique and resolve target-safely'));
-        if ((action.importance === 'major' || action.intendedProgression.direction !== 'stable') && action.evidenceRefs.length === 0) issues.push(issue('RELATIONSHIP_REFERENCE_INVALID', `${path}.evidenceRefs`, 'major or changing relationship action requires canonical evidence'));
+        relationshipEvidenceAdequacyProblems({
+            actionType: action.actionType,
+            importance: action.importance,
+            participantIds: action.participantIds,
+            participantActorIds: action.participantAgency.map(agency => agency.characterId),
+            ...(action.jealousCharacterId === undefined ? {} : { jealousCharacterId: action.jealousCharacterId }),
+            direction: action.intendedProgression.direction,
+            evidenceRefs: action.evidenceRefs,
+        }).forEach(message => issues.push(issue(
+            message.includes('knowledge') || message.includes('belief') || message.includes('trigger')
+                ? 'RELATIONSHIP_KNOWLEDGE_VIOLATION' : 'RELATIONSHIP_REFERENCE_INVALID',
+            `${path}.evidenceRefs`,
+            message,
+        )));
 
         const mutualRequired = nextIndex >= mutualMilestoneIndex || action.actionType === 'accept-romance' || action.intendedProgression.mutual;
         if (mutualRequired && (!action.intendedProgression.mutual || action.participantAgency.length !== action.participantIds.length
@@ -175,17 +188,15 @@ export const validateRelationshipActions = (
             if (!action.participantIds.includes(boundary.characterId)) issues.push(issue('RELATIONSHIP_BOUNDARY_VIOLATION', `${path}.boundaries.${boundaryIndex}.characterId`, 'boundary owner must be a relationship participant'));
             if (['revise', 'release'].includes(boundary.stance) && !action.participantAgency.some(agency => agency.characterId === boundary.characterId && agency.willingness === 'yes')) issues.push(issue('RELATIONSHIP_BOUNDARY_VIOLATION', `${path}.boundaries.${boundaryIndex}`, 'boundary change requires the owner\'s explicit willing choice'));
         });
-        if (action.currentStateAssessment.powerBalance === 'unequal' && action.importance === 'major'
-            && action.category === 'romantic' && !action.powerImbalanceAddressed) issues.push(issue('RELATIONSHIP_AGENCY_VIOLATION', `${path}.powerImbalanceAddressed`, 'major romantic progression must address the declared power imbalance'));
+        if (requiresPowerImbalanceAddressing(action.importance, action.category, action.currentStateAssessment.powerBalance)
+            && !action.powerImbalanceAddressed) issues.push(issue('RELATIONSHIP_AGENCY_VIOLATION', `${path}.powerImbalanceAddressed`, 'major romantic progression must address the declared power imbalance'));
 
         if (action.actionType === 'jealousy') {
             const attachment = currentIndex >= milestoneIndex('interest');
-            const knownTrigger = action.participantAgency.some(agency => agency.knowledgeBasisFactIds.length > 0)
-                || action.evidenceRefs.some(reference => reference.type === 'belief');
-            if (!attachment || !knownTrigger || action.evidenceRefs.length === 0) issues.push(issue('RELATIONSHIP_PROGRESSION_VIOLATION', path, 'jealousy requires established attachment, a known or believed trigger, and canonical evidence'));
+            if (!attachment) issues.push(issue('RELATIONSHIP_PROGRESSION_VIOLATION', path, 'jealousy requires canonically established attachment'));
         }
         if (advance > 0 && !descriptor.slowBurnHistoryComplete) issues.push(issue('RELATIONSHIP_REPETITION_VIOLATION', `${path}.intendedProgression`, 'relationship history capacity is insufficient to prove the slow-burn policy'));
-        else if (advance > 0 && recentConsecutiveProgressions(action, context) >= descriptor.progressionPolicy.maxConsecutiveProgressionChapters) issues.push(issue('RELATIONSHIP_REPETITION_VIOLATION', `${path}.intendedProgression`, 'consecutive romantic progression exceeds the declared slow-burn policy'));
+        else if (advance > 0 && descriptor.consecutiveProgressionCount >= descriptor.progressionPolicy.maxConsecutiveProgressionChapters) issues.push(issue('RELATIONSHIP_REPETITION_VIOLATION', `${path}.intendedProgression`, 'consecutive romantic progression exceeds the declared slow-burn policy'));
 
         const delta = plan.expectedRelationshipDeltas.find(value => value.relationshipId === action.relationshipId);
         if (!action.intendedProgression.intermediate && romanceMilestoneChanged(action)

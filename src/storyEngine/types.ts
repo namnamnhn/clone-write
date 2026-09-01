@@ -304,7 +304,12 @@ export interface WriterSafeState {
     readonly facts: readonly StoryFact[];
     readonly characterKnowledge: readonly CharacterKnowledge[];
     readonly relationships: readonly RuntimeRelationship[];
-    readonly relationshipMilestones: readonly { readonly relationshipId: StoryId; readonly currentRomanceMilestone: RomanceMilestone }[];
+    readonly relationshipMilestones: readonly {
+        readonly relationshipId: StoryId;
+        readonly currentRomanceMilestone: RomanceMilestone;
+        readonly slowBurnHistoryComplete: boolean;
+        readonly consecutiveProgressionCount: number;
+    }[];
     readonly unresolvedClues: readonly OpenThread[];
     readonly unresolvedPromises: readonly OpenThread[];
     readonly resources: Readonly<Record<StoryId, readonly CharacterResource[]>>;

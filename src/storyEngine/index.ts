@@ -26,6 +26,7 @@ export * from './relationshipContext';
 export * from './relationshipMilestone';
 export * from './relationshipGateValidation';
 export * from './relationshipContract';
+export * from './relationshipEvidence';
 export * from './relationshipValidator';
 export * from './writerRelationshipValidator';
 export * from './relationshipValidatorContext';
