@@ -30,14 +30,23 @@ import {
 import type { RelationshipContextSelectionPolicy } from './relationshipContext';
 import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
+    DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
     LongTermMemory,
     NarrativeMemoryInput,
     NarrativeMemorySelectionPolicy,
     PlannerContext,
+    PlannerContextSelectionPolicy,
     RawChapterMemory,
     SelectedNarrativeMemory,
     StructuredChapterMemory,
 } from './plannerTypes';
+
+export class PlannerContextCapacityError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'PlannerContextCapacityError';
+    }
+}
 
 const byChapterThenIndex = <T extends { readonly chapterNumber: number }>(
     values: readonly T[],
@@ -90,6 +99,33 @@ const normalizePolicy = (policy: NarrativeMemorySelectionPolicy): NarrativeMemor
     };
 };
 
+const normalizePlannerPolicy = (policy: PlannerContextSelectionPolicy): PlannerContextSelectionPolicy => {
+    (Object.keys(policy) as (keyof PlannerContextSelectionPolicy)[]).forEach((key) => {
+        if (!Number.isSafeInteger(policy[key]) || policy[key] < 0) {
+            throw new PlannerContextCapacityError(`planner context selection policy ${key} must be a non-negative safe integer`);
+        }
+    });
+    return { ...policy };
+};
+
+const requirePlannerCapacity = (label: string, count: number, maximum: number): void => {
+    if (count > maximum) throw new PlannerContextCapacityError(`${label} requires ${count} items but capacity is ${maximum}`);
+};
+
+const newestThenChronological = <T>(
+    values: readonly T[],
+    maximum: number,
+    chapter: (value: T) => number,
+    id: (value: T) => string,
+): readonly T[] => values
+    .map((value, index) => ({ value, index }))
+    .sort((left, right) => chapter(right.value) - chapter(left.value)
+        || id(left.value).localeCompare(id(right.value)) || left.index - right.index)
+    .slice(0, maximum)
+    .sort((left, right) => chapter(left.value) - chapter(right.value)
+        || id(left.value).localeCompare(id(right.value)) || left.index - right.index)
+    .map(entry => entry.value);
+
 /**
  * Select bounded pre-target memory deterministically. Material from the target chapter or later
  * is filtered out before windowing; recent material is selected by recency, while long-term
@@ -124,11 +160,16 @@ export const selectNarrativeMemory = (
     return { recentRawChapters, structuredRecentSummaries, selectedLongTermMemories };
 };
 
-const copyResources = (resources: StoryState['resources'], allowedIds: ReadonlySet<StoryId>): Record<StoryId, readonly CharacterResource[]> => {
+const copyResources = (
+    resources: StoryState['resources'],
+    allowedIds: ReadonlySet<StoryId>,
+    maximumPerCharacter: number,
+): Record<StoryId, readonly CharacterResource[]> => {
     const output: Record<StoryId, readonly CharacterResource[]> = {};
     [...allowedIds].sort().forEach((id) => {
         const values = resources[id];
-        if (values) output[id] = values.map(resource => ({ ...resource }));
+        if (values) output[id] = values.slice().sort((left, right) => left.id.localeCompare(right.id))
+            .slice(0, maximumPerCharacter).map(resource => ({ ...resource }));
     });
     return output;
 };
@@ -138,29 +179,99 @@ const copyContinuityEntries = (entries: readonly ContinuityEntry[], chapter: num
         .filter(entry => entry.establishedChapter <= chapter)
         .map(entry => ({ text: entry.text, visibility: entry.visibility, establishedChapter: entry.establishedChapter }));
 
-const copyContinuity = (continuity: StoryState['continuity'], chapter: number) => ({
+const copyContinuity = (continuity: StoryState['continuity'], chapter: number, maximumEntries: number) => {
+    const tagged = [
+        ...copyContinuityEntries(continuity.pendingThreads, chapter).map((entry, index) => ({ entry, section: 'pending' as const, index })),
+        ...copyContinuityEntries(continuity.notes, chapter).map((entry, index) => ({ entry, section: 'notes' as const, index })),
+    ].sort((left, right) => right.entry.establishedChapter - left.entry.establishedChapter
+        || left.entry.text.localeCompare(right.entry.text) || left.section.localeCompare(right.section) || left.index - right.index)
+        .slice(0, maximumEntries)
+        .sort((left, right) => left.entry.establishedChapter - right.entry.establishedChapter
+            || left.entry.text.localeCompare(right.entry.text) || left.section.localeCompare(right.section) || left.index - right.index);
+    return {
     ...(continuity.timelinePosition === undefined ? {} : { timelinePosition: continuity.timelinePosition }),
     ...(continuity.lastScene === undefined ? {} : { lastScene: continuity.lastScene }),
     ...(continuity.povCharacterId === undefined ? {} : { povCharacterId: continuity.povCharacterId }),
-    pendingThreads: copyContinuityEntries(continuity.pendingThreads, chapter),
-    notes: copyContinuityEntries(continuity.notes, chapter),
-});
+        pendingThreads: tagged.filter(value => value.section === 'pending').map(value => value.entry),
+        notes: tagged.filter(value => value.section === 'notes').map(value => value.entry),
+    };
+};
 
-const visibleFacts = (facts: readonly StoryFact[], chapter: number, visibility: StoryFact['visibility']) => facts
-    .filter(fact => fact.visibility === visibility && fact.establishedChapter <= chapter)
+const visibleFacts = (
+    facts: readonly StoryFact[],
+    chapter: number,
+    visibility: StoryFact['visibility'],
+    maximum: number,
+) => newestThenChronological(
+    facts.filter(fact => fact.visibility === visibility && fact.establishedChapter <= chapter),
+    maximum,
+    fact => fact.establishedChapter,
+    fact => fact.id,
+)
     .map(fact => ({ id: fact.id, text: fact.text }));
 
 const copyKnowledge = (
     knowledge: readonly CharacterKnowledge[],
     allowedIds: ReadonlySet<StoryId>,
     validFactIds: ReadonlySet<StoryId>,
-) => knowledge
-    .filter(entry => allowedIds.has(entry.characterId))
-    .map(entry => ({ characterId: entry.characterId, factIds: entry.factIds.filter(factId => validFactIds.has(factId)) }));
+    facts: readonly StoryFact[],
+    maximumFactRefs: number,
+) => {
+    const factsById = new Map(facts.map(value => [value.id, value]));
+    const selected = knowledge
+        .filter(entry => allowedIds.has(entry.characterId))
+        .flatMap(entry => entry.factIds.filter(factId => validFactIds.has(factId)).map(factId => ({
+            characterId: entry.characterId,
+            factId,
+            chapter: factsById.get(factId)?.establishedChapter ?? 0,
+        })))
+        .sort((left, right) => right.chapter - left.chapter
+            || left.characterId.localeCompare(right.characterId) || left.factId.localeCompare(right.factId))
+        .slice(0, maximumFactRefs);
+    const byCharacter = new Map<StoryId, typeof selected>();
+    selected.forEach((entry) => {
+        const values = byCharacter.get(entry.characterId) ?? [];
+        values.push(entry);
+        byCharacter.set(entry.characterId, values);
+    });
+    return [...byCharacter.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([characterId, values]) => ({
+        characterId,
+        factIds: values.slice().sort((left, right) => left.chapter - right.chapter || left.factId.localeCompare(right.factId)).map(value => value.factId),
+    }));
+};
 
-const currentThreads = (threads: readonly OpenThread[], chapter: number) => threads
-    .filter(thread => thread.openedChapter <= chapter)
+const currentThreads = (threads: readonly OpenThread[], chapter: number, maximum: number) => newestThenChronological(
+    threads.filter(thread => thread.openedChapter <= chapter),
+    maximum,
+    thread => thread.openedChapter,
+    thread => thread.id,
+)
     .map(thread => ({ id: thread.id, text: thread.text }));
+
+const selectPlannerCharacters = (
+    control: FullStoryControl,
+    state: StoryState,
+    targetChapter: number,
+    maximum: number,
+) => {
+    const available = getAllowedCharactersForChapter(control, targetChapter);
+    const active = new Set(state.activeCharacterIds);
+    const known = new Set(state.knownCharacterIds);
+    const mandatory = available.filter(character => active.has(character.id));
+    requirePlannerCapacity('active characters', mandatory.length, maximum);
+    const mandatoryIds = new Set(mandatory.map(character => character.id));
+    const selected = [
+        ...mandatory,
+        ...available.filter(character => !mandatoryIds.has(character.id))
+            .map((character, index) => ({ character, index, known: known.has(character.id) }))
+            .sort((left, right) => Number(right.known) - Number(left.known)
+                || left.character.id.localeCompare(right.character.id) || left.index - right.index)
+            .slice(0, maximum - mandatory.length)
+            .map(value => value.character),
+    ];
+    const selectedIds = new Set(selected.map(character => character.id));
+    return available.filter(character => selectedIds.has(character.id));
+};
 
 /**
  * Deterministically materializes the planner's bounded, current-chapter context. No input is
@@ -173,6 +284,7 @@ export const buildPlannerContext = (
     memoryInput?: NarrativeMemoryInput,
     memoryPolicy: NarrativeMemorySelectionPolicy = DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
     relationshipPolicy: RelationshipContextSelectionPolicy = DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+    suppliedSelectionPolicy: PlannerContextSelectionPolicy = DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
 ): PlannerContext => {
     assertWriterFacingControlSecretSafe(control);
     if (!isValidChapter(targetChapter) || targetChapter > control.engine.plannedChapterCount) {
@@ -187,14 +299,33 @@ export const buildPlannerContext = (
     const arcUsesBeats = control.beats.some(candidate => candidate.arcId === arc.id);
     if (arcUsesBeats && !beat) throw new Error(`no unique beat resolves for chapter ${targetChapter} in arc ${arc.id}`);
 
-    const availableCharacters = getAllowedCharactersForChapter(control, targetChapter);
+    const selectionPolicy = normalizePlannerPolicy(suppliedSelectionPolicy);
+    const availableCharacters = selectPlannerCharacters(control, state, targetChapter, selectionPolicy.maxCharacters);
     const availableIds = new Set(availableCharacters.map(character => character.id));
-    const validFactIds = new Set(state.facts
-        .filter(fact => fact.establishedChapter <= targetChapter)
-        .map(fact => fact.id));
+    const writerVisibleFacts = visibleFacts(state.facts, targetChapter, 'writer', selectionPolicy.maxWriterVisibleFacts);
+    const internalFacts = visibleFacts(state.facts, targetChapter, 'internal', selectionPolicy.maxInternalFacts);
+    const validFactIds = new Set([...writerVisibleFacts, ...internalFacts].map(fact => fact.id));
     const activeIds = state.activeCharacterIds.filter(id => availableIds.has(id));
     const makeGateStatus = (ids: readonly StoryId[], allowed: (id: StoryId) => boolean) => ids
         .map(id => ({ id, allowed: allowed(id) }));
+    const boundedGateStatus = (label: string, ids: readonly StoryId[], allowed: (id: StoryId) => boolean) => {
+        requirePlannerCapacity(label, ids.length, selectionPolicy.maxGateIdsPerCategory);
+        return makeGateStatus(ids.slice().sort(), allowed);
+    };
+    const activeHardConstraints = control.canonRules
+        .filter(rule => rule.availableFromChapter <= targetChapter && (rule.expiresAfterChapter === undefined || targetChapter <= rule.expiresAfterChapter))
+        .map(rule => ({ id: rule.id, type: 'canon-rule' as const, referenceId: rule.id, writerText: rule.text }));
+    requirePlannerCapacity('active hard constraints', activeHardConstraints.length, selectionPolicy.maxActiveHardConstraints);
+    requirePlannerCapacity('author secret references', control.authorOnlySecrets.length, selectionPolicy.maxAuthorSecretReferences);
+    const revealGateStatus = boundedGateStatus('reveal gates', control.reveals.map(reveal => reveal.id), id => isRevealAllowed(control, id, targetChapter));
+    const storyEventGateStatus = boundedGateStatus('story event gates', control.storyEvents.map(event => event.id), id => isStoryEventAllowed(control, id, targetChapter));
+    const relationshipEventGateStatus = boundedGateStatus('relationship event gates', control.relationshipEvents.map(event => event.id), id => isRelationshipEventAllowed(control, id, targetChapter));
+    const allowedRevealIds = revealGateStatus.filter(status => status.allowed).map(status => status.id);
+    const lockedRevealIds = revealGateStatus.filter(status => !status.allowed).map(status => status.id);
+    const allowedStoryEventIds = storyEventGateStatus.filter(status => status.allowed).map(status => status.id);
+    const lockedStoryEventIds = storyEventGateStatus.filter(status => !status.allowed).map(status => status.id);
+    const allowedRelationshipEventIds = relationshipEventGateStatus.filter(status => status.allowed).map(status => status.id);
+    const lockedRelationshipEventIds = relationshipEventGateStatus.filter(status => !status.allowed).map(status => status.id);
 
     const context: PlannerContext = {
         kind: 'planner-context',
@@ -226,34 +357,37 @@ export const buildPlannerContext = (
         })),
         activeCharacterIds: [...activeIds],
         povEligibility: makeGateStatus(availableCharacters.map(character => character.id), id => isPovAllowed(control, id, targetChapter)),
-        writerVisibleFacts: visibleFacts(state.facts, targetChapter, 'writer'),
-        internalFacts: visibleFacts(state.facts, targetChapter, 'internal'),
-        characterKnowledge: copyKnowledge(state.characterKnowledge, availableIds, validFactIds),
-        relationships: state.relationships
-            .filter(relationship => relationship.establishedChapter <= targetChapter && relationship.participantIds.every(id => availableIds.has(id)))
+        writerVisibleFacts,
+        internalFacts,
+        characterKnowledge: copyKnowledge(state.characterKnowledge, availableIds, validFactIds, state.facts, selectionPolicy.maxKnowledgeFactRefs),
+        relationships: newestThenChronological(
+            state.relationships.filter(relationship => relationship.establishedChapter <= targetChapter
+                && relationship.participantIds.every(id => availableIds.has(id))),
+            selectionPolicy.maxRelationships,
+            relationship => relationship.establishedChapter,
+            relationship => relationship.id,
+        )
             .map(relationship => ({ id: relationship.id, participantIds: [...relationship.participantIds], state: relationship.state })),
-        unresolvedClues: currentThreads(state.unresolvedClues, targetChapter),
-        unresolvedPromises: currentThreads(state.unresolvedPromises, targetChapter),
-        resources: copyResources(state.resources, availableIds),
-        continuity: copyContinuity(state.continuity, targetChapter),
-        allowedRevealIds: makeGateStatus(control.reveals.map(reveal => reveal.id), id => isRevealAllowed(control, id, targetChapter)).filter(status => status.allowed).map(status => status.id),
-        lockedRevealIds: makeGateStatus(control.reveals.map(reveal => reveal.id), id => isRevealAllowed(control, id, targetChapter)).filter(status => !status.allowed).map(status => status.id),
-        allowedStoryEventIds: makeGateStatus(control.storyEvents.map(event => event.id), id => isStoryEventAllowed(control, id, targetChapter)).filter(status => status.allowed).map(status => status.id),
-        lockedStoryEventIds: makeGateStatus(control.storyEvents.map(event => event.id), id => isStoryEventAllowed(control, id, targetChapter)).filter(status => !status.allowed).map(status => status.id),
-        allowedRelationshipEventIds: makeGateStatus(control.relationshipEvents.map(event => event.id), id => isRelationshipEventAllowed(control, id, targetChapter)).filter(status => status.allowed).map(status => status.id),
-        lockedRelationshipEventIds: makeGateStatus(control.relationshipEvents.map(event => event.id), id => isRelationshipEventAllowed(control, id, targetChapter)).filter(status => !status.allowed).map(status => status.id),
+        unresolvedClues: currentThreads(state.unresolvedClues, targetChapter, selectionPolicy.maxUnresolvedClues),
+        unresolvedPromises: currentThreads(state.unresolvedPromises, targetChapter, selectionPolicy.maxUnresolvedPromises),
+        resources: copyResources(state.resources, availableIds, selectionPolicy.maxResourcesPerCharacter),
+        continuity: copyContinuity(state.continuity, targetChapter, selectionPolicy.maxContinuityEntries),
+        allowedRevealIds,
+        lockedRevealIds,
+        allowedStoryEventIds,
+        lockedStoryEventIds,
+        allowedRelationshipEventIds,
+        lockedRelationshipEventIds,
         allowedRelationshipEvents: control.relationshipEvents
-            .filter(event => isRelationshipEventAllowed(control, event.id, targetChapter))
+            .filter(event => allowedRelationshipEventIds.includes(event.id))
+            .slice().sort((left, right) => left.id.localeCompare(right.id))
             .map(event => ({ id: event.id, relationshipId: event.relationshipId, participantIds: [...event.participantIds] })),
-        authorOnlySecretReferences: control.authorOnlySecrets.map(secret => ({ id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }) })),
-        activeHardConstraints: [
-            ...control.canonRules
-                .filter(rule => rule.availableFromChapter <= targetChapter && (rule.expiresAfterChapter === undefined || targetChapter <= rule.expiresAfterChapter))
-                .map(rule => ({ id: rule.id, type: 'canon-rule' as const, referenceId: rule.id, writerText: rule.text })),
-        ],
+        authorOnlySecretReferences: control.authorOnlySecrets.slice().sort((left, right) => left.id.localeCompare(right.id))
+            .map(secret => ({ id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }) })),
+        activeHardConstraints,
         narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
         plotGuidance: buildPlannerPlotGuidance(control, state, targetChapter),
-        relationshipContext: buildPlannerRelationshipContext(control, state, targetChapter, relationshipPolicy),
+        relationshipContext: buildPlannerRelationshipContext(control, state, targetChapter, relationshipPolicy, availableIds),
     };
     assertModelBoundaryStringsSecretSafe(control, context, 'plannerContext');
     return context;

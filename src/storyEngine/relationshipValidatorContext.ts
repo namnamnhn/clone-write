@@ -48,6 +48,15 @@ const evidenceIdentity = (reference: RelationshipEvidenceRef): string => referen
     : reference.type === 'character-status' ? `${reference.type}\u0000${reference.characterId}\u0000${reference.value}`
         : `${reference.type}\u0000${reference.id}`;
 
+const stableUniqueStrings = (values: readonly string[]): readonly string[] => {
+    const seen = new Set<string>();
+    return values.filter((value) => {
+        if (seen.has(value)) return false;
+        seen.add(value);
+        return true;
+    });
+};
+
 const evidenceResolves = (reference: RelationshipEvidenceRef, context: PlannerContext, actionIds: ReadonlySet<string>): boolean => {
     if (reference.type === 'fact') return [...context.writerVisibleFacts, ...context.internalFacts].some(value => value.id === reference.id);
     if (reference.type === 'knowledge') return context.characterKnowledge.some(value => value.characterId === reference.characterId && value.factIds.includes(reference.factId));
@@ -92,7 +101,12 @@ export const buildValidatorRelationshipView = (
         [...new Map(action.participantAgency.flatMap(agency => agency.knowledgeBasisFactIds.map(factId => ({ characterId: agency.characterId, factId })))
             .map(value => [`${value.characterId}\u0000${value.factId}`, value])).values()]
             .sort((left, right) => left.characterId.localeCompare(right.characterId) || left.factId.localeCompare(right.factId)),
-        [action.counterpressure, ...action.participantAgency.flatMap(agency => [agency.currentGoal, agency.desiredOutcome, agency.boundary, agency.uncertainty, agency.costOrRisk])],
+        stableUniqueStrings([
+            action.counterpressure,
+            ...action.participantAgency.flatMap(agency => [
+                agency.currentGoal, agency.desiredOutcome, agency.boundary, agency.uncertainty, agency.costOrRisk,
+            ]),
+        ]),
     ));
     const relationshipIds = [...new Set(actions.map(value => value.relationshipId))].sort();
     const canonicalRelationships = relationshipIds.map((id) => {

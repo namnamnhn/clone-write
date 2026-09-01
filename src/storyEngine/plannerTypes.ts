@@ -109,6 +109,40 @@ export interface SelectedNarrativeMemory {
     readonly selectedLongTermMemories: readonly LongTermMemory[];
 }
 
+/**
+ * Bounded selection for canonical/current-state data copied into Planner model input.
+ * Narrative memory and relationship history retain their independent policies.
+ */
+export interface PlannerContextSelectionPolicy {
+    readonly maxCharacters: number;
+    readonly maxWriterVisibleFacts: number;
+    readonly maxInternalFacts: number;
+    readonly maxKnowledgeFactRefs: number;
+    readonly maxRelationships: number;
+    readonly maxUnresolvedClues: number;
+    readonly maxUnresolvedPromises: number;
+    readonly maxContinuityEntries: number;
+    readonly maxResourcesPerCharacter: number;
+    readonly maxGateIdsPerCategory: number;
+    readonly maxAuthorSecretReferences: number;
+    readonly maxActiveHardConstraints: number;
+}
+
+export const DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY: PlannerContextSelectionPolicy = {
+    maxCharacters: 64,
+    maxWriterVisibleFacts: 64,
+    maxInternalFacts: 64,
+    maxKnowledgeFactRefs: 64,
+    maxRelationships: 64,
+    maxUnresolvedClues: 24,
+    maxUnresolvedPromises: 24,
+    maxContinuityEntries: 24,
+    maxResourcesPerCharacter: 16,
+    maxGateIdsPerCategory: 128,
+    maxAuthorSecretReferences: 64,
+    maxActiveHardConstraints: 64,
+};
+
 /** Internal-only planning input. It deliberately exposes no raw author-secret values. */
 export interface PlannerContext {
     readonly kind: 'planner-context';

@@ -43,9 +43,11 @@ export const buildPlannerRelationshipContext = (
     state: StoryState,
     targetChapter: number,
     suppliedPolicy: RelationshipContextSelectionPolicy = DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+    selectedCharacterIds?: ReadonlySet<string>,
 ): PlannerRelationshipContext => {
     const policy = normalizeRelationshipContextSelectionPolicy(suppliedPolicy);
-    const available = new Set(control.characterOrder.filter(id => isCharacterDirectAppearanceAllowed(control, id, targetChapter)));
+    const available = new Set(control.characterOrder.filter(id => isCharacterDirectAppearanceAllowed(control, id, targetChapter)
+        && (selectedCharacterIds === undefined || selectedCharacterIds.has(id))));
     const canonicalById = new Map(state.relationships
         .filter(value => value.establishedChapter <= targetChapter)
         .map(value => [value.id, value]));
