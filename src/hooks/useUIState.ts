@@ -22,7 +22,7 @@ export const useUIState = () => {
     const [systemLogs, setSystemLogs] = useState<LogEntry[]>(() => loadPersistedLogs());
     
     // Filter State
-    const [activeTab, setActiveTab] = useState<'dashboard' | 'workspace' | 'knowledge' | 'titles' | 'creative' | 'hanviet'>('dashboard');
+    const [activeTab, setActiveTab] = useState<'dashboard' | 'workspace' | 'knowledge' | 'titles' | 'creative' | 'story-studio' | 'hanviet'>('dashboard');
     const [showFilterPanel, setShowFilterPanel] = useState<boolean>(false);
     const [filterModels, setFilterModels] = useState<Set<string>>(new Set());
     const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set());

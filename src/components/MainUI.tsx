@@ -5,7 +5,7 @@ import {
     Hammer, ListFilter, Eraser, RefreshCw, Trash2, FileDown, FileArchive,
     FileText, Play, Book, Zap, Wand2, Layers, Split, X,
     ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Save, Upload, RotateCcw,
-    ShieldCheck, AlertTriangle, ExternalLink, ScanSearch
+    ShieldCheck, AlertTriangle, ExternalLink, ScanSearch, PanelsTopLeft
 } from 'lucide-react';
 import { Header } from './Header';
 import { DashboardPage } from './DashboardPage';
@@ -21,6 +21,7 @@ import { lazyWithRecovery } from '../utils/lazyWithRecovery';
 const KnowledgePage = lazyWithRecovery(() => import('./KnowledgePage').then(m => ({ default: m.KnowledgePage })), 'KnowledgePage');
 const PromptFixPage = lazyWithRecovery(() => import('./PromptFixPage').then(m => ({ default: m.PromptFixPage })), 'PromptFixPage');
 const CreativePage = lazyWithRecovery(() => import('./CreativePage').then(m => ({ default: m.CreativePage })), 'CreativePage');
+const StoryStudioPage = lazyWithRecovery(() => import('./storyStudio/StoryStudioPage').then(m => ({ default: m.StoryStudioPage })), 'StoryStudioPage');
 const SinoVietnameseFixerPage = lazyWithRecovery(() => import('./SinoVietnameseFixerPage').then(m => ({ default: m.SinoVietnameseFixerPage })), 'SinoVietnameseFixerPage');
 
 const LazyTabFallback = () => (
@@ -149,6 +150,10 @@ export const MainUI: React.FC<MainUIProps> = (props) => {
                                 <Sparkles className="w-5 h-5 shrink-0" />
                                 {isSidebarOpen && <span className="whitespace-nowrap">Sáng Tác</span>}
                             </button>
+                            <button onClick={() => setActiveTab('story-studio')} className={`w-full flex items-center gap-3 ${isSidebarOpen ? 'px-4' : 'justify-center'} py-3 rounded-xl text-sm font-bold transition-all duration-200 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-1 ${activeTab === 'story-studio' ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 shadow-elevation-1 ring-1 ring-indigo-200 dark:ring-indigo-800' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200'}`} title="Studio Truyện">
+                                <PanelsTopLeft className="w-5 h-5 shrink-0" />
+                                {isSidebarOpen && <span className="whitespace-nowrap">Studio Truyện</span>}
+                            </button>
                             <button onClick={() => setActiveTab('hanviet')} className={`w-full flex items-center gap-3 ${isSidebarOpen ? 'px-4' : 'justify-center'} py-3 rounded-xl text-sm font-bold transition-all duration-200 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-1 ${activeTab === 'hanviet' ? 'bg-teal-50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400 shadow-elevation-1 ring-1 ring-teal-200 dark:ring-teal-800' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200'}`} title="Tìm Hán Việt">
                                 <Search className="w-5 h-5 shrink-0" />
                                 {isSidebarOpen && <span className="whitespace-nowrap">Tìm Hán Việt</span>}
@@ -164,10 +169,11 @@ export const MainUI: React.FC<MainUIProps> = (props) => {
                     {activeTab === 'workspace' && <WorkspacePage {...props} />}
                     {activeTab === 'titles' && <Suspense fallback={<LazyTabFallback />}><PromptFixPage files={props.files} setFilesSafe={props.setFilesSafe} handleTranslatedFileUpload={props.handleTranslatedFileUpload} handleSyncSupportInfo={props.handleSyncSupportInfo} handleExportSupportInfo={props.handleExportSupportInfo} addToast={props.addToast} state={props.fixErrorState} setState={props.setFixErrorState} storyInfo={props.storyInfo} addLog={props.addLog} promptTemplate={props.promptTemplate} dictionary={props.additionalDictionary} /></Suspense>}
                     {activeTab === 'creative' && <Suspense fallback={<LazyTabFallback />}><CreativePage addToast={props.addToast} state={props.creativeState} setState={props.setCreativeState} setStoryInfoSafe={props.setStoryInfoSafe} storyInfo={props.storyInfo} files={props.files} setFilesSafe={props.setFilesSafe} setCoverImage={props.setCoverImage} setStartTime={props.setStartTime} setEndTime={props.setEndTime} addLog={props.addLog} /></Suspense>}
+                    {activeTab === 'story-studio' && <Suspense fallback={<LazyTabFallback />}><StoryStudioPage /></Suspense>}
                     {activeTab === 'hanviet' && <Suspense fallback={<LazyTabFallback />}><SinoVietnameseFixerPage {...props} setAdditionalDictionary={props.setAdditionalDictionary} state={props.sinoVietnameseState} setState={props.setSinoVietnameseState} storyInfo={props.storyInfo} promptTemplate={props.promptTemplate} dictionary={props.additionalDictionary} setStartTime={props.setStartTime} setEndTime={props.setEndTime} addLog={props.addLog} /></Suspense>}
                     
                     {/* 4. GLOBAL BOTTOM ACTION BAR (Responsive) */}
-                    <div className="relative shrink-0 z-30">
+                    <div className={activeTab === 'story-studio' ? 'hidden' : 'relative shrink-0 z-30'}>
                         {/* Toggle Button */}
                         <button 
                             onClick={() => setIsBottomBarOpen(!isBottomBarOpen)}
@@ -329,6 +335,10 @@ export const MainUI: React.FC<MainUIProps> = (props) => {
                     <button onClick={() => setActiveTab('creative')} className={`min-w-[64px] p-2.5 rounded-xl transition-all duration-200 ease-smooth flex flex-col items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-1 ${activeTab === 'creative' ? 'text-pink-600 dark:text-pink-400 bg-pink-50 dark:bg-pink-900/30' : 'text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
                         <Sparkles className="w-5 h-5" />
                         <span className="text-[10px] font-bold">Sáng Tác</span>
+                    </button>
+                    <button onClick={() => setActiveTab('story-studio')} className={`min-w-[72px] p-2.5 rounded-xl transition-all duration-200 ease-smooth flex flex-col items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-1 ${activeTab === 'story-studio' ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30' : 'text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
+                        <PanelsTopLeft className="w-5 h-5" />
+                        <span className="text-[10px] font-bold">Studio Truyện</span>
                     </button>
                     <button onClick={() => setActiveTab('hanviet')} className={`min-w-[70px] p-2.5 rounded-xl transition-all duration-200 ease-smooth flex flex-col items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-1 ${activeTab === 'hanviet' ? 'text-teal-600 dark:text-teal-400 bg-teal-50 dark:bg-teal-900/30' : 'text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
                         <Search className="w-5 h-5" />

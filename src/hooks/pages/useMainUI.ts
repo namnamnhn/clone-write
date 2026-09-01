@@ -181,8 +181,8 @@ export interface MainUIProps {
     handleTranslatedFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     handleMergeSelected: () => void;
     handleDictionaryEnforce: () => void;
-    activeTab: 'dashboard' | 'knowledge' | 'workspace' | 'titles' | 'creative' | 'hanviet';
-    setActiveTab: (v: 'dashboard' | 'knowledge' | 'workspace' | 'titles' | 'creative' | 'hanviet') => void;
+    activeTab: 'dashboard' | 'knowledge' | 'workspace' | 'titles' | 'creative' | 'story-studio' | 'hanviet';
+    setActiveTab: (v: 'dashboard' | 'knowledge' | 'workspace' | 'titles' | 'creative' | 'story-studio' | 'hanviet') => void;
     addToast: (message: string, type: 'success' | 'error' | 'info') => void;
     setConfirmModal: (modal: { isOpen: boolean; title: string; message: string; onConfirm: () => void; isDanger: boolean; confirmText?: string }) => void;
     
