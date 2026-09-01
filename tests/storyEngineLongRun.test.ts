@@ -12,6 +12,7 @@ import {
     CANONICAL_EVENT_TYPES,
     createStructuredPlanner,
     DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
+    DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
     deriveCurrentRomanceMilestone,
     generateWriterDraft,
     getAuthorSecretStatus,
@@ -24,6 +25,7 @@ import {
     isRelationshipEventAllowed,
     isRevealAllowed,
     isStoryEventAllowed,
+    normalizePlannerContextSelectionPolicy,
     parseStoryState,
     PlannerContextCapacityError,
     sanitizeWriterChapterPlan,
@@ -38,6 +40,7 @@ import {
 } from '../src/storyEngine';
 import type {
     NarrativeMemorySelectionPolicy,
+    PlannerContextSelectionPolicy,
     RelationshipActionPlan,
     StoryState,
     StoryStateDelta,
@@ -272,6 +275,71 @@ describe('Story Engine V4 deterministic 600-chapter torture run', () => {
         })).toThrow(PlannerContextCapacityError);
     });
 
+    it.each([
+        ['missing maxWriterVisibleFacts', 'maxWriterVisibleFacts', undefined],
+        ['missing maxGateIdsPerCategory', 'maxGateIdsPerCategory', undefined],
+        ['missing maxAuthorSecretReferences', 'maxAuthorSecretReferences', undefined],
+        ['negative maxRelationships', 'maxRelationships', -1],
+        ['NaN maxContinuityEntries', 'maxContinuityEntries', Number.NaN],
+        ['infinite maxResourcesPerCharacter', 'maxResourcesPerCharacter', Number.POSITIVE_INFINITY],
+        ['fractional maxCharacters', 'maxCharacters', 1.5],
+    ])('rejects malformed runtime Planner policy: %s', (_label, key, replacement) => {
+        const malformed: Record<string, unknown> = { ...DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY };
+        if (replacement === undefined) delete malformed[key];
+        else malformed[key] = replacement;
+        const runtimePolicy = malformed as unknown as PlannerContextSelectionPolicy;
+        expect(() => buildPlannerContext(
+            LONG_RUN_CONTROL, getLongRun().checkpoints.get(99)!, 100,
+            undefined, undefined, undefined, runtimePolicy,
+        )).toThrow(PlannerContextCapacityError);
+    });
+
+    it('accepts a complete runtime Planner policy deterministically and drops unsupported runtime properties', () => {
+        const runtimePolicy = {
+            ...DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
+            unsupportedRuntimeField: 999,
+        } as unknown as PlannerContextSelectionPolicy;
+        const normalized = normalizePlannerContextSelectionPolicy(runtimePolicy);
+        expect(normalized).toEqual(DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY);
+        expect(normalized).not.toHaveProperty('unsupportedRuntimeField');
+        const state99 = getLongRun().checkpoints.get(99)!;
+        const first = buildPlannerContext(LONG_RUN_CONTROL, state99, 100, undefined, undefined, undefined, runtimePolicy);
+        const second = buildPlannerContext(LONG_RUN_CONTROL, state99, 100, undefined, undefined, undefined, runtimePolicy);
+        expect(first).toEqual(second);
+        expect(first.writerVisibleFacts).toHaveLength(49);
+    });
+
+    it('rejects an incomplete nested Planner policy at the Validator boundary', () => {
+        const state99 = getLongRun().checkpoints.get(99)!;
+        const planner = buildPlannerContext(LONG_RUN_CONTROL, state99, 100);
+        const writerPlan = sanitizeWriterChapterPlan(buildSampleInternalPlan(planner), LONG_RUN_CONTROL, state99);
+        const malformed: Record<string, unknown> = { ...DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY };
+        delete malformed.maxWriterVisibleFacts;
+        expect(() => buildValidatorContext(LONG_RUN_CONTROL, state99, writerPlan, {
+            ...DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
+            plannerContextSelectionPolicy: malformed as unknown as PlannerContextSelectionPolicy,
+        })).toThrow(ValidatorContextCapacityError);
+    });
+
+    it('does not advertise a gate-valid relationship event when policy omits one of its participants', () => {
+        const state308 = getLongRun().checkpoints.get(308)!;
+        const reducedState = {
+            ...state308,
+            knownCharacterIds: ['atlas'],
+            activeCharacterIds: ['atlas'],
+        };
+        const context = buildPlannerContext(LONG_RUN_CONTROL, reducedState, 309, undefined, undefined, undefined, {
+            ...DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
+            maxCharacters: 1,
+        });
+        expect(context.availableCharacters.map(value => value.id)).toEqual(['atlas']);
+        expect(context.allowedRelationshipEventIds).not.toContain('professional-alliance');
+        expect(context.allowedRelationshipEvents.map(value => value.id)).not.toContain('professional-alliance');
+        expect(context.lockedRelationshipEventIds).toContain('professional-alliance');
+        expect(context.allowedRelationshipEvents.every(event => event.participantIds
+            .every(id => context.availableCharacters.some(character => character.id === id)))).toBe(true);
+    });
+
     it('builds Planner and Writer contexts deeply equal on repeated C100, C300, and C600 calls', () => {
         ([100, 300, 600] as const).forEach((target) => {
             const prior = getLongRun().checkpoints.get(target - 1)!;
@@ -303,6 +371,85 @@ describe('Story Engine V4 long-run plot, relationships, security, and replay', (
             'payoff-early': 'paid', 'payoff-paid-late': 'paid-late', 'payoff-reveal': 'paid',
             'payoff-superseded': 'superseded', 'payoff-overdue': 'overdue', 'payoff-due-final': 'due',
         });
+    });
+
+    it('blocks alpha when its gate is eligible but the C549 plan does not authorize the reveal', async () => {
+        const state548 = getLongRun().checkpoints.get(548)!;
+        const planner = buildPlannerContext(LONG_RUN_CONTROL, state548, 549, LONG_RUN_MEMORY);
+        const writerPlan = sanitizeWriterChapterPlan(buildSampleInternalPlan(planner), LONG_RUN_CONTROL, state548);
+        const context = buildValidatorContext(LONG_RUN_CONTROL, state548, writerPlan);
+        expect(context.secretValidation).toContainEqual(expect.objectContaining({
+            id: 'secret-alpha', revealId: 'reveal-alpha', revealAllowed: false,
+        }));
+        const result = await validateWriterChapter({
+            control: LONG_RUN_CONTROL, state: state548, plan: writerPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 549, prose: 'RAW_LONG_RUN_SECRET_ALPHA' },
+            semanticModel: deterministicSemanticValidatorModel,
+        });
+        expect(result.report.status).toBe('blocked');
+        expect(result.report.issues).toContainEqual(expect.objectContaining({
+            code: 'AUTHOR_SECRET_LEAK', severity: 'critical', source: 'deterministic',
+        }));
+        expect(JSON.stringify(result.report)).not.toContain('RAW_LONG_RUN_SECRET_ALPHA');
+    });
+
+    it('keeps omega protected after its C561 gate opens and before its C575 occurrence', async () => {
+        const state560 = getLongRun().checkpoints.get(560)!;
+        const planner = buildPlannerContext(LONG_RUN_CONTROL, state560, 561, LONG_RUN_MEMORY);
+        const writerPlan = sanitizeWriterChapterPlan(buildSampleInternalPlan(planner), LONG_RUN_CONTROL, state560);
+        const result = await validateWriterChapter({
+            control: LONG_RUN_CONTROL, state: state560, plan: writerPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 561, prose: 'RAW_LONG_RUN_SECRET_OMEGA' },
+            semanticModel: deterministicSemanticValidatorModel,
+        });
+        expect(result.report.issues.map(value => value.code)).toContain('AUTHOR_SECRET_LEAK');
+    });
+
+    it('permits the exact raw truth only when the eligible reveal is explicitly planned', async () => {
+        const state548 = getLongRun().checkpoints.get(548)!;
+        const planner = buildPlannerContext(LONG_RUN_CONTROL, state548, 549, LONG_RUN_MEMORY);
+        const internal = { ...buildSampleInternalPlan(planner), plannedRevealIds: ['reveal-alpha'] };
+        expect(validateInternalChapterPlan(internal, planner)).toEqual([]);
+        const writerPlan = sanitizeWriterChapterPlan(internal, LONG_RUN_CONTROL, state548);
+        expect(writerPlan.reveals.map(value => value.id)).toEqual(['reveal-alpha']);
+        expect(buildValidatorContext(LONG_RUN_CONTROL, state548, writerPlan).secretValidation)
+            .toContainEqual(expect.objectContaining({ id: 'secret-alpha', revealAllowed: true }));
+        const result = await validateWriterChapter({
+            control: LONG_RUN_CONTROL, state: state548, plan: writerPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 549, prose: 'RAW_LONG_RUN_SECRET_ALPHA' },
+            semanticModel: deterministicSemanticValidatorModel,
+        });
+        expect(result.report.issues.map(value => value.code)).not.toContain('AUTHOR_SECRET_LEAK');
+        expect(result.report.status).toBe('passed');
+    });
+
+    it('does not treat alpha as premature after its canonical reveal occurrence', async () => {
+        const state560 = getLongRun().checkpoints.get(560)!;
+        const planner = buildPlannerContext(LONG_RUN_CONTROL, state560, 561, LONG_RUN_MEMORY);
+        const writerPlan = sanitizeWriterChapterPlan(buildSampleInternalPlan(planner), LONG_RUN_CONTROL, state560);
+        expect(buildValidatorContext(LONG_RUN_CONTROL, state560, writerPlan).secretValidation
+            .some(value => value.id === 'secret-alpha')).toBe(false);
+        const result = await validateWriterChapter({
+            control: LONG_RUN_CONTROL, state: state560, plan: writerPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 561, prose: 'RAW_LONG_RUN_SECRET_ALPHA' },
+            semanticModel: deterministicSemanticValidatorModel,
+        });
+        expect(result.report.issues.map(value => value.code)).not.toContain('AUTHOR_SECRET_LEAK');
+        expect(result.report.status).toBe('passed');
+    });
+
+    it('keeps the permanent secret protected at C600', async () => {
+        const state599 = getLongRun().checkpoints.get(599)!;
+        const planner = buildPlannerContext(LONG_RUN_CONTROL, state599, 600, LONG_RUN_MEMORY);
+        const writerPlan = sanitizeWriterChapterPlan(buildSampleInternalPlan(planner), LONG_RUN_CONTROL, state599);
+        expect(buildValidatorContext(LONG_RUN_CONTROL, state599, writerPlan).secretValidation)
+            .toContainEqual(expect.objectContaining({ id: 'secret-permanent', revealAllowed: false }));
+        const result = await validateWriterChapter({
+            control: LONG_RUN_CONTROL, state: state599, plan: writerPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 600, prose: 'RAW_LONG_RUN_SECRET_PERMANENT' },
+            semanticModel: deterministicSemanticValidatorModel,
+        });
+        expect(result.report.issues.map(value => value.code)).toContain('AUTHOR_SECRET_LEAK');
     });
 
     it('preserves pairwise slow burn and never turns the professional relationship romantic', () => {
@@ -418,6 +565,65 @@ describe('Story Engine V4 long-run plot, relationships, security, and replay', (
             expect(validation.report.status).toBe('passed');
             expectNoRawSecret(strategicView);
         }
+    });
+
+    it('threads a bounded custom Planner policy through the full old-fact C600 strategic and repair pipeline', async () => {
+        const state599 = getLongRun().checkpoints.get(599)!;
+        const oldFactId = 'fact-420';
+        const customPlannerPolicy: PlannerContextSelectionPolicy = {
+            ...DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
+            maxWriterVisibleFacts: 128,
+            maxKnowledgeFactRefs: 128,
+        };
+        const defaultPlanner = buildPlannerContext(LONG_RUN_CONTROL, state599, 600, LONG_RUN_MEMORY);
+        const customPlanner = buildPlannerContext(
+            LONG_RUN_CONTROL, state599, 600, LONG_RUN_MEMORY, undefined, undefined, customPlannerPolicy,
+        );
+        expect(defaultPlanner.writerVisibleFacts.map(value => value.id)).not.toContain(oldFactId);
+        expect(defaultPlanner.characterKnowledge.find(value => value.characterId === 'atlas')?.factIds).not.toContain(oldFactId);
+        expect(customPlanner.writerVisibleFacts.map(value => value.id)).toContain(oldFactId);
+        expect(customPlanner.characterKnowledge.find(value => value.characterId === 'atlas')?.factIds).toContain(oldFactId);
+
+        const internal = buildSampleInternalPlan(customPlanner, [politicalActionFor(600, 'atlas', oldFactId)]);
+        expect(validateInternalChapterPlan(internal, customPlanner)).toEqual([]);
+        const strategicView = buildValidatorStrategicView(internal, customPlanner);
+        expect(strategicView.deterministicIssues).toEqual([]);
+        const writerPlan = sanitizeWriterChapterPlan(
+            internal, LONG_RUN_CONTROL, state599, undefined, customPlannerPolicy,
+        );
+        const draft = await generateWriterDraft({
+            control: LONG_RUN_CONTROL, state: state599, plan: writerPlan, model: deterministicWriterModel,
+        });
+        const validatorContextSelectionPolicy = {
+            ...DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
+            plannerContextSelectionPolicy: customPlannerPolicy,
+        };
+        const validation = await validateWriterChapter({
+            control: LONG_RUN_CONTROL, state: state599, plan: writerPlan, draft,
+            semanticModel: deterministicSemanticValidatorModel, strategicView, validatorContextSelectionPolicy,
+        });
+        expect(validation.report.status, JSON.stringify(validation.report)).toBe('passed');
+
+        let repairValidationPasses = 0;
+        const repaired = await validateAndRepairWriterChapter({
+            control: LONG_RUN_CONTROL, state: state599, plan: writerPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 600, prose: 'A compact first candidate drifts from the plan.' },
+            semanticModel: { async validate(request) {
+                repairValidationPasses += 1;
+                return {
+                    kind: 'semantic-validation-result' as const,
+                    chapterNumber: request.chapterNumber,
+                    issues: repairValidationPasses === 1
+                        ? [{ code: 'PLAN_DRIFT' as const, severity: 'error' as const, scope: 'chapter' as const }]
+                        : [],
+                };
+            } },
+            repairModel: deterministicRepairModel,
+            strategicView, validatorContextSelectionPolicy, maxRepairAttempts: 1,
+        });
+        expect(repaired).toMatchObject({ status: 'approved-not-canon', repairAttempts: 1 });
+        expect(repairValidationPasses).toBe(2);
+        expect(state599).toMatchObject({ currentChapter: 599, revision: 599 });
     });
 
     it('runs Planner, Writer, Validator, and finite Repair offline without making Canon', async () => {

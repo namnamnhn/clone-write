@@ -1,7 +1,13 @@
 import { buildPlannerContext } from './contextBuilder';
 import { getArcForChapter, getBeatForChapter, isCharacterDirectAppearanceAllowed, isPovAllowed, isRelationshipEventAllowed, isRevealAllowed, isStoryEventAllowed } from './gates';
 import { ChapterPlanValidationError, parseInternalChapterPlan, validateInternalChapterPlan } from './planValidator';
-import { InternalChapterPlan, PlanValidationIssue, WriterChapterPlan } from './plannerTypes';
+import {
+    DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
+    InternalChapterPlan,
+    PlanValidationIssue,
+    PlannerContextSelectionPolicy,
+    WriterChapterPlan,
+} from './plannerTypes';
 import { FullStoryControl, StoryState } from './types';
 import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
 import { buildWriterStrategicDirectives } from './strategicContext';
@@ -23,6 +29,7 @@ export const sanitizeWriterChapterPlan = (
     control: FullStoryControl,
     state: StoryState,
     relationshipPolicy: RelationshipContextSelectionPolicy = DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+    plannerContextSelectionPolicy: PlannerContextSelectionPolicy = DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
 ): WriterChapterPlan => {
     assertWriterFacingControlSecretSafe(control);
     const parsed = parseInternalChapterPlan(internalPlan);
@@ -31,7 +38,9 @@ export const sanitizeWriterChapterPlan = (
     if (plan.chapterNumber > control.engine.plannedChapterCount) {
         throw new ChapterPlanValidationError([gateIssue('CHAPTER_OUT_OF_RANGE', 'chapterNumber', 'chapter exceeds the planned story')]);
     }
-    const context = buildPlannerContext(control, state, plan.chapterNumber, undefined, undefined, relationshipPolicy);
+    const context = buildPlannerContext(
+        control, state, plan.chapterNumber, undefined, undefined, relationshipPolicy, plannerContextSelectionPolicy,
+    );
     const issues: PlanValidationIssue[] = [...parsed.issues, ...validateInternalChapterPlan(plan, context, buildRelationshipGateValidationView(control, plan.chapterNumber))];
     const arc = getArcForChapter(control, plan.chapterNumber);
     const beat = getBeatForChapter(control, plan.chapterNumber);

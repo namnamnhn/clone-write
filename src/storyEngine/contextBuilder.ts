@@ -99,13 +99,43 @@ const normalizePolicy = (policy: NarrativeMemorySelectionPolicy): NarrativeMemor
     };
 };
 
-const normalizePlannerPolicy = (policy: PlannerContextSelectionPolicy): PlannerContextSelectionPolicy => {
-    (Object.keys(policy) as (keyof PlannerContextSelectionPolicy)[]).forEach((key) => {
+const PLANNER_CONTEXT_SELECTION_POLICY_KEYS = [
+    'maxCharacters',
+    'maxWriterVisibleFacts',
+    'maxInternalFacts',
+    'maxKnowledgeFactRefs',
+    'maxRelationships',
+    'maxUnresolvedClues',
+    'maxUnresolvedPromises',
+    'maxContinuityEntries',
+    'maxResourcesPerCharacter',
+    'maxGateIdsPerCategory',
+    'maxAuthorSecretReferences',
+    'maxActiveHardConstraints',
+] as const satisfies readonly (keyof PlannerContextSelectionPolicy)[];
+
+export const normalizePlannerContextSelectionPolicy = (
+    policy: PlannerContextSelectionPolicy,
+): PlannerContextSelectionPolicy => {
+    PLANNER_CONTEXT_SELECTION_POLICY_KEYS.forEach((key) => {
         if (!Number.isSafeInteger(policy[key]) || policy[key] < 0) {
             throw new PlannerContextCapacityError(`planner context selection policy ${key} must be a non-negative safe integer`);
         }
     });
-    return { ...policy };
+    return {
+        maxCharacters: policy.maxCharacters,
+        maxWriterVisibleFacts: policy.maxWriterVisibleFacts,
+        maxInternalFacts: policy.maxInternalFacts,
+        maxKnowledgeFactRefs: policy.maxKnowledgeFactRefs,
+        maxRelationships: policy.maxRelationships,
+        maxUnresolvedClues: policy.maxUnresolvedClues,
+        maxUnresolvedPromises: policy.maxUnresolvedPromises,
+        maxContinuityEntries: policy.maxContinuityEntries,
+        maxResourcesPerCharacter: policy.maxResourcesPerCharacter,
+        maxGateIdsPerCategory: policy.maxGateIdsPerCategory,
+        maxAuthorSecretReferences: policy.maxAuthorSecretReferences,
+        maxActiveHardConstraints: policy.maxActiveHardConstraints,
+    };
 };
 
 const requirePlannerCapacity = (label: string, count: number, maximum: number): void => {
@@ -299,7 +329,7 @@ export const buildPlannerContext = (
     const arcUsesBeats = control.beats.some(candidate => candidate.arcId === arc.id);
     if (arcUsesBeats && !beat) throw new Error(`no unique beat resolves for chapter ${targetChapter} in arc ${arc.id}`);
 
-    const selectionPolicy = normalizePlannerPolicy(suppliedSelectionPolicy);
+    const selectionPolicy = normalizePlannerContextSelectionPolicy(suppliedSelectionPolicy);
     const availableCharacters = selectPlannerCharacters(control, state, targetChapter, selectionPolicy.maxCharacters);
     const availableIds = new Set(availableCharacters.map(character => character.id));
     const writerVisibleFacts = visibleFacts(state.facts, targetChapter, 'writer', selectionPolicy.maxWriterVisibleFacts);
@@ -324,8 +354,17 @@ export const buildPlannerContext = (
     const lockedRevealIds = revealGateStatus.filter(status => !status.allowed).map(status => status.id);
     const allowedStoryEventIds = storyEventGateStatus.filter(status => status.allowed).map(status => status.id);
     const lockedStoryEventIds = storyEventGateStatus.filter(status => !status.allowed).map(status => status.id);
-    const allowedRelationshipEventIds = relationshipEventGateStatus.filter(status => status.allowed).map(status => status.id);
-    const lockedRelationshipEventIds = relationshipEventGateStatus.filter(status => !status.allowed).map(status => status.id);
+    const relationshipEventsById = new Map(control.relationshipEvents.map(event => [event.id, event]));
+    const relationshipEventIsPlannerAvailable = (id: StoryId): boolean => {
+        const event = relationshipEventsById.get(id);
+        return event !== undefined && event.participantIds.every(participantId => availableIds.has(participantId));
+    };
+    const allowedRelationshipEventIds = relationshipEventGateStatus
+        .filter(status => status.allowed && relationshipEventIsPlannerAvailable(status.id))
+        .map(status => status.id);
+    const lockedRelationshipEventIds = relationshipEventGateStatus
+        .filter(status => !status.allowed || !relationshipEventIsPlannerAvailable(status.id))
+        .map(status => status.id);
 
     const context: PlannerContext = {
         kind: 'planner-context',
