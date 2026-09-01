@@ -47,6 +47,12 @@ export interface StoryStudioDisplayLimits {
     readonly maxValidationIssues: number;
     readonly maxContinuityItems: number;
     readonly maxScenes: number;
+    readonly maxWriterConstraints: number;
+    readonly maxStrategicDirectives: number;
+    readonly maxRelationshipDirectives: number;
+    readonly maxConsequences: number;
+    readonly maxInternalIds: number;
+    readonly maxInternalActions: number;
 }
 
 export const DEFAULT_STORY_STUDIO_DISPLAY_LIMITS: StoryStudioDisplayLimits = {
@@ -58,6 +64,12 @@ export const DEFAULT_STORY_STUDIO_DISPLAY_LIMITS: StoryStudioDisplayLimits = {
     maxValidationIssues: 100,
     maxContinuityItems: 60,
     maxScenes: 30,
+    maxWriterConstraints: 60,
+    maxStrategicDirectives: 40,
+    maxRelationshipDirectives: 40,
+    maxConsequences: 60,
+    maxInternalIds: 60,
+    maxInternalActions: 40,
 };
 
 export interface BoundedList<T> {
@@ -277,10 +289,10 @@ export interface StoryStudioWriterPlanView {
     readonly povName: string;
     readonly participantNames: readonly string[];
     readonly scenes: BoundedList<StoryStudioSceneView>;
-    readonly constraints: readonly { readonly id: string; readonly text: string; readonly scope: string }[];
-    readonly strategicDirectives: readonly StoryStudioStrategicDirectiveView[];
-    readonly relationshipDirectives: readonly StoryStudioRelationshipDirectiveView[];
-    readonly expectedConsequences: readonly string[];
+    readonly constraints: BoundedList<{ readonly id: string; readonly text: string; readonly scope: string }>;
+    readonly strategicDirectives: BoundedList<StoryStudioStrategicDirectiveView>;
+    readonly relationshipDirectives: BoundedList<StoryStudioRelationshipDirectiveView>;
+    readonly expectedConsequences: BoundedList<string>;
     readonly endStateIntent: string;
 }
 
@@ -296,10 +308,10 @@ export interface StoryStudioInternalPlanView {
         readonly expectedConsequence: string;
         readonly purposeTags: readonly string[];
     }>;
-    readonly activeConstraintIds: readonly string[];
-    readonly plannedRevealIds: readonly string[];
-    readonly strategicActions: readonly { readonly id: string; readonly domain: string; readonly objective: string }[];
-    readonly relationshipActions: readonly { readonly id: string; readonly relationshipId: string; readonly actionType: string }[];
+    readonly activeConstraintIds: BoundedList<string>;
+    readonly plannedRevealIds: BoundedList<string>;
+    readonly strategicActions: BoundedList<{ readonly id: string; readonly domain: string; readonly objective: string }>;
+    readonly relationshipActions: BoundedList<{ readonly id: string; readonly relationshipId: string; readonly actionType: string }>;
 }
 
 export interface StoryStudioDraftView {
@@ -332,8 +344,6 @@ export interface StoryStudioValidationView {
     readonly blockingIssueCount: number;
     readonly counts: Readonly<Record<StoryStudioIssueSeverity, number>>;
     readonly issues: BoundedList<StoryStudioValidationIssueView>;
-    readonly strategicEvidenceIds: readonly string[];
-    readonly relationshipEvidenceIds: readonly string[];
 }
 
 export interface StoryStudioIntelligenceView {

@@ -3,7 +3,9 @@ import {
     compileStoryControl,
     createInitialStoryState,
     createValidationIssue,
-} from '../storyEngine';
+    projectValidatorActionToWriterDirective,
+    projectValidatorRelationshipActionToWriterDirective,
+} from '../../src/storyEngine';
 import type {
     FactProvenance,
     InternalChapterPlan,
@@ -11,8 +13,8 @@ import type {
     StoryState,
     WriterChapterPlan,
     WriterChapterDraft,
-} from '../storyEngine';
-import type { StoryStudioSession } from './storyStudioTypes';
+} from '../../src/storyEngine';
+import type { StoryStudioSession } from '../../src/storyStudio/storyStudioTypes';
 
 const provenance = (chapter: number, sourceId: string): FactProvenance => ({
     sourceChapter: chapter,
@@ -216,7 +218,15 @@ const writerPlan: WriterChapterPlan = {
             id: 'strategy-council', domain: 'politics', sceneIds: ['scene-council'], actorCharacterId: 'minh',
             visibleObjective: 'Đạt quyền điều động ba thuyền tuần duyên.', visibleConstraints: ['Quyền biểu quyết của hội đồng phải được tôn trọng.'],
             expectedCostOrTradeoff: 'Minh Kha phải công khai cam kết chịu trách nhiệm.',
-            dimensionStatuses: [{ dimension: 'authority', status: 'constraining' }, { dimension: 'time', status: 'constraining' }, { dimension: 'reputation', status: 'supporting' }],
+            dimensionStatuses: [
+                { dimension: 'authority', status: 'constraining' },
+                { dimension: 'information', status: 'neutral' },
+                { dimension: 'personnel', status: 'neutral' },
+                { dimension: 'money', status: 'neutral' },
+                { dimension: 'law', status: 'neutral' },
+                { dimension: 'reputation', status: 'supporting' },
+                { dimension: 'time', status: 'constraining' },
+            ],
             timing: { earliestChapter: 13, deadlineChapter: 13, preparationChapters: 1 },
         },
         {
@@ -282,13 +292,24 @@ const validationReport = buildValidationReport(13, 2, [
     createValidationIssue('CONSEQUENCE_MISSING', 'warning', 'semantic-validator', 'scene', 'scene-harbor'),
 ]);
 
-export const STORY_STUDIO_DEMO_SESSION: StoryStudioSession = {
+/** Presenter-only fixture. It is intentionally never wired into the product demo. */
+export const STORY_STUDIO_PRESENTER_FIXTURE: StoryStudioSession = {
     mode: 'demo',
     projectTitle: 'Hải Đăng Phía Bắc',
     control,
     state,
     internalPlan,
-    writerPlan,
+    writerPlan: {
+        ...writerPlan,
+        strategicDirectives: writerPlan.strategicDirectives?.map(directive => projectValidatorActionToWriterDirective({
+            ...directive,
+            evidenceRefs: [], resourceKeys: [], actorKnowledgeFactIds: [], opponentKnowledgeFactIds: [],
+        })),
+        relationshipDirectives: writerPlan.relationshipDirectives?.map(directive => projectValidatorRelationshipActionToWriterDirective({
+            ...directive,
+            evidenceRefs: [], participantKnowledgeRefs: [], privilegedConstraints: [],
+        })),
+    },
     writerDraft,
     validationReport,
     approvalStatus: 'approved-not-canon',

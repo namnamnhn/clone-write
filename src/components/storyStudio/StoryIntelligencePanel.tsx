@@ -44,7 +44,7 @@ export const StoryIntelligencePanel: React.FC<{
                 {activeTab === 'characters' && <Characters intelligence={intelligence} />}
                 {activeTab === 'relationships' && <Relationships intelligence={intelligence} />}
                 {activeTab === 'plot' && <Plot intelligence={intelligence} />}
-                {activeTab === 'strategy' && <Strategy directives={writerPlan?.strategicDirectives ?? []} />}
+                {activeTab === 'strategy' && <Strategy directives={writerPlan?.strategicDirectives.items ?? []} />}
                 {activeTab === 'knowledge' && <Knowledge intelligence={intelligence} />}
                 {activeTab === 'continuity' && <Continuity intelligence={intelligence} />}
             </div>
@@ -59,7 +59,7 @@ const IntelligenceOverview: React.FC<{ intelligence: StoryStudioIntelligenceView
         <SummaryCard icon={Brain} label="Sự thật & niềm tin" value={intelligence.facts.totalCount + intelligence.beliefs.totalCount} detail="Global fact tách khỏi tri thức nhân vật" />
         <SummaryCard icon={GitBranch} label="Plot đang theo dõi" value={intelligence.foreshadow.totalCount + intelligence.payoffs.totalCount} detail={`${intelligence.secrets.totalCount} bí mật được bảo vệ bằng metadata`} />
         <div className="sm:col-span-2 lg:col-span-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
-            <div className="flex items-start gap-3"><BadgeInfo className="mt-0.5 h-5 w-5 shrink-0 text-indigo-500" /><div><div className="text-sm font-black text-slate-800 dark:text-slate-100">Ranh giới hiển thị đang hoạt động</div><p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">Canon-safe, Writer-safe, Planner nội bộ và Validator-only là các bề mặt riêng. {writerPlan ? `${writerPlan.strategicDirectives.length} chỉ thị chiến lược đang được lấy từ kế hoạch Writer-safe.` : 'Chưa có chỉ thị Writer-safe.'}</p></div></div>
+            <div className="flex items-start gap-3"><BadgeInfo className="mt-0.5 h-5 w-5 shrink-0 text-indigo-500" /><div><div className="text-sm font-black text-slate-800 dark:text-slate-100">Ranh giới hiển thị đang hoạt động</div><p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">Canon-safe, Writer-safe, Planner nội bộ và Validator-only là các bề mặt riêng. {writerPlan ? `${writerPlan.strategicDirectives.totalCount} chỉ thị chiến lược đang được lấy từ kế hoạch Writer-safe.` : 'Chưa có chỉ thị Writer-safe.'}</p></div></div>
         </div>
     </div>
 );

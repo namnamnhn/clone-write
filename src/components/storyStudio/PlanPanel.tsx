@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BriefcaseBusiness, ChevronRight, Eye, HeartHandshake, MapPin, Shield, Swords, Users } from 'lucide-react';
-import type { StoryStudioInternalPlanView, StoryStudioWriterPlanView } from '../../storyStudio/storyStudioTypes';
+import type { BoundedList, StoryStudioInternalPlanView, StoryStudioWriterPlanView } from '../../storyStudio/storyStudioTypes';
 
 export const PlanPanel: React.FC<{ writerPlan?: StoryStudioWriterPlanView; internalPlan?: StoryStudioInternalPlanView }> = ({ writerPlan, internalPlan }) => {
     const [view, setView] = useState<'writer' | 'internal'>('writer');
@@ -34,7 +34,7 @@ const WriterPlan: React.FC<{ plan: StoryStudioWriterPlanView }> = ({ plan }) => 
         <div className="grid gap-3 sm:grid-cols-3">
             <Metric icon={Eye} label="POV" value={plan.povName} />
             <Metric icon={Users} label="Tham gia" value={plan.participantNames.join(', ') || 'Chưa có'} />
-            <Metric icon={Shield} label="Ràng buộc" value={`${plan.constraints.length} mục`} />
+            <Metric icon={Shield} label="Ràng buộc" value={`${plan.constraints.totalCount} mục`} />
         </div>
         <div className="rounded-2xl bg-indigo-50 p-4 dark:bg-indigo-950/25">
             <div className="text-xs font-black uppercase tracking-wider text-indigo-500">Mục tiêu chính</div>
@@ -65,15 +65,17 @@ const WriterPlan: React.FC<{ plan: StoryStudioWriterPlanView }> = ({ plan }) => 
             </div>
             {plan.scenes.truncated && <Truncated shown={plan.scenes.displayedCount} total={plan.scenes.totalCount} />}
         </div>
-        {(plan.strategicDirectives.length > 0 || plan.relationshipDirectives.length > 0) && (
+        {(plan.strategicDirectives.totalCount > 0 || plan.relationshipDirectives.totalCount > 0) && (
             <div className="grid gap-3 lg:grid-cols-2">
                 <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
                     <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-800 dark:text-slate-100"><Swords className="h-4 w-4 text-indigo-500" /> Chỉ thị chiến lược</div>
-                    <div className="space-y-2">{plan.strategicDirectives.map(item => <div key={item.id} className="flex gap-2 text-xs text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-500" /><span><b className="uppercase">{item.domain}</b> · {item.objective}</span></div>)}</div>
+                    <div className="space-y-2">{plan.strategicDirectives.items.map(item => <div key={item.id} className="flex gap-2 text-xs text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-500" /><span><b className="uppercase">{item.domain}</b> · {item.objective}</span></div>)}</div>
+                    {plan.strategicDirectives.truncated && <Truncated shown={plan.strategicDirectives.displayedCount} total={plan.strategicDirectives.totalCount} />}
                 </div>
                 <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
                     <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-800 dark:text-slate-100"><HeartHandshake className="h-4 w-4 text-pink-500" /> Chỉ thị quan hệ</div>
-                    <div className="space-y-2">{plan.relationshipDirectives.map(item => <div key={item.id} className="flex gap-2 text-xs text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-pink-500" /><span>{item.participants.join(' & ')} · <b>{item.milestone}</b> · {item.objective}</span></div>)}</div>
+                    <div className="space-y-2">{plan.relationshipDirectives.items.map(item => <div key={item.id} className="flex gap-2 text-xs text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-pink-500" /><span>{item.participants.join(' & ')} · <b>{item.milestone}</b> · {item.objective}</span></div>)}</div>
+                    {plan.relationshipDirectives.truncated && <Truncated shown={plan.relationshipDirectives.displayedCount} total={plan.relationshipDirectives.totalCount} />}
                 </div>
             </div>
         )}
@@ -94,10 +96,11 @@ const InternalPlan: React.FC<{ plan: StoryStudioInternalPlanView }> = ({ plan })
                 </div>
             ))}
         </div>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <InternalList label="Constraint IDs" values={plan.activeConstraintIds} />
             <InternalList label="Reveal dự kiến" values={plan.plannedRevealIds} />
-            <InternalList label="Hành động nội bộ" values={[...plan.strategicActions.map(item => `${item.domain}: ${item.id}`), ...plan.relationshipActions.map(item => `relationship: ${item.id}`)]} />
+            <InternalList label="Chiến lược nội bộ" values={{ ...plan.strategicActions, items: plan.strategicActions.items.map(item => `${item.domain}: ${item.id}`) }} />
+            <InternalList label="Quan hệ nội bộ" values={{ ...plan.relationshipActions, items: plan.relationshipActions.items.map(item => `relationship: ${item.id}`) }} />
         </div>
     </div>
 );
@@ -106,8 +109,8 @@ const Metric: React.FC<{ icon: React.ComponentType<{ className?: string }>; labe
     <div className="rounded-2xl border border-slate-200 p-3 dark:border-slate-800"><div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400"><Icon className="h-3.5 w-3.5" /> {label}</div><div className="mt-1.5 truncate text-sm font-bold text-slate-800 dark:text-slate-100">{value}</div></div>
 );
 
-const InternalList: React.FC<{ label: string; values: readonly string[] }> = ({ label, values }) => (
-    <div className="rounded-2xl bg-slate-50 p-3 dark:bg-slate-950/60"><div className="text-[10px] font-black uppercase text-slate-400">{label}</div><div className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">{values.length ? values.map(value => <div key={value}>{value}</div>) : <span className="text-slate-400">Không có</span>}</div></div>
+const InternalList: React.FC<{ label: string; values: BoundedList<string> }> = ({ label, values }) => (
+    <div className="rounded-2xl bg-slate-50 p-3 dark:bg-slate-950/60"><div className="text-[10px] font-black uppercase text-slate-400">{label}</div><div className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">{values.items.length ? values.items.map(value => <div key={value}>{value}</div>) : <span className="text-slate-400">Không có</span>}</div>{values.truncated && <Truncated shown={values.displayedCount} total={values.totalCount} />}</div>
 );
 
 const Truncated: React.FC<{ shown: number; total: number }> = ({ shown, total }) => <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Hiển thị {shown} / {total} mục.</div>;

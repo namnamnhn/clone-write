@@ -9,6 +9,9 @@ import {
     getRevealOccurrence,
     isCharacterDirectAppearanceAllowed,
     isRevealAllowed,
+    assertModelBoundaryStringsSecretSafe,
+    writerRelationshipDirectiveMatchesValidatorAction,
+    writerStrategicDirectiveMatchesValidatorAction,
 } from '../storyEngine';
 import type {
     FullStoryControl,
@@ -53,6 +56,49 @@ const bounded = <T>(items: readonly T[], capacity: number): BoundedList<T> => {
 
 const characterName = (control: FullStoryControl, id: string): string => control.characters[id]?.name ?? id;
 
+const sameOrderedIds = (left: readonly string[], right: readonly string[]): boolean =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
+
+const internalAndWriterPlanIdentitiesMatch = (
+    internalPlan: NonNullable<StoryStudioSession['internalPlan']>,
+    writerPlan: WriterChapterPlan,
+): boolean => internalPlan.chapterNumber === writerPlan.chapterNumber
+    && internalPlan.arcId === writerPlan.arc.id
+    && (internalPlan.beatId ?? undefined) === (writerPlan.beat?.id ?? undefined)
+    && internalPlan.povCharacterId === writerPlan.povCharacterId
+    && sameOrderedIds(internalPlan.participantIds, writerPlan.participantIds)
+    && internalPlan.scenes.length === writerPlan.scenes.length
+    && internalPlan.scenes.every((scene, index) => {
+        const writerScene = writerPlan.scenes[index];
+        return writerScene !== undefined
+            && scene.id === writerScene.id
+            && scene.order === writerScene.order
+            && scene.povCharacterId === writerScene.povCharacterId
+            && sameOrderedIds(scene.participantIds, writerScene.participantIds);
+    });
+
+const strategicDirectiveMatches = (
+    directive: WriterStrategicDirective,
+    action: NonNullable<StoryStudioSession['validatorStrategicView']>['actions'][number],
+): boolean => {
+    try {
+        return writerStrategicDirectiveMatchesValidatorAction(directive, action);
+    } catch {
+        return false;
+    }
+};
+
+const relationshipDirectiveMatches = (
+    directive: NonNullable<WriterChapterPlan['relationshipDirectives']>[number],
+    action: NonNullable<StoryStudioSession['validatorRelationshipView']>['actions'][number],
+): boolean => {
+    try {
+        return writerRelationshipDirectiveMatchesValidatorAction(directive, action);
+    } catch {
+        return false;
+    }
+};
+
 const artifactChapters = (session: StoryStudioSession): readonly number[] => [
     session.plannerContext?.targetChapter,
     session.internalPlan?.chapterNumber,
@@ -82,6 +128,32 @@ const validateConsistency = (session: StoryStudioSession): readonly string[] => 
     if (session.state && chapters[0] !== undefined && session.state.currentChapter >= chapters[0]) {
         issues.push('Chương mục tiêu phải nằm sau Canon hiện tại.');
     }
+    if (session.writerContext && session.writerPlan
+        && JSON.stringify(session.writerContext.chapterPlan) !== JSON.stringify(session.writerPlan)) {
+        issues.push('Writer Context contains a stale same-chapter Writer plan.');
+    }
+    if (session.internalPlan && session.writerPlan
+        && !internalAndWriterPlanIdentitiesMatch(session.internalPlan, session.writerPlan)) {
+        issues.push('Internal and Writer plans do not share stable chapter identities.');
+    }
+    if (session.validatorStrategicView) {
+        const directives = session.writerPlan?.strategicDirectives ?? [];
+        if (directives.length !== session.validatorStrategicView.actions.length
+            || session.validatorStrategicView.actions.some((action) => {
+                const directive = directives.find(candidate => candidate.id === action.id);
+                return directive === undefined || !strategicDirectiveMatches(directive, action);
+            })) issues.push('Validator strategic view is stale relative to the Writer plan.');
+    }
+    if (session.validatorRelationshipView) {
+        const directives = session.writerPlan?.relationshipDirectives ?? [];
+        if (directives.length !== session.validatorRelationshipView.actions.length
+            || session.validatorRelationshipView.actions.some((action) => {
+                const directive = directives.find(candidate => candidate.id === action.id);
+                return directive === undefined || !relationshipDirectiveMatches(directive, action);
+            })) issues.push('Validator relationship view is stale relative to the Writer plan.');
+    }
+    // Technical debt: ValidationReport has no trusted draft identity/content digest yet, so
+    // chapter parity is the strongest report-to-draft relationship that can be proven here.
     return issues;
 };
 
@@ -104,6 +176,24 @@ const emptyViewModel = (mode: StoryStudioSession['mode'], title = 'Story Engine 
     },
     consistency: { status: 'ok', issues: [] },
 });
+
+const secretBoundaryFailure = (mode: StoryStudioSession['mode']): StoryStudioViewModel => ({
+    ...emptyViewModel(mode),
+    consistency: { status: 'error', issues: ['Story Studio cannot safely display this session.'] },
+});
+
+const finalizeViewModel = (
+    control: FullStoryControl,
+    mode: StoryStudioSession['mode'],
+    viewModel: StoryStudioViewModel,
+): StoryStudioViewModel => {
+    try {
+        assertModelBoundaryStringsSecretSafe(control, viewModel, 'storyStudioViewModel');
+        return viewModel;
+    } catch {
+        return secretBoundaryFailure(mode);
+    }
+};
 
 const artifactStatusFor = (session: StoryStudioSession): StudioArtifactStatus => {
     if (session.approvalStatus) return session.approvalStatus;
@@ -210,26 +300,52 @@ const buildRelationships = (
     limit: number,
 ): BoundedList<StoryStudioRelationshipView> => {
     const available = new Set(control.characterOrder.filter(id => isCharacterDirectAppearanceAllowed(control, id, targetChapter)));
-    const canonicalById = new Map(state.relationships.filter(item => item.establishedChapter <= state.currentChapter).map(item => [item.id, item]));
-    const items = control.relationshipDefinitions
-        .filter(definition => definition.participantIds.every(id => available.has(id)))
-        .map((definition): StoryStudioRelationshipView => {
+    const definitionsById = new Map(control.relationshipDefinitions.map(definition => [definition.id, definition]));
+    const canonicalById = new Map(state.relationships
+        .filter(relationship => relationship.establishedChapter <= state.currentChapter)
+        .map(relationship => [relationship.id, relationship]));
+    const historyByRelationship = new Map<string, typeof state.ledgers.relationships>();
+    state.ledgers.relationships
+        .filter(item => item.chapterNumber <= state.currentChapter)
+        .forEach((item) => historyByRelationship.set(item.relationshipId, [
+            ...(historyByRelationship.get(item.relationshipId) ?? []), item,
+        ]));
+    historyByRelationship.forEach((history, relationshipId) => {
+        const ordered = history.slice().sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
+        const first = ordered[0];
+        const latest = ordered.at(-1);
+        if (first && latest) canonicalById.set(relationshipId, {
+            id: relationshipId,
+            participantIds: latest.participantIds.slice(),
+            state: latest.state,
+            establishedChapter: first.chapterNumber,
+        });
+    });
+    const items = [...canonicalById.values()]
+        .filter(relationship => relationship.establishedChapter <= state.currentChapter
+            && relationship.participantIds.every(id => available.has(id)))
+        .map((canonical): StoryStudioRelationshipView => {
+            const candidate = definitionsById.get(canonical.id);
+            const definition = candidate && sameOrderedIds(candidate.participantIds, canonical.participantIds)
+                ? candidate : undefined;
             const history = state.ledgers.relationships
-                .filter(item => item.relationshipId === definition.id && item.chapterNumber <= state.currentChapter)
+                .filter(item => item.relationshipId === canonical.id && item.chapterNumber <= state.currentChapter)
                 .slice()
                 .sort((left, right) => left.chapterNumber - right.chapterNumber || left.id.localeCompare(right.id));
-            const milestone = deriveCurrentRomanceMilestone(definition, state, state.currentChapter || targetChapter);
-            const romantic = definition.categories.includes('romantic');
-            const consecutive = countConsecutiveRomanticProgressions(history, targetChapter);
+            const milestone = definition
+                ? deriveCurrentRomanceMilestone(definition, state, state.currentChapter || targetChapter)
+                : 'none';
+            const romantic = definition?.categories.includes('romantic') === true;
+            const consecutive = romantic ? countConsecutiveRomanticProgressions(history, targetChapter) : 0;
             return {
-                id: definition.id,
-                participantIds: definition.participantIds.slice(),
-                participantNames: definition.participantIds.map(id => characterName(control, id)),
-                categories: definition.categories.slice(),
-                ...(canonicalById.get(definition.id)?.state === undefined ? {} : { currentState: canonicalById.get(definition.id)!.state }),
+                id: canonical.id,
+                participantIds: canonical.participantIds.slice(),
+                participantNames: canonical.participantIds.map(id => characterName(control, id)),
+                categories: definition?.categories.slice() ?? [],
+                currentState: canonical.state,
                 currentRomanceMilestone: milestone,
                 slowBurnStatus: romantic ? (consecutive > 0 ? 'progressing' : 'stable') : 'not-applicable',
-                dynamicTags: definition.dynamicProfile.coreDynamicTags.slice(),
+                dynamicTags: definition?.dynamicProfile.coreDynamicTags.slice() ?? [],
                 recentChanges: history.slice(-3).map(item => ({ id: item.id, chapterNumber: item.chapterNumber, state: item.state })),
             };
         })
@@ -355,10 +471,10 @@ const buildWriterPlan = (
         povName: characterName(control, plan.povCharacterId),
         participantNames: plan.participantIds.map(id => characterName(control, id)),
         scenes: bounded(scenes, limits.maxScenes),
-        constraints: plan.canonConstraints.map(item => ({ ...item })),
-        strategicDirectives: (plan.strategicDirectives ?? []).map(item => mapStrategicDirective(control, item)),
-        relationshipDirectives: (plan.relationshipDirectives ?? []).map(item => mapRelationshipDirective(control, item)),
-        expectedConsequences: plan.expectedContinuityConsequences.map(item => item.text),
+        constraints: bounded(plan.canonConstraints.map(item => ({ ...item })), limits.maxWriterConstraints),
+        strategicDirectives: bounded((plan.strategicDirectives ?? []).map(item => mapStrategicDirective(control, item)), limits.maxStrategicDirectives),
+        relationshipDirectives: bounded((plan.relationshipDirectives ?? []).map(item => mapRelationshipDirective(control, item)), limits.maxRelationshipDirectives),
+        expectedConsequences: bounded(plan.expectedContinuityConsequences.map(item => item.text), limits.maxConsequences),
         endStateIntent: plan.endStateIntent,
     };
 };
@@ -379,10 +495,10 @@ const buildInternalPlan = (
         expectedConsequence: scene.expectedConsequence,
         purposeTags: scene.purposeTags.slice(),
     })), limits.maxScenes),
-    activeConstraintIds: plan.activeConstraintIds.slice(),
-    plannedRevealIds: plan.plannedRevealIds.slice(),
-    strategicActions: (plan.strategicActions ?? []).map(action => ({ id: action.id, domain: action.domain, objective: action.objective })),
-    relationshipActions: (plan.relationshipActions ?? []).map(action => ({ id: action.id, relationshipId: action.relationshipId, actionType: action.actionType })),
+    activeConstraintIds: bounded(plan.activeConstraintIds.slice(), limits.maxInternalIds),
+    plannedRevealIds: bounded(plan.plannedRevealIds.slice(), limits.maxInternalIds),
+    strategicActions: bounded((plan.strategicActions ?? []).map(action => ({ id: action.id, domain: action.domain, objective: action.objective })), limits.maxInternalActions),
+    relationshipActions: bounded((plan.relationshipActions ?? []).map(action => ({ id: action.id, relationshipId: action.relationshipId, actionType: action.actionType })), limits.maxInternalActions),
 });
 
 const draftStatus = (session: StoryStudioSession): StoryStudioDraftView['status'] => {
@@ -432,7 +548,6 @@ const reportIssue = (issue: ValidationIssue, index: number): StoryStudioValidati
 const emptyValidation = (): StoryStudioValidationView => ({
     privilege: 'validator-only', status: 'not-run', blockingIssueCount: 0,
     counts: { critical: 0, error: 0, warning: 0 }, issues: bounded([], 0),
-    strategicEvidenceIds: [], relationshipEvidenceIds: [],
 });
 
 const buildValidation = (session: StoryStudioSession, limit: number): StoryStudioValidationView => {
@@ -456,22 +571,6 @@ const buildValidation = (session: StoryStudioSession, limit: number): StoryStudi
         || left.domain.localeCompare(right.domain) || left.code.localeCompare(right.code)
         || left.path.localeCompare(right.path) || left.id.localeCompare(right.id));
     const counts = issues.reduce((total, issue) => ({ ...total, [issue.severity]: total[issue.severity] + 1 }), { critical: 0, error: 0, warning: 0 });
-    const strategicEvidenceIds = session.validatorStrategicView?.actions
-        .flatMap(action => action.evidenceRefs.map(ref => {
-            if ('id' in ref) return ref.id;
-            if ('factId' in ref) return `${ref.characterId}:${ref.factId}`;
-            if ('resourceId' in ref) return `${ref.characterId}:${ref.resourceId}`;
-            return `${ref.characterId}:${ref.value}`;
-        }))
-        .slice().sort() ?? [];
-    const relationshipEvidenceIds = session.validatorRelationshipView?.actions
-        .flatMap(action => action.evidenceRefs.map(ref => {
-            if ('id' in ref) return ref.id;
-            if ('factId' in ref) return `${ref.characterId}:${ref.factId}`;
-            if ('epistemicId' in ref) return `${ref.characterId}:${ref.epistemicId}`;
-            return `${ref.characterId}:${ref.value}`;
-        }))
-        .slice().sort() ?? [];
     return {
         privilege: 'validator-only',
         status: report?.status ?? 'not-run',
@@ -479,8 +578,6 @@ const buildValidation = (session: StoryStudioSession, limit: number): StoryStudi
         blockingIssueCount: issues.filter(issue => issue.blocking).length,
         counts,
         issues: bounded(issues, limit),
-        strategicEvidenceIds,
-        relationshipEvidenceIds,
     };
 };
 
@@ -492,7 +589,8 @@ export const buildStoryStudioViewModel = (
     const consistencyIssues = validateConsistency(session);
     if (!session.control || !session.state) {
         const empty = emptyViewModel(session.mode, session.projectTitle ?? 'Story Engine V4');
-        return { ...empty, consistency: { status: 'error', issues: consistencyIssues } };
+        const result = { ...empty, consistency: { status: 'error' as const, issues: consistencyIssues } };
+        return session.control ? finalizeViewModel(session.control, session.mode, result) : result;
     }
 
     const control = session.control;
@@ -503,6 +601,10 @@ export const buildStoryStudioViewModel = (
     const safeSession: StoryStudioSession = consistencyOk ? session : { mode: session.mode, projectTitle: session.projectTitle, control, state };
     const artifactStatus = artifactStatusFor(safeSession);
     const characters = buildCharacters(control, state, targetChapter, suppliedLimits.maxCharacters);
+    const projectionById = new Map(state.projections.characters.map(value => [value.characterId, value]));
+    const activeCharacterCount = control.characterOrder
+        .filter(id => isCharacterDirectAppearanceAllowed(control, id, targetChapter))
+        .filter(id => state.activeCharacterIds.includes(id) || projectionById.get(id)?.active === true).length;
     const relationships = buildRelationships(control, state, targetChapter, suppliedLimits.maxRelationships);
     const facts = buildFacts(control, state, targetChapter, suppliedLimits.maxFacts);
     const available = new Set(control.characterOrder.filter(id => isCharacterDirectAppearanceAllowed(control, id, targetChapter)));
@@ -568,7 +670,7 @@ export const buildStoryStudioViewModel = (
         statusLabel: draftStatusLabel[draftStatus(safeSession)],
     } : undefined;
 
-    return {
+    const viewModel: StoryStudioViewModel = {
         project: {
             privilege: 'canon-safe', mode: session.mode, id: control.id,
             title: session.projectTitle ?? control.id, isDemo: session.mode === 'demo',
@@ -579,13 +681,13 @@ export const buildStoryStudioViewModel = (
         },
         overview: {
             privilege: 'canon-safe', plannedChapterCount: control.engine.plannedChapterCount,
-            activeCharacterCount: characters.items.filter(item => item.active).length,
+            activeCharacterCount,
             relationshipCount: relationships.totalCount,
             activeConstraintCount,
             factCount: facts.totalCount,
             openForeshadowCount: foreshadow.filter(item => item.status === 'open').length,
             outstandingPayoffCount: payoffs.filter(item => ['not-due', 'due', 'overdue'].includes(item.status)).length,
-            strategicActionCount: writerPlan?.strategicDirectives.length ?? 0,
+            strategicActionCount: writerPlan?.strategicDirectives.totalCount ?? 0,
             validationIssueCount: validation.issues.totalCount,
         },
         workflow: {
@@ -614,4 +716,5 @@ export const buildStoryStudioViewModel = (
         },
         consistency: { status: consistencyOk ? 'ok' : 'error', issues: consistencyIssues },
     };
+    return finalizeViewModel(control, session.mode, viewModel);
 };
