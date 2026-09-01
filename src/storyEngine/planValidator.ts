@@ -182,6 +182,9 @@ export const parseInternalChapterPlan = (value: unknown): InternalPlanParseResul
     const allowedRevealIds = requiredIds(value, 'allowedRevealIds', '$', issues);
     const plannedRevealIds = requiredIds(value, 'plannedRevealIds', '$', issues);
     const relationshipEventIds = requiredIds(value, 'relationshipEventIds', '$', issues);
+    if (relationshipEventIds && new Set(relationshipEventIds).size !== relationshipEventIds.length) {
+        issue(issues, 'INVALID_SHAPE', 'relationshipEventIds', 'must not contain duplicate relationship event IDs');
+    }
     const storyEventIds = requiredIds(value, 'storyEventIds', '$', issues);
     const cluesPlantedIds = requiredIds(value, 'cluesPlantedIds', '$', issues);
     const cluesPaidOffIds = requiredIds(value, 'cluesPaidOffIds', '$', issues);
@@ -245,6 +248,9 @@ export const validateInternalChapterPlan = (
     if (!hasOnlyKnown(plan.allowedRevealIds, allowedReveals)) add('REVEAL_LOCKED', 'allowedRevealIds', 'contains a locked or unknown reveal');
     if (!hasOnlyKnown(plan.plannedRevealIds, allowedReveals) || !plan.plannedRevealIds.every(id => plan.allowedRevealIds.includes(id))) add('REVEAL_LOCKED', 'plannedRevealIds', 'must be both allowed by context and declared allowed by the plan');
     if (!hasOnlyKnown(plan.storyEventIds, allowedEvents)) add('STORY_EVENT_LOCKED', 'storyEventIds', 'contains a locked or unknown story event');
+    if (new Set(plan.relationshipEventIds).size !== plan.relationshipEventIds.length) {
+        add('DUPLICATE_RELATIONSHIP_EVENT', 'relationshipEventIds', 'must not contain duplicate relationship event IDs');
+    }
     plan.relationshipEventIds.forEach((eventId, index) => {
         const requiredParticipants = allowedRelationshipEvents.get(eventId);
         if (!requiredParticipants) add('RELATIONSHIP_EVENT_LOCKED', `relationshipEventIds.${index}`, 'event is locked or unknown');

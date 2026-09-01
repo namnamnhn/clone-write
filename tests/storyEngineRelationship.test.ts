@@ -8,6 +8,7 @@ import {
     buildWriterContext,
     compileStoryControl,
     createInitialStoryState,
+    DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
     InternalChapterPlan,
     parseInternalChapterPlan,
     RelationshipHistoryCapacityError,
@@ -15,6 +16,7 @@ import {
     sanitizeWriterChapterPlan,
     StoryBlueprint,
     validateInternalChapterPlan,
+    validateAndRepairWriterChapter,
     validateRelationshipActions,
     validateWriterChapter,
     WriterContextError,
@@ -370,10 +372,27 @@ describe('Story Engine V4 relationship engine', () => {
         });
         expect(issuesFor(planWithActions([intermediate])).map(value => value.code)).toContain('RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION');
         const final = actionFor({
-            id: 'z-final', actionType: 'reveal-vulnerability', dependsOnActionId: 'a-intermediate',
+            id: 'z-final', sceneIds: ['relationship-final-scene'], actionType: 'reveal-vulnerability', dependsOnActionId: 'a-intermediate',
             intendedProgression: { direction: 'strengthening', romanticMilestone: 'interest', expectedState: 'interest', mutual: false, intermediate: false },
         });
-        expect(issuesFor(planWithActions([intermediate, final], 'interest'))).toEqual([]);
+        const sequenced = planWithActions([intermediate, final], 'interest');
+        const laterFinal = {
+            ...sequenced,
+            scenes: [
+                sequenced.scenes[0],
+                { ...sequenced.scenes[0], id: 'relationship-final-scene', order: 2 },
+            ],
+        };
+        expect(issuesFor(planWithActions([intermediate, { ...final, sceneIds: ['relationship-scene'] }], 'interest')).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        expect(issuesFor(laterFinal)).toEqual([]);
+        const writerPlan = sanitizeWriterChapterPlan(laterFinal, control, stateFor());
+        const sameSceneWriterPlan = {
+            ...writerPlan,
+            scenes: writerPlan.scenes.map(scene => scene.id === 'relationship-final-scene' ? { ...scene, purposeTags: ['plot' as const] } : scene),
+            relationshipDirectives: writerPlan.relationshipDirectives!.map(directive => directive.id === 'z-final'
+                ? { ...directive, sceneIds: ['relationship-scene'] } : directive),
+        };
+        expect(() => buildWriterContext(control, stateFor(), sameSceneWriterPlan)).toThrow(WriterContextError);
     });
 
     it('separates trusted relationship gates from canonical occurrence evidence', () => {
@@ -390,7 +409,7 @@ describe('Story Engine V4 relationship engine', () => {
         expect(parseInternalChapterPlan(relationshipEvidence).issues.map(value => value.code)).toContain('INVALID_RELATIONSHIP_ACTION');
 
         const confession = actionFor({
-            actionType: 'confession', relationshipEventId: 'a-b-confession',
+            actionType: 'confession', importance: 'major', relationshipEventId: 'a-b-confession',
             intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false },
         });
         expect(issuesFor(planFor(confession, ['a-b-confession']), stateFor(20))).toEqual([]);
@@ -462,7 +481,7 @@ describe('Story Engine V4 relationship engine', () => {
         });
         expect(issuesFor(planFor(confession), stateFor(20, 'interest')).map(value => value.code)).toContain('RELATIONSHIP_BOUNDARY_VIOLATION');
         const rejection = actionFor({
-            currentRomanceMilestone: 'interest', actionType: 'reject-romance', boundaries: boundary,
+            currentRomanceMilestone: 'interest', actionType: 'reject-romance', importance: 'major', boundaries: boundary,
             intendedProgression: { direction: 'weakening', romanticMilestone: 'interest', expectedState: 'rejected', mutual: false, intermediate: false },
         });
         expect(issuesFor(planFor(rejection), stateFor(20, 'interest'))).toEqual([]);
@@ -486,6 +505,152 @@ describe('Story Engine V4 relationship engine', () => {
         })).toThrow(WriterContextError);
     });
 
+    it('enforces intrinsic major/outcome semantics and direction coherence at source validation', () => {
+        const downgraded = [
+            actionFor({ actionType: 'rupture', participantAgency: [], evidenceRefs: [], intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false } }),
+            actionFor({ actionType: 'reconciliation', participantAgency: [], evidenceRefs: [], intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false } }),
+            actionFor({ actionType: 'reject-romance', participantAgency: [], evidenceRefs: [], intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false } }),
+            actionFor({ actionType: 'accept-romance', participantAgency: [], evidenceRefs: [], intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: true, intermediate: false } }),
+        ];
+        downgraded.forEach((action) => {
+            const codes = issuesFor(planFor(action)).map(value => value.code);
+            expect(codes).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+            if (action.actionType !== 'confession') expect(codes).toContain('RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION');
+        });
+        expect(issuesFor(planFor(actionFor({ intendedProgression: { direction: 'stable', romanticMilestone: 'interest', expectedState: 'interest', mutual: false, intermediate: false } }))).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        expect(issuesFor(planFor(actionFor({ currentRomanceMilestone: 'interest', intendedProgression: { direction: 'strengthening', romanticMilestone: 'awareness', expectedState: 'awareness', mutual: false, intermediate: false } })), stateFor(20, 'interest')).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        expect(issuesFor(planFor(actionFor({ intendedProgression: { direction: 'weakening', romanticMilestone: 'interest', expectedState: 'interest', mutual: false, intermediate: false } }))).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        const intermediateOutcome = actionFor({
+            actionType: 'rupture', importance: 'major',
+            intendedProgression: { direction: 'weakening', romanticMilestone: 'awareness', expectedState: 'ruptured', mutual: false, intermediate: true },
+        });
+        expect(issuesFor(planFor(intermediateOutcome)).map(value => value.code)).toEqual(expect.arrayContaining([
+            'RELATIONSHIP_PROGRESSION_VIOLATION', 'RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION',
+        ]));
+
+        const validOutcomes = [
+            actionFor({ actionType: 'rupture', importance: 'major', intendedProgression: { direction: 'weakening', romanticMilestone: 'awareness', expectedState: 'ruptured', mutual: false, intermediate: false } }),
+            actionFor({ actionType: 'reconciliation', importance: 'major', intendedProgression: { direction: 'strengthening', romanticMilestone: 'awareness', expectedState: 'reconciled', mutual: false, intermediate: false } }),
+            actionFor({ actionType: 'reject-romance', importance: 'major', intendedProgression: { direction: 'weakening', romanticMilestone: 'awareness', expectedState: 'rejected', mutual: false, intermediate: false } }),
+        ];
+        validOutcomes.forEach(action => expect(issuesFor(planFor(action))).toEqual([]));
+        const confession = actionFor({
+            actionType: 'confession', importance: 'major', relationshipEventId: 'a-b-confession',
+            intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false },
+        });
+        expect(issuesFor(planFor(confession, ['a-b-confession']))).toEqual([]);
+        const acceptance = actionFor({
+            actionType: 'accept-romance', importance: 'major', relationshipEventId: 'a-b-commit', currentRomanceMilestone: 'courtship',
+            intendedProgression: { direction: 'strengthening', romanticMilestone: 'committed-romance', expectedState: 'committed-romance', mutual: true, intermediate: false },
+            participantAgency: actionFor().participantAgency.map(value => ({ ...value, willingness: 'yes' as const })),
+        });
+        expect(issuesFor({ ...planFor(acceptance, ['a-b-commit']), chapterNumber: 100 }, stateFor(100, 'courtship'))).toEqual([]);
+    });
+
+    it('rejects downgraded outcome actions and incoherent directions in fabricated Writer plans', () => {
+        const validOutcomes = [
+            actionFor({ actionType: 'rupture', importance: 'major', intendedProgression: { direction: 'weakening', romanticMilestone: 'awareness', expectedState: 'ruptured', mutual: false, intermediate: false } }),
+            actionFor({ actionType: 'reconciliation', importance: 'major', intendedProgression: { direction: 'strengthening', romanticMilestone: 'awareness', expectedState: 'reconciled', mutual: false, intermediate: false } }),
+            actionFor({ actionType: 'reject-romance', importance: 'major', intendedProgression: { direction: 'weakening', romanticMilestone: 'awareness', expectedState: 'rejected', mutual: false, intermediate: false } }),
+        ];
+        validOutcomes.forEach((action) => {
+            const writerPlan = sanitizeWriterChapterPlan(planFor(action), control, stateFor());
+            const directive = writerPlan.relationshipDirectives![0];
+            expect(() => buildWriterContext(control, stateFor(), { ...writerPlan, relationshipDirectives: [{ ...directive, importance: 'minor' }] })).toThrow(WriterContextError);
+            expect(() => buildWriterContext(control, stateFor(), {
+                ...writerPlan, relationshipDirectives: [{ ...directive, intendedProgression: { ...directive.intendedProgression, intermediate: true } }],
+            })).toThrow(WriterContextError);
+            expect(() => buildWriterContext(control, stateFor(), writerPlan)).not.toThrow();
+        });
+        const acceptance = actionFor({
+            actionType: 'accept-romance', importance: 'major', relationshipEventId: 'a-b-commit', currentRomanceMilestone: 'courtship',
+            intendedProgression: { direction: 'strengthening', romanticMilestone: 'committed-romance', expectedState: 'committed-romance', mutual: true, intermediate: false },
+            participantAgency: actionFor().participantAgency.map(value => ({ ...value, willingness: 'yes' as const })),
+        });
+        const acceptedPlan = sanitizeWriterChapterPlan({ ...planFor(acceptance, ['a-b-commit']), chapterNumber: 100 }, control, stateFor(100, 'courtship'));
+        expect(() => buildWriterContext(control, stateFor(100, 'courtship'), {
+            ...acceptedPlan,
+            relationshipDirectives: acceptedPlan.relationshipDirectives!.map(value => ({ ...value, importance: 'minor' as const })),
+        })).toThrow(WriterContextError);
+        expect(() => buildWriterContext(control, stateFor(100, 'courtship'), acceptedPlan)).not.toThrow();
+        const writerPlan = sanitizeWriterChapterPlan(planFor(actionFor()), control, stateFor());
+        const directive = writerPlan.relationshipDirectives![0];
+        expect(() => buildWriterContext(control, stateFor(), {
+            ...writerPlan, relationshipDirectives: [{ ...directive, intendedProgression: { ...directive.intendedProgression, direction: 'stable' } }],
+        })).toThrow(WriterContextError);
+        expect(() => buildWriterContext(control, stateFor(), {
+            ...writerPlan, relationshipDirectives: [{ ...directive, intendedProgression: { ...directive.intendedProgression, direction: 'weakening' } }],
+        })).toThrow(WriterContextError);
+        const interestAction = actionFor({
+            currentRomanceMilestone: 'interest',
+            intendedProgression: { direction: 'strengthening', romanticMilestone: 'attraction', expectedState: 'attraction', mutual: false, intermediate: false },
+        });
+        const interestPlan = sanitizeWriterChapterPlan(planFor(interestAction), control, stateFor(20, 'interest'));
+        const interestDirective = interestPlan.relationshipDirectives![0];
+        expect(() => buildWriterContext(control, stateFor(20, 'interest'), {
+            ...interestPlan,
+            expectedRelationshipDeltas: [{ relationshipId: 'a-b', participantIds: ['a', 'b'], expectedState: 'awareness' }],
+            relationshipDirectives: [{ ...interestDirective, intendedProgression: { direction: 'strengthening', romanticMilestone: 'awareness', expectedState: 'awareness', mutual: false, intermediate: false } }],
+        })).toThrow(WriterContextError);
+    });
+
+    it('replays same-chapter boundaries and fails closed on same-scene ambiguity at source and Writer boundaries', () => {
+        const boundary = { characterId: 'b', type: 'commitment' as const, constraint: 'no-romance' as const, stance: 'set' as const, instruction: 'No romance.' };
+        const release = { ...boundary, stance: 'release' as const, instruction: 'B freely releases the boundary.' };
+        const setAction = actionFor({
+            id: 'set-boundary', sceneIds: ['scene-1'], actionType: 'boundary-setting', currentRomanceMilestone: 'interest',
+            intendedProgression: { direction: 'stable', romanticMilestone: 'interest', mutual: false, intermediate: false }, boundaries: [boundary],
+        });
+        const releaseAction = actionFor({
+            id: 'release-boundary', sceneIds: ['scene-2'], actionType: 'boundary-setting', currentRomanceMilestone: 'interest',
+            intendedProgression: { direction: 'stable', romanticMilestone: 'interest', mutual: false, intermediate: false }, boundaries: [release],
+            participantAgency: actionFor().participantAgency.map(value => value.characterId === 'b' ? { ...value, willingness: 'yes' as const } : value),
+        });
+        const confession = actionFor({
+            id: 'confession', sceneIds: ['scene-3'], actionType: 'confession', importance: 'major', relationshipEventId: 'a-b-confession', currentRomanceMilestone: 'interest',
+            intendedProgression: { direction: 'stable', romanticMilestone: 'interest', mutual: false, intermediate: false },
+        });
+        const sceneTemplate = planFor(setAction).scenes[0];
+        const scenes = ['scene-1', 'scene-2', 'scene-3'].map((id, index) => ({ ...sceneTemplate, id, order: index + 1 }));
+        const withoutRelease = { ...planWithActions([setAction, { ...confession, sceneIds: ['scene-2'] }]), scenes: scenes.slice(0, 2), relationshipEventIds: ['a-b-confession'] };
+        expect(issuesFor(withoutRelease, stateFor(20, 'interest')).map(value => value.code)).toContain('RELATIONSHIP_BOUNDARY_VIOLATION');
+        const coherentSameActionRelease = {
+            ...withoutRelease,
+            relationshipActions: [setAction, {
+                ...confession, sceneIds: ['scene-2'], boundaries: [release],
+                participantAgency: confession.participantAgency.map(value => value.characterId === 'b' ? { ...value, willingness: 'yes' as const } : value),
+            }],
+        };
+        expect(issuesFor(coherentSameActionRelease, stateFor(20, 'interest'))).toEqual([]);
+
+        const released = { ...planWithActions([setAction, releaseAction, confession]), scenes, relationshipEventIds: ['a-b-confession'] };
+        expect(issuesFor(released, stateFor(20, 'interest'))).toEqual([]);
+        const ambiguous = {
+            ...released,
+            scenes: scenes.slice(0, 2),
+            relationshipActions: [setAction, releaseAction, { ...confession, sceneIds: ['scene-2'] }],
+        };
+        expect(issuesFor(ambiguous, stateFor(20, 'interest')).map(value => value.code)).toContain('RELATIONSHIP_BOUNDARY_VIOLATION');
+
+        const writerPlan = sanitizeWriterChapterPlan(released, control, stateFor(20, 'interest'));
+        const fabricated = {
+            ...writerPlan,
+            scenes: writerPlan.scenes.map(scene => scene.id === 'scene-3' ? { ...scene, purposeTags: ['plot' as const] } : scene),
+            relationshipDirectives: writerPlan.relationshipDirectives!.map(directive => directive.id === 'confession' ? { ...directive, sceneIds: ['scene-2'] } : directive),
+        };
+        expect(() => buildWriterContext(control, stateFor(20, 'interest'), fabricated)).toThrow(WriterContextError);
+    });
+
+    it('rejects duplicate source relationshipEventIds before sanitization', () => {
+        const confession = actionFor({
+            actionType: 'confession', importance: 'major', relationshipEventId: 'a-b-confession',
+            intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false },
+        });
+        const parsed = parseInternalChapterPlan(planFor(confession, ['a-b-confession', 'a-b-confession']));
+        expect(parsed.plan).toBeUndefined();
+        expect(parsed.issues.some(value => value.path === 'relationshipEventIds' && /duplicate/i.test(value.message))).toBe(true);
+    });
+
     it('requires reverse action coverage for WORK 08 deltas and controlled events', () => {
         const orphanDelta = {
             ...planFor(actionFor()),
@@ -496,7 +661,7 @@ describe('Story Engine V4 relationship engine', () => {
         expect(issuesFor(orphanDelta).map(value => value.code)).toContain('RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION');
 
         const confession = actionFor({
-            actionType: 'confession', relationshipEventId: 'a-b-confession',
+            actionType: 'confession', importance: 'major', relationshipEventId: 'a-b-confession',
             intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false },
         });
         const orphanEvent = {
@@ -537,7 +702,7 @@ describe('Story Engine V4 relationship engine', () => {
         expect(() => buildWriterContext(control, stateFor(), { ...writerPlan, relationshipDirectives: [] })).toThrow(WriterContextError);
 
         const confession = actionFor({
-            actionType: 'confession', relationshipEventId: 'a-b-confession',
+            actionType: 'confession', importance: 'major', relationshipEventId: 'a-b-confession',
             intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false },
         });
         const confessionWriterPlan = sanitizeWriterChapterPlan(planFor(confession, ['a-b-confession']), control, stateFor());
@@ -679,7 +844,7 @@ describe('Story Engine V4 relationship engine', () => {
         expect((await validateWriterChapter({ control, state: beliefState, plan: writerPlan, draft, semanticModel, relationshipView: unrelated })).report.issues.map(value => value.code)).toContain('INVALID_SOURCE_PLAN');
     });
 
-    it('threads configurable relationship history capacity through normal Planner context', () => {
+    it('threads custom relationship history policy through Planner, Sanitizer, Validator, and repair', async () => {
         const source = blueprint();
         const longControl = compileStoryControl({
             ...source,
@@ -690,9 +855,87 @@ describe('Story Engine V4 relationship engine', () => {
             'awareness', 'interest', 'attraction', 'trust-building', 'mutual-tension', 'acknowledged-interest', 'courtship', 'committed-romance',
         ].map((state, index) => ({ id: `long-${index}`, state, chapterNumber: index + 1 })) });
         expect(() => buildPlannerContext(longControl, longState, 20)).toThrow(RelationshipHistoryCapacityError);
-        const context = buildPlannerContext(longControl, longState, 20, undefined, undefined, {
+        const relationshipContextPolicy = {
             maxRelationships: 64, maxRecentHistoryPerRelationship: 8, maxParticipantBeliefs: 64,
-        });
+        };
+        const context = buildPlannerContext(longControl, longState, 20, undefined, undefined, relationshipContextPolicy);
         expect(context.relationshipContext.relationships.find(value => value.id === 'a-b')?.recentHistory).toHaveLength(8);
+        const action = actionFor({
+            currentRomanceMilestone: 'committed-romance',
+            intendedProgression: { direction: 'stable', romanticMilestone: 'committed-romance', mutual: true, intermediate: false },
+            participantAgency: actionFor().participantAgency.map(value => ({ ...value, willingness: 'yes' as const })),
+        });
+        const internal = planFor(action);
+        expect(validateInternalChapterPlan(internal, context, buildRelationshipGateValidationView(longControl, 20))).toEqual([]);
+        expect(() => sanitizeWriterChapterPlan(internal, longControl, longState)).toThrow(RelationshipHistoryCapacityError);
+        const writerPlan = sanitizeWriterChapterPlan(internal, longControl, longState, relationshipContextPolicy);
+        expect(() => buildWriterContext(longControl, longState, writerPlan)).not.toThrow();
+        const relationshipView = buildValidatorRelationshipView(longControl, internal, context);
+        const validatorContextSelectionPolicy = {
+            ...DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
+            relationshipContextPolicy,
+        };
+        const draft = { kind: 'writer-chapter-draft', chapterNumber: 20, prose: 'They preserve the commitment through a deliberate choice.' };
+        const passingSemantic = { validate: vi.fn(async () => ({ kind: 'semantic-validation-result' as const, chapterNumber: 20, issues: [] })) };
+        const accepted = await validateWriterChapter({
+            control: longControl, state: longState, plan: writerPlan, draft,
+            semanticModel: passingSemantic, relationshipView, validatorContextSelectionPolicy,
+        });
+        expect(accepted.report.blockingIssueCount).toBe(0);
+        const defaultRejected = await validateWriterChapter({
+            control: longControl, state: longState, plan: writerPlan, draft,
+            semanticModel: passingSemantic, relationshipView,
+        });
+        expect(defaultRejected.report.issues.map(value => value.code)).toContain('INVALID_SOURCE_PLAN');
+
+        let validationPass = 0;
+        const repaired = await validateAndRepairWriterChapter({
+            control: longControl, state: longState, plan: writerPlan, draft,
+            semanticModel: { async validate() {
+                validationPass += 1;
+                return {
+                    kind: 'semantic-validation-result' as const, chapterNumber: 20,
+                    issues: validationPass === 1 ? [{ code: 'PLAN_DRIFT' as const, severity: 'error' as const, scope: 'chapter' as const }] : [],
+                };
+            } },
+            repairModel: { async repair() { return { ...draft, prose: 'They deliberately preserve the supplied relationship choice.' }; } },
+            relationshipView, validatorContextSelectionPolicy, maxRepairAttempts: 1,
+        });
+        expect(repaired.status).toBe('approved-not-canon');
+        expect(validationPass).toBe(2);
+    });
+
+    it('preserves relationships selected only by custom maxRelationships through Sanitizer and Validator reconstruction', async () => {
+        const source = blueprint();
+        const relationshipDefinitions = [
+            ...Array.from({ length: 64 }, (_, index) => ({ ...source.relationshipDefinitions![0], id: `pair-${String(index).padStart(2, '0')}` })),
+            { ...source.relationshipDefinitions![0], id: 'zz-target' },
+        ];
+        const manyControl = compileStoryControl({
+            ...source, relationshipDefinitions, relationshipEvents: [],
+            gates: { ...source.gates, relationships: [] },
+        });
+        const baseState = stateFor();
+        const manyState = { ...baseState, relationships: [], ledgers: { ...baseState.ledgers, relationships: [] } };
+        const selectedOnlyByCustomPolicy = actionFor({
+            relationshipId: 'zz-target', actionType: 'support', evidenceRefs: [],
+            intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', mutual: false, intermediate: false },
+        });
+        const internal = planFor(selectedOnlyByCustomPolicy);
+        const relationshipContextPolicy = { maxRelationships: 65, maxRecentHistoryPerRelationship: 6, maxParticipantBeliefs: 64 };
+        const context = buildPlannerContext(manyControl, manyState, 20, undefined, undefined, relationshipContextPolicy);
+        expect(context.relationshipContext.relationships.some(value => value.id === 'zz-target')).toBe(true);
+        expect(() => sanitizeWriterChapterPlan(internal, manyControl, manyState)).toThrow();
+        const writerPlan = sanitizeWriterChapterPlan(internal, manyControl, manyState, relationshipContextPolicy);
+        const relationshipView = buildValidatorRelationshipView(manyControl, internal, context);
+        const semanticModel = { validate: vi.fn(async () => ({ kind: 'semantic-validation-result' as const, chapterNumber: 20, issues: [] })) };
+        const result = await validateWriterChapter({
+            control: manyControl, state: manyState, plan: writerPlan,
+            draft: { kind: 'writer-chapter-draft', chapterNumber: 20, prose: 'They offer support without changing the relationship state.' },
+            semanticModel, relationshipView,
+            validatorContextSelectionPolicy: { ...DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY, relationshipContextPolicy },
+        });
+        expect(result.report.blockingIssueCount).toBe(0);
+        expect(semanticModel.validate).toHaveBeenCalledOnce();
     });
 });

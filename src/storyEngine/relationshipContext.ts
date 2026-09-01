@@ -19,7 +19,9 @@ export const DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY: RelationshipContextS
     maxParticipantBeliefs: 64,
 };
 
-const normalizePolicy = (policy: RelationshipContextSelectionPolicy): RelationshipContextSelectionPolicy => {
+export const normalizeRelationshipContextSelectionPolicy = (
+    policy: RelationshipContextSelectionPolicy,
+): RelationshipContextSelectionPolicy => {
     if (!Number.isSafeInteger(policy.maxRelationships) || policy.maxRelationships < 0
         || !Number.isSafeInteger(policy.maxRecentHistoryPerRelationship) || policy.maxRecentHistoryPerRelationship < 0
         || !Number.isSafeInteger(policy.maxParticipantBeliefs) || policy.maxParticipantBeliefs < 0) {
@@ -42,7 +44,7 @@ export const buildPlannerRelationshipContext = (
     targetChapter: number,
     suppliedPolicy: RelationshipContextSelectionPolicy = DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
 ): PlannerRelationshipContext => {
-    const policy = normalizePolicy(suppliedPolicy);
+    const policy = normalizeRelationshipContextSelectionPolicy(suppliedPolicy);
     const available = new Set(control.characterOrder.filter(id => isCharacterDirectAppearanceAllowed(control, id, targetChapter)));
     const canonicalById = new Map(state.relationships
         .filter(value => value.establishedChapter <= targetChapter)

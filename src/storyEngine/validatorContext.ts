@@ -18,6 +18,11 @@ import {
     writerRelationshipDirectiveMatchesValidatorAction,
 } from './relationshipValidatorContext';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
+import {
+    DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+    normalizeRelationshipContextSelectionPolicy,
+} from './relationshipContext';
+import type { RelationshipContextSelectionPolicy } from './relationshipContext';
 
 export interface ValidatorContextSelectionPolicy {
     readonly maxLockedCharacters: number;
@@ -28,6 +33,7 @@ export interface ValidatorContextSelectionPolicy {
     readonly maxPlotItems?: number;
     readonly maxStrategicItems?: number;
     readonly maxRelationshipItems?: number;
+    readonly relationshipContextPolicy?: RelationshipContextSelectionPolicy;
 }
 
 export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelectionPolicy = {
@@ -39,6 +45,7 @@ export const DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY: ValidatorContextSelecti
     maxPlotItems: 256,
     maxStrategicItems: 256,
     maxRelationshipItems: 256,
+    relationshipContextPolicy: DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
 };
 
 export class ValidatorContextCapacityError extends Error {
@@ -89,11 +96,20 @@ export interface ValidatorContext {
 const compareIds = (left: { readonly id: string }, right: { readonly id: string }): number => left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 
 const normalizeSelectionPolicy = (policy: ValidatorContextSelectionPolicy): ValidatorContextSelectionPolicy => {
+    let relationshipContextPolicy: RelationshipContextSelectionPolicy;
+    try {
+        relationshipContextPolicy = normalizeRelationshipContextSelectionPolicy(
+            policy.relationshipContextPolicy ?? DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+        );
+    } catch {
+        throw new ValidatorContextCapacityError('validator relationship context selection policy is invalid');
+    }
     const normalized = {
         ...policy,
         maxPlotItems: policy.maxPlotItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxPlotItems,
         maxStrategicItems: policy.maxStrategicItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxStrategicItems,
         maxRelationshipItems: policy.maxRelationshipItems ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY.maxRelationshipItems,
+        relationshipContextPolicy,
     };
     const keys: readonly (keyof ValidatorContextSelectionPolicy)[] = [
         'maxLockedCharacters', 'maxLockedReveals', 'maxLockedRelationshipEvents',
@@ -178,7 +194,10 @@ export const buildValidatorContext = (
     let plannerContext: ReturnType<typeof buildPlannerContext> | undefined;
     try {
         if (suppliedStrategicView !== undefined) {
-            plannerContext = buildPlannerContext(control, state, chapter);
+            plannerContext = buildPlannerContext(
+                control, state, chapter, undefined, undefined,
+                policy.relationshipContextPolicy ?? DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+            );
             strategicView = parseValidatorStrategicView(
                 suppliedStrategicView, chapter, policy.maxStrategicItems ?? 256, plannerContext,
             );
@@ -190,7 +209,10 @@ export const buildValidatorContext = (
     }
     try {
         if (suppliedRelationshipView !== undefined) {
-            plannerContext ??= buildPlannerContext(control, state, chapter);
+            plannerContext ??= buildPlannerContext(
+                control, state, chapter, undefined, undefined,
+                policy.relationshipContextPolicy ?? DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+            );
             relationshipView = parseValidatorRelationshipView(
                 suppliedRelationshipView, chapter, policy.maxRelationshipItems ?? 256, plannerContext,
                 new Set((writerContext.chapterPlan.strategicDirectives ?? []).map(value => value.id)),

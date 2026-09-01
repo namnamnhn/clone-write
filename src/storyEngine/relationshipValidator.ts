@@ -3,8 +3,8 @@ import { ROMANCE_MILESTONES } from './relationshipTypes';
 import type { RelationshipActionPlan, RelationshipEvidenceRef, RelationshipValidationResult } from './relationshipTypes';
 import type { RelationshipGateValidationView } from './relationshipGateValidation';
 import {
-    orphanIntermediateActionIds,
     relationshipContractContradictions,
+    relationshipSequenceProblems,
     requiresFinalCanonicalRelationshipConsequence,
     requiresPowerImbalanceAddressing,
     romanceMilestoneChanged,
@@ -211,23 +211,23 @@ export const validateRelationshipActions = (
         }
     });
 
-    const actionById = new Map(actions.map((action, index) => [action.id, { action, index }]));
-    actions.forEach((action, index) => {
-        if (action.dependsOnActionId !== undefined) {
-            const prior = actionById.get(action.dependsOnActionId);
-            if (!prior || prior.index >= index || prior.action.relationshipId !== action.relationshipId) issues.push(issue('RELATIONSHIP_PROGRESSION_VIOLATION', `relationshipActions.${index}.dependsOnActionId`, 'causal predecessor must be an earlier action for the same relationship'));
-        }
-    });
-    const orphanIds = new Set(orphanIntermediateActionIds(actions));
-    actions.forEach((action, index) => {
-        if (orphanIds.has(action.id)) issues.push(issue('RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION', `relationshipActions.${index}.intendedProgression.intermediate`, 'meaningful intermediate progression requires a causally linked later final action'));
+    relationshipSequenceProblems(actions, plan.scenes).forEach((problem) => {
+        const index = actions.findIndex(action => action.id === problem.actionId);
+        issues.push(issue(
+            problem.kind === 'boundary' ? 'RELATIONSHIP_BOUNDARY_VIOLATION'
+                : problem.kind === 'intermediate' ? 'RELATIONSHIP_DELTA_RECONCILIATION_VIOLATION'
+                    : 'RELATIONSHIP_PROGRESSION_VIOLATION',
+            `relationshipActions.${index}${problem.kind === 'intermediate' ? '.intendedProgression.intermediate' : problem.kind === 'causality' ? '.dependsOnActionId' : '.boundaries'}`,
+            problem.message,
+        ));
     });
     const groups = new Map<string, RelationshipActionPlan[]>();
     actions.forEach(action => groups.set(action.relationshipId, [...(groups.get(action.relationshipId) ?? []), action]));
     groups.forEach((values) => {
         const finals = values.filter(value => !value.intendedProgression.intermediate && value.intendedProgression.expectedState !== undefined);
         if (new Set(finals.map(value => value.intendedProgression.expectedState)).size > 1) issues.push(issue('RELATIONSHIP_PROGRESSION_VIOLATION', 'relationshipActions', 'same-chapter actions declare contradictory final relationship states'));
-        const signatures = values.map(value => `${value.actionType}\u0000${value.intendedProgression.direction}\u0000${value.intendedProgression.romanticMilestone}`);
+        const signatures = values.map(value => `${value.actionType}\u0000${value.intendedProgression.direction}\u0000${value.intendedProgression.romanticMilestone}\u0000${value.boundaries
+            .map(boundary => `${boundary.characterId}:${boundary.type}:${boundary.constraint}:${boundary.stance}`).join('|')}`);
         if (new Set(signatures).size !== signatures.length) issues.push(issue('RELATIONSHIP_REPETITION_VIOLATION', 'relationshipActions', 'same relationship repeats the same progression contract in one chapter'));
     });
     plan.scenes.forEach((scene, index) => {

@@ -5,7 +5,11 @@ import { InternalChapterPlan, PlanValidationIssue, WriterChapterPlan } from './p
 import { FullStoryControl, StoryState } from './types';
 import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
 import { buildWriterStrategicDirectives } from './strategicContext';
-import { buildWriterRelationshipDirectives } from './relationshipContext';
+import {
+    buildWriterRelationshipDirectives,
+    DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+} from './relationshipContext';
+import type { RelationshipContextSelectionPolicy } from './relationshipContext';
 import { buildRelationshipGateValidationView } from './relationshipGateValidation';
 
 const gateIssue = (code: string, path: string, message: string): PlanValidationIssue => ({ code, path, message, severity: 'error' });
@@ -18,6 +22,7 @@ export const sanitizeWriterChapterPlan = (
     internalPlan: InternalChapterPlan,
     control: FullStoryControl,
     state: StoryState,
+    relationshipPolicy: RelationshipContextSelectionPolicy = DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
 ): WriterChapterPlan => {
     assertWriterFacingControlSecretSafe(control);
     const parsed = parseInternalChapterPlan(internalPlan);
@@ -26,7 +31,7 @@ export const sanitizeWriterChapterPlan = (
     if (plan.chapterNumber > control.engine.plannedChapterCount) {
         throw new ChapterPlanValidationError([gateIssue('CHAPTER_OUT_OF_RANGE', 'chapterNumber', 'chapter exceeds the planned story')]);
     }
-    const context = buildPlannerContext(control, state, plan.chapterNumber);
+    const context = buildPlannerContext(control, state, plan.chapterNumber, undefined, undefined, relationshipPolicy);
     const issues: PlanValidationIssue[] = [...parsed.issues, ...validateInternalChapterPlan(plan, context, buildRelationshipGateValidationView(control, plan.chapterNumber))];
     const arc = getArcForChapter(control, plan.chapterNumber);
     const beat = getBeatForChapter(control, plan.chapterNumber);

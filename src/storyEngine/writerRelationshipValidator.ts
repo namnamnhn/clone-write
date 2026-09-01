@@ -4,8 +4,8 @@ import type { WriterRelationshipDirective } from './relationshipTypes';
 import type { WriterSafeContext } from './types';
 import type { RelationshipGateValidationView } from './relationshipGateValidation';
 import {
-    orphanIntermediateActionIds,
     relationshipContractContradictions,
+    relationshipSequenceProblems,
     requiresFinalCanonicalRelationshipConsequence,
     requiresFullParticipantChoices,
     requiresPowerImbalanceAddressing,
@@ -36,7 +36,7 @@ export const validateWriterRelationshipDirectives = (
     const definitions = new Map(safe.relationshipDefinitions.map(value => [value.id, value]));
     const allowedEvents = new Map(safe.relationshipEvents.map(value => [value.id, value]));
     const sceneById = new Map(input.scenes.map(value => [value.id, value]));
-    const actionById = new Map(input.directives.map((value, index) => [value.id, { value, index }]));
+    const actionById = new Map(input.directives.map(value => [value.id, value]));
     if (actionById.size !== input.directives.length) fail('relationship directives must not contain duplicate action IDs');
     if ((input.directives.length > 0 || input.relationshipEventIds.length > 0) && (!gateView || gateView.targetChapter !== safe.chapter)) fail('trusted relationship gate validation data is required');
     const deltaRelationshipIds = input.expectedRelationshipDeltas.map(value => value.relationshipId);
@@ -126,13 +126,10 @@ export const validateWriterRelationshipDirectives = (
             && (directive.intendedProgression.expectedState === undefined || !delta
                 || delta.expectedState !== directive.intendedProgression.expectedState
                 || !sameIds(delta.participantIds, directive.participantIds))) fail(`relationshipDirectives.${index} requires a matching final expectedRelationshipDelta`);
-        if (directive.dependsOnActionId !== undefined) {
-            const prior = actionById.get(directive.dependsOnActionId);
-            if (!prior || prior.index >= index || prior.value.relationshipId !== directive.relationshipId) fail(`relationshipDirectives.${index} has an invalid causal predecessor`);
-        }
     });
     const contractActions = input.directives.map(directive => ({ ...directive, boundaries: directive.visibleBoundaries }));
-    if (orphanIntermediateActionIds(contractActions).length > 0) fail('meaningful intermediate relationship directive requires a causally linked later final directive');
+    const sequenceProblems = relationshipSequenceProblems(contractActions, input.scenes);
+    if (sequenceProblems.length > 0) fail(`relationship directive sequence is invalid: ${sequenceProblems[0].message}`);
     input.scenes.forEach((scene, index) => {
         if (scene.purposeTags.includes('relationship') && !input.directives.some(value => value.sceneIds.includes(scene.id))) fail(`scenes.${index} lacks a matching relationship directive`);
     });
