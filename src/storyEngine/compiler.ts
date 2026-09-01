@@ -13,6 +13,7 @@ import {
     StoryEventDefinition,
     WriterCharacterProfile,
 } from './types';
+import type { RelationshipDefinition } from './relationshipTypes';
 import {
     deepFreezeStoryControl,
     isValidChapter,
@@ -70,6 +71,7 @@ export interface StoryBlueprint {
     readonly arcs?: readonly StoryArc[];
     readonly beats?: readonly StoryBeat[];
     readonly reveals?: readonly RevealDefinition[];
+    readonly relationshipDefinitions?: readonly RelationshipDefinition[];
     readonly relationshipEvents?: readonly RelationshipEventDefinition[];
     readonly storyEvents?: readonly StoryEventDefinition[];
     readonly gates?: {
@@ -240,6 +242,20 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
         writerText: reveal.writerText,
         ...(reveal.authorNotes === undefined ? {} : { authorNotes: reveal.authorNotes }),
     })).sort((left, right) => left.id.localeCompare(right.id));
+    const relationshipDefinitions = (blueprint.relationshipDefinitions ?? []).map(definition => ({
+        id: definition.id,
+        participantIds: [...definition.participantIds],
+        categories: [...definition.categories],
+        initialRomanceMilestone: definition.initialRomanceMilestone,
+        dynamicProfile: {
+            coreDynamicTags: [...definition.dynamicProfile.coreDynamicTags],
+            dominantConflictSources: [...definition.dynamicProfile.dominantConflictSources],
+            trustBasis: [...definition.dynamicProfile.trustBasis],
+            respectBasis: [...definition.dynamicProfile.respectBasis],
+            prohibitedShortcuts: [...definition.dynamicProfile.prohibitedShortcuts],
+        },
+        progressionPolicy: { ...definition.progressionPolicy },
+    })).sort((left, right) => left.id.localeCompare(right.id));
     const relationshipEvents = (blueprint.relationshipEvents ?? []).map(event => ({
         id: event.id,
         relationshipId: event.relationshipId,
@@ -247,6 +263,7 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
         participantIds: [...event.participantIds],
         ...(event.writerText === undefined ? {} : { writerText: event.writerText }),
         ...(event.authorNotes === undefined ? {} : { authorNotes: event.authorNotes }),
+        ...(event.authorizedRomanceMilestone === undefined ? {} : { authorizedRomanceMilestone: event.authorizedRomanceMilestone }),
     })).sort((left, right) => left.id.localeCompare(right.id));
     const storyEvents = (blueprint.storyEvents ?? []).map(event => ({
         id: event.id,
@@ -287,8 +304,8 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
         ...(rule.authorNotes === undefined ? {} : { authorNotes: rule.authorNotes }),
     })).sort((left, right) => left.availableFromChapter - right.availableFromChapter || left.id.localeCompare(right.id));
 
-    [arcs, beats, reveals, relationshipEvents, storyEvents, forbiddenEvents, forbiddenRelationshipEvents, forbiddenReveals, authorOnlySecrets, canonRules]
-        .forEach((values, index) => assertUniqueIds(values, ['arcs', 'beats', 'reveals', 'relationshipEvents', 'storyEvents', 'forbiddenEvents', 'forbiddenRelationshipEvents', 'forbiddenReveals', 'authorOnlySecrets', 'canonRules'][index]));
+    [arcs, beats, reveals, relationshipDefinitions, relationshipEvents, storyEvents, forbiddenEvents, forbiddenRelationshipEvents, forbiddenReveals, authorOnlySecrets, canonRules]
+        .forEach((values, index) => assertUniqueIds(values, ['arcs', 'beats', 'reveals', 'relationshipDefinitions', 'relationshipEvents', 'storyEvents', 'forbiddenEvents', 'forbiddenRelationshipEvents', 'forbiddenReveals', 'authorOnlySecrets', 'canonRules'][index]));
 
     const control: FullStoryControl = {
         kind: 'full-story-control',
@@ -306,6 +323,7 @@ export const compileStoryControl = (blueprint: StoryBlueprint): FullStoryControl
         arcs,
         beats,
         reveals,
+        relationshipDefinitions,
         relationshipEvents,
         storyEvents,
         gates: {

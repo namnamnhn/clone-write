@@ -25,6 +25,11 @@ const writerFacingControlText = (control: FullStoryControl): readonly { readonly
     ]),
     ...control.beats.flatMap((beat, index) => beat.writerBrief === undefined ? [] : [{ path: `beats.${index}.writerBrief`, value: beat.writerBrief }]),
     ...control.reveals.map((reveal, index) => ({ path: `reveals.${index}.writerText`, value: reveal.writerText })),
+    ...control.relationshipDefinitions.flatMap((definition, index) => [
+        ...definition.dynamicProfile.dominantConflictSources.map((value, valueIndex) => ({ path: `relationshipDefinitions.${index}.dynamicProfile.dominantConflictSources.${valueIndex}`, value })),
+        ...definition.dynamicProfile.trustBasis.map((value, valueIndex) => ({ path: `relationshipDefinitions.${index}.dynamicProfile.trustBasis.${valueIndex}`, value })),
+        ...definition.dynamicProfile.respectBasis.map((value, valueIndex) => ({ path: `relationshipDefinitions.${index}.dynamicProfile.respectBasis.${valueIndex}`, value })),
+    ]),
     ...control.relationshipEvents.flatMap((event, index) => [
         { path: `relationshipEvents.${index}.eventType`, value: event.eventType },
         ...(event.writerText === undefined ? [] : [{ path: `relationshipEvents.${index}.writerText`, value: event.writerText }]),

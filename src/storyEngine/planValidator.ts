@@ -14,6 +14,9 @@ import {
 } from './plannerTypes';
 import { parseStrategicActions } from './strategicRuntime';
 import { validateStrategicActions } from './strategicValidator';
+import { parseRelationshipActions } from './relationshipRuntime';
+import { validateRelationshipActions } from './relationshipValidator';
+import type { RelationshipGateValidationView } from './relationshipGateValidation';
 
 export class ChapterPlanValidationError extends Error {
     constructor(public readonly issues: readonly PlanValidationIssue[]) {
@@ -137,6 +140,9 @@ const parseRelationshipDeltas = (value: unknown, path: string, issues: PlanValid
         const expectedState = requiredText(entry, 'expectedState', entryPath, issues);
         if (relationshipId && participantIds && expectedState) result.push({ relationshipId, participantIds, expectedState });
     });
+    if (new Set(result.map(entry => entry.relationshipId)).size !== result.length) {
+        issue(issues, 'INVALID_RELATIONSHIP_DELTA', path, 'must contain at most one delta per relationship');
+    }
     return result;
 };
 
@@ -176,6 +182,9 @@ export const parseInternalChapterPlan = (value: unknown): InternalPlanParseResul
     const allowedRevealIds = requiredIds(value, 'allowedRevealIds', '$', issues);
     const plannedRevealIds = requiredIds(value, 'plannedRevealIds', '$', issues);
     const relationshipEventIds = requiredIds(value, 'relationshipEventIds', '$', issues);
+    if (relationshipEventIds && new Set(relationshipEventIds).size !== relationshipEventIds.length) {
+        issue(issues, 'INVALID_SHAPE', 'relationshipEventIds', 'must not contain duplicate relationship event IDs');
+    }
     const storyEventIds = requiredIds(value, 'storyEventIds', '$', issues);
     const cluesPlantedIds = requiredIds(value, 'cluesPlantedIds', '$', issues);
     const cluesPaidOffIds = requiredIds(value, 'cluesPaidOffIds', '$', issues);
@@ -183,15 +192,16 @@ export const parseInternalChapterPlan = (value: unknown): InternalPlanParseResul
     const expectedRelationshipDeltas = parseRelationshipDeltas(value.expectedRelationshipDeltas, 'expectedRelationshipDeltas', issues);
     const expectedContinuityConsequences = parseContinuityConsequences(value.expectedContinuityConsequences, 'expectedContinuityConsequences', issues);
     const strategicActions = parseStrategicActions(value.strategicActions, 'strategicActions', issues);
+    const relationshipActions = parseRelationshipActions(value.relationshipActions ?? [], 'relationshipActions', issues);
     const endStateIntent = requiredText(value, 'endStateIntent', '$', issues);
     if (issues.length > 0 || kind !== 'internal-chapter-plan' || !Number.isSafeInteger(chapterNumber) || (chapterNumber as number) < 1
         || !arcId || !primaryGoal || !povCharacterId || !participantIds || !activeConstraintIds || !allowedRevealIds || !plannedRevealIds
         || !relationshipEventIds || !storyEventIds || !cluesPlantedIds || !cluesPaidOffIds || !expectedResourceDeltas || !expectedRelationshipDeltas
-        || !expectedContinuityConsequences || !strategicActions || !endStateIntent) return { issues };
+        || !expectedContinuityConsequences || !strategicActions || !relationshipActions || !endStateIntent) return { issues };
     return { plan: {
         kind: 'internal-chapter-plan', chapterNumber: chapterNumber as number, arcId, ...(beatId === undefined ? {} : { beatId }), primaryGoal, povCharacterId,
         participantIds, scenes, activeConstraintIds, allowedRevealIds, plannedRevealIds, relationshipEventIds, storyEventIds,
-        cluesPlantedIds, cluesPaidOffIds, expectedResourceDeltas, expectedRelationshipDeltas, expectedContinuityConsequences, strategicActions, endStateIntent,
+        cluesPlantedIds, cluesPaidOffIds, expectedResourceDeltas, expectedRelationshipDeltas, expectedContinuityConsequences, strategicActions, relationshipActions, endStateIntent,
     }, issues };
 };
 
@@ -210,6 +220,7 @@ const hasCompleteIntelligentConflict = (conflict: IntelligentConflictPlan | unde
 export const validateInternalChapterPlan = (
     plan: InternalChapterPlan,
     context: PlannerContext,
+    relationshipGateView?: RelationshipGateValidationView,
 ): readonly PlanValidationIssue[] => {
     const issues: PlanValidationIssue[] = [];
     const add = (code: string, path: string, message: string) => issue(issues, code, path, message);
@@ -237,6 +248,9 @@ export const validateInternalChapterPlan = (
     if (!hasOnlyKnown(plan.allowedRevealIds, allowedReveals)) add('REVEAL_LOCKED', 'allowedRevealIds', 'contains a locked or unknown reveal');
     if (!hasOnlyKnown(plan.plannedRevealIds, allowedReveals) || !plan.plannedRevealIds.every(id => plan.allowedRevealIds.includes(id))) add('REVEAL_LOCKED', 'plannedRevealIds', 'must be both allowed by context and declared allowed by the plan');
     if (!hasOnlyKnown(plan.storyEventIds, allowedEvents)) add('STORY_EVENT_LOCKED', 'storyEventIds', 'contains a locked or unknown story event');
+    if (new Set(plan.relationshipEventIds).size !== plan.relationshipEventIds.length) {
+        add('DUPLICATE_RELATIONSHIP_EVENT', 'relationshipEventIds', 'must not contain duplicate relationship event IDs');
+    }
     plan.relationshipEventIds.forEach((eventId, index) => {
         const requiredParticipants = allowedRelationshipEvents.get(eventId);
         if (!requiredParticipants) add('RELATIONSHIP_EVENT_LOCKED', `relationshipEventIds.${index}`, 'event is locked or unknown');
@@ -270,5 +284,6 @@ export const validateInternalChapterPlan = (
         if (delta.participantIds.length < 2 || !hasOnlyKnown(delta.participantIds, availableCharacters)) add('RELATIONSHIP_PARTICIPANTS_INVALID', `expectedRelationshipDeltas.${index}.participantIds`, 'relationship delta needs at least two available participants');
     });
     issues.push(...validateStrategicActions(plan, context));
+    issues.push(...validateRelationshipActions(plan, context, relationshipGateView));
     return issues;
 };

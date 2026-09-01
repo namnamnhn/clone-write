@@ -24,6 +24,11 @@ import {
 } from './secretTextSafety';
 import { buildPlannerPlotGuidance } from './plotContext';
 import {
+    buildPlannerRelationshipContext,
+    DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
+} from './relationshipContext';
+import type { RelationshipContextSelectionPolicy } from './relationshipContext';
+import {
     DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
     LongTermMemory,
     NarrativeMemoryInput,
@@ -167,6 +172,7 @@ export const buildPlannerContext = (
     targetChapter: number = state.currentChapter,
     memoryInput?: NarrativeMemoryInput,
     memoryPolicy: NarrativeMemorySelectionPolicy = DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
+    relationshipPolicy: RelationshipContextSelectionPolicy = DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
 ): PlannerContext => {
     assertWriterFacingControlSecretSafe(control);
     if (!isValidChapter(targetChapter) || targetChapter > control.engine.plannedChapterCount) {
@@ -238,7 +244,7 @@ export const buildPlannerContext = (
         lockedRelationshipEventIds: makeGateStatus(control.relationshipEvents.map(event => event.id), id => isRelationshipEventAllowed(control, id, targetChapter)).filter(status => !status.allowed).map(status => status.id),
         allowedRelationshipEvents: control.relationshipEvents
             .filter(event => isRelationshipEventAllowed(control, event.id, targetChapter))
-            .map(event => ({ id: event.id, participantIds: [...event.participantIds] })),
+            .map(event => ({ id: event.id, relationshipId: event.relationshipId, participantIds: [...event.participantIds] })),
         authorOnlySecretReferences: control.authorOnlySecrets.map(secret => ({ id: secret.id, ...(secret.revealId === undefined ? {} : { revealId: secret.revealId }) })),
         activeHardConstraints: [
             ...control.canonRules
@@ -247,6 +253,7 @@ export const buildPlannerContext = (
         ],
         narrativeMemory: selectNarrativeMemory(memoryInput, targetChapter, memoryPolicy),
         plotGuidance: buildPlannerPlotGuidance(control, state, targetChapter),
+        relationshipContext: buildPlannerRelationshipContext(control, state, targetChapter, relationshipPolicy),
     };
     assertModelBoundaryStringsSecretSafe(control, context, 'plannerContext');
     return context;

@@ -16,6 +16,7 @@ import {
 } from './gates';
 import { isValidChapter } from './storyControl';
 import { assertWriterFacingControlSecretSafe } from './secretTextSafety';
+import { countConsecutiveRomanticProgressions, deriveCurrentRomanceMilestone } from './relationshipMilestone';
 
 const pickRecord = <T>(source: Readonly<Record<string, T>>, allowedIds: ReadonlySet<string>): Record<string, T> => {
     const output: Record<string, T> = {};
@@ -98,6 +99,22 @@ export const buildWriterSafeContext = (
         reveals: control.reveals
             .filter(reveal => isRevealAllowed(control, reveal.id, chapter))
             .map(reveal => ({ id: reveal.id, text: reveal.writerText })),
+        relationshipDefinitions: control.relationshipDefinitions
+            .filter(definition => definition.participantIds.every(id => allowedCharacterIds.has(id)))
+            .map(definition => ({
+                id: definition.id,
+                participantIds: [...definition.participantIds],
+                categories: [...definition.categories],
+                initialRomanceMilestone: definition.initialRomanceMilestone,
+                dynamicProfile: {
+                    coreDynamicTags: [...definition.dynamicProfile.coreDynamicTags],
+                    dominantConflictSources: [...definition.dynamicProfile.dominantConflictSources],
+                    trustBasis: [...definition.dynamicProfile.trustBasis],
+                    respectBasis: [...definition.dynamicProfile.respectBasis],
+                    prohibitedShortcuts: [...definition.dynamicProfile.prohibitedShortcuts],
+                },
+                progressionPolicy: { ...definition.progressionPolicy },
+            })),
         relationshipEvents: control.relationshipEvents
             .filter(event => isRelationshipEventAllowed(control, event.id, chapter))
             .map(event => ({
@@ -106,6 +123,7 @@ export const buildWriterSafeContext = (
                 eventType: event.eventType,
                 participantIds: event.participantIds,
                 ...(event.writerText === undefined ? {} : { writerText: event.writerText }),
+                ...(event.authorizedRomanceMilestone === undefined ? {} : { authorizedRomanceMilestone: event.authorizedRomanceMilestone }),
             })),
         state: {
             currentChapter: chapter,
@@ -118,6 +136,17 @@ export const buildWriterSafeContext = (
             relationships: state.relationships.filter(relationship =>
                 relationship.establishedChapter <= chapter &&
                 relationship.participantIds.every(id => allowedCharacterIds.has(id))),
+            relationshipMilestones: control.relationshipDefinitions
+                .filter(definition => definition.participantIds.every(id => allowedCharacterIds.has(id)))
+                .map(definition => ({
+                    relationshipId: definition.id,
+                    currentRomanceMilestone: deriveCurrentRomanceMilestone(definition, state, chapter),
+                    slowBurnHistoryComplete: true,
+                    consecutiveProgressionCount: countConsecutiveRomanticProgressions(
+                        state.ledgers.relationships.filter(entry => entry.relationshipId === definition.id && entry.chapterNumber <= chapter),
+                        chapter,
+                    ),
+                })),
             unresolvedClues: safeThreads(state.unresolvedClues, chapter),
             unresolvedPromises: safeThreads(state.unresolvedPromises, chapter),
             resources: pickRecord(state.resources, allowedCharacterIds),

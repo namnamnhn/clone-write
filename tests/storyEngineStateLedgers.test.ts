@@ -29,7 +29,7 @@ const control: FullStoryControl = {
         future: { id: 'future', name: 'Future', initialStatus: 'future-locked', availableFromChapter: 50, writerProfile: {} },
     },
     characterOrder: ['a', 'b', 'c', 'future'], arcs: [{ id: 'arc', title: 'Arc', startChapter: 1, endChapter: 600 }], beats: [],
-    reveals: [], relationshipEvents: [], storyEvents: [], gates: { characters: [], pov: [], reveals: [], relationships: [], events: [] },
+    reveals: [], relationshipDefinitions: [], relationshipEvents: [], storyEvents: [], gates: { characters: [], pov: [], reveals: [], relationships: [], events: [] },
     forbiddenEvents: [], forbiddenRelationshipEvents: [], forbiddenReveals: [], authorOnlySecrets: [], canonRules: [],
 };
 

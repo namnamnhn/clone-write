@@ -5,6 +5,12 @@ import {
     StoryBeat,
 } from './types';
 import { getWriterFacingControlSecretSafetyIssues } from './secretTextSafety';
+import {
+    RELATIONSHIP_ACTION_TYPES,
+    RELATIONSHIP_CATEGORIES,
+    RELATIONSHIP_DYNAMIC_TAGS,
+    ROMANCE_MILESTONES,
+} from './relationshipTypes';
 
 export interface StoryControlValidationIssue {
     readonly path: string;
@@ -120,6 +126,37 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         revealIds.add(reveal.id);
     });
     const relationshipEventIds = new Set(control.relationshipEvents.map(event => event.id));
+    const relationshipDefinitionIds = new Set<string>();
+    control.relationshipDefinitions.forEach((definition, index) => {
+        const path = `relationshipDefinitions.${index}`;
+        if (!definition.id.trim() || relationshipDefinitionIds.has(definition.id)) issue(`${path}.id`, 'must be non-empty and unique');
+        relationshipDefinitionIds.add(definition.id);
+        if (definition.participantIds.length < 2 || new Set(definition.participantIds).size !== definition.participantIds.length) {
+            issue(`${path}.participantIds`, 'must contain at least two unique characters');
+        }
+        if (definition.categories.includes('romantic') && definition.participantIds.length !== 2) {
+            issue(`${path}.participantIds`, 'romantic relationships must contain exactly two participants');
+        }
+        definition.participantIds.forEach(id => { if (!characterIds.has(id)) issue(`${path}.participantIds`, `references unknown character ${id}`); });
+        if (definition.categories.length === 0 || new Set(definition.categories).size !== definition.categories.length
+            || definition.categories.some(value => !RELATIONSHIP_CATEGORIES.includes(value))) issue(`${path}.categories`, 'must contain unique supported categories');
+        if (!ROMANCE_MILESTONES.includes(definition.initialRomanceMilestone)) issue(`${path}.initialRomanceMilestone`, 'is unsupported');
+        if (!definition.categories.includes('romantic') && definition.initialRomanceMilestone !== 'none') {
+            issue(`${path}.initialRomanceMilestone`, 'non-romantic relationships must start at none');
+        }
+        const profile = definition.dynamicProfile;
+        if (profile.coreDynamicTags.length === 0 || new Set(profile.coreDynamicTags).size !== profile.coreDynamicTags.length
+            || profile.coreDynamicTags.some(value => !RELATIONSHIP_DYNAMIC_TAGS.includes(value))) issue(`${path}.dynamicProfile.coreDynamicTags`, 'must contain unique supported tags');
+        if (profile.prohibitedShortcuts.some(value => !RELATIONSHIP_ACTION_TYPES.includes(value))) issue(`${path}.dynamicProfile.prohibitedShortcuts`, 'contains an unsupported action');
+        if (new Set(profile.prohibitedShortcuts).size !== profile.prohibitedShortcuts.length) issue(`${path}.dynamicProfile.prohibitedShortcuts`, 'must not contain duplicates');
+        (['dominantConflictSources', 'trustBasis', 'respectBasis'] as const).forEach((key) => {
+            if (profile[key].some(value => !value.trim())) issue(`${path}.dynamicProfile.${key}`, 'must contain non-empty compact strings');
+        });
+        const policy = definition.progressionPolicy;
+        if (!Number.isSafeInteger(policy.maxMajorMilestoneAdvancePerChapter) || policy.maxMajorMilestoneAdvancePerChapter < 1) issue(`${path}.progressionPolicy.maxMajorMilestoneAdvancePerChapter`, 'must be a positive safe integer');
+        if (!Number.isSafeInteger(policy.maxConsecutiveProgressionChapters) || policy.maxConsecutiveProgressionChapters < 1) issue(`${path}.progressionPolicy.maxConsecutiveProgressionChapters`, 'must be a positive safe integer');
+        if (policy.requireCanonicalBasis !== true || policy.requireMutualAgencyForMutualMilestone !== true) issue(`${path}.progressionPolicy`, 'required safeguards must remain enabled');
+    });
     const storyEventIds = new Set(control.storyEvents.map(event => event.id));
     const checkAllowedFrom = (path: string, chapter: number) => {
         if (!isValidChapter(chapter)) issue(path, 'must be a positive first-allowed chapter');
@@ -173,6 +210,10 @@ export const validateFullStoryControl = (control: FullStoryControl): readonly St
         event.participantIds.forEach(id => {
             if (!characterIds.has(id)) issue(`relationshipEvents.${index}.participantIds`, `references unknown character ${id}`);
         });
+        if (event.authorizedRomanceMilestone !== undefined && !ROMANCE_MILESTONES.includes(event.authorizedRomanceMilestone)) issue(`relationshipEvents.${index}.authorizedRomanceMilestone`, 'is unsupported');
+        const definition = control.relationshipDefinitions.find(value => value.id === event.relationshipId);
+        if (definition && definition.participantIds.join('\u0000') !== event.participantIds.join('\u0000')) issue(`relationshipEvents.${index}.participantIds`, 'must match its relationship definition');
+        if (event.authorizedRomanceMilestone !== undefined && !definition?.categories.includes('romantic')) issue(`relationshipEvents.${index}.authorizedRomanceMilestone`, 'requires a canon-declared romantic relationship');
     });
     const definedStoryEvents = new Set<string>();
     control.storyEvents.forEach((event, index) => {
