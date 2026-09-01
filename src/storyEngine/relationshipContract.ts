@@ -93,6 +93,16 @@ export const relationshipContractContradictions = (action: RelationshipContractA
     if (action.actionType === 'accept-romance' && !action.intendedProgression.mutual) {
         problems.push('accept-romance requires mutual progression');
     }
+    if (action.actionType === 'accept-romance' && action.intendedProgression.direction !== 'strengthening') {
+        problems.push('accept-romance requires strengthening direction');
+    }
+    if (action.actionType === 'accept-romance' && nextIndex <= currentIndex) {
+        problems.push('accept-romance requires a strictly advancing romantic milestone');
+    }
+    if (action.actionType === 'accept-romance'
+        && nextIndex < ROMANCE_MILESTONES.indexOf('acknowledged-interest')) {
+        problems.push('accept-romance must reach at least acknowledged-interest');
+    }
     if (action.actionType === 'rupture'
         && (action.intendedProgression.direction === 'strengthening' || nextIndex > currentIndex)) {
         problems.push('rupture cannot strengthen or advance the relationship');

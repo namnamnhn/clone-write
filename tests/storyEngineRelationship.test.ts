@@ -547,6 +547,35 @@ describe('Story Engine V4 relationship engine', () => {
         expect(issuesFor({ ...planFor(acceptance, ['a-b-commit']), chapterNumber: 100 }, stateFor(100, 'courtship'))).toEqual([]);
     });
 
+    it('requires accept-romance to advance to acknowledged mutual acceptance without bypassing gates', () => {
+        const fullyWilling = actionFor().participantAgency.map(value => ({ ...value, willingness: 'yes' as const }));
+        const noOp = actionFor({
+            actionType: 'accept-romance', importance: 'major', participantAgency: fullyWilling,
+            intendedProgression: { direction: 'stable', romanticMilestone: 'awareness', expectedState: 'romance-accepted', mutual: true, intermediate: false },
+        });
+        expect(issuesFor(planFor(noOp)).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        const belowAcknowledgement = actionFor({
+            actionType: 'accept-romance', importance: 'major', participantAgency: fullyWilling,
+            intendedProgression: { direction: 'strengthening', romanticMilestone: 'interest', expectedState: 'interest', mutual: true, intermediate: false },
+        });
+        expect(issuesFor(planFor(belowAcknowledgement)).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        const attractionToMutualTension = actionFor({
+            actionType: 'accept-romance', importance: 'major', currentRomanceMilestone: 'attraction', participantAgency: fullyWilling,
+            intendedProgression: { direction: 'strengthening', romanticMilestone: 'mutual-tension', expectedState: 'mutual-tension', mutual: true, intermediate: false },
+        });
+        expect(issuesFor(planFor(attractionToMutualTension), stateFor(20, 'attraction')).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        const unauthorizedJump = actionFor({
+            actionType: 'accept-romance', importance: 'major', participantAgency: fullyWilling,
+            intendedProgression: { direction: 'strengthening', romanticMilestone: 'acknowledged-interest', expectedState: 'acknowledged-interest', mutual: true, intermediate: false },
+        });
+        expect(issuesFor(planFor(unauthorizedJump)).map(value => value.code)).toContain('RELATIONSHIP_PROGRESSION_VIOLATION');
+        const authorized = actionFor({
+            actionType: 'accept-romance', importance: 'major', relationshipEventId: 'a-b-commit', currentRomanceMilestone: 'courtship', participantAgency: fullyWilling,
+            intendedProgression: { direction: 'strengthening', romanticMilestone: 'committed-romance', expectedState: 'committed-romance', mutual: true, intermediate: false },
+        });
+        expect(issuesFor({ ...planFor(authorized, ['a-b-commit']), chapterNumber: 100 }, stateFor(100, 'courtship'))).toEqual([]);
+    });
+
     it('rejects downgraded outcome actions and incoherent directions in fabricated Writer plans', () => {
         const validOutcomes = [
             actionFor({ actionType: 'rupture', importance: 'major', intendedProgression: { direction: 'weakening', romanticMilestone: 'awareness', expectedState: 'ruptured', mutual: false, intermediate: false } }),
@@ -571,6 +600,22 @@ describe('Story Engine V4 relationship engine', () => {
         expect(() => buildWriterContext(control, stateFor(100, 'courtship'), {
             ...acceptedPlan,
             relationshipDirectives: acceptedPlan.relationshipDirectives!.map(value => ({ ...value, importance: 'minor' as const })),
+        })).toThrow(WriterContextError);
+        expect(() => buildWriterContext(control, stateFor(100, 'courtship'), {
+            ...acceptedPlan,
+            expectedRelationshipDeltas: [{ relationshipId: 'a-b', participantIds: ['a', 'b'], expectedState: 'romance-accepted' }],
+            relationshipDirectives: acceptedPlan.relationshipDirectives!.map(value => ({
+                ...value,
+                intendedProgression: { direction: 'stable' as const, romanticMilestone: 'courtship' as const, expectedState: 'romance-accepted', mutual: true, intermediate: false },
+            })),
+        })).toThrow(WriterContextError);
+        expect(() => buildWriterContext(control, stateFor(100, 'courtship'), {
+            ...acceptedPlan,
+            expectedRelationshipDeltas: [{ relationshipId: 'a-b', participantIds: ['a', 'b'], expectedState: 'mutual-tension' }],
+            relationshipDirectives: acceptedPlan.relationshipDirectives!.map(value => ({
+                ...value,
+                intendedProgression: { direction: 'strengthening' as const, romanticMilestone: 'mutual-tension' as const, expectedState: 'mutual-tension', mutual: true, intermediate: false },
+            })),
         })).toThrow(WriterContextError);
         expect(() => buildWriterContext(control, stateFor(100, 'courtship'), acceptedPlan)).not.toThrow();
         const writerPlan = sanitizeWriterChapterPlan(planFor(actionFor()), control, stateFor());
