@@ -6,6 +6,7 @@ import { SemanticValidatorModel } from './semanticValidator';
 import { validateWriterChapter, WriterChapterValidationResult } from './validator';
 import { ValidatorContextSelectionPolicy } from './validatorContext';
 import { buildValidationReport, createValidationIssue, RepairCandidateSnapshot, ValidationIssueCode, ValidationPipelineResult, ValidationReport } from './validationTypes';
+import { createCanonicalizationSourceIdentity } from './canonicalIdentity';
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
 
@@ -107,7 +108,29 @@ export const validateAndRepairWriterChapter = async (request: ValidateAndRepairR
         const validation = await validateWriterChapter({ ...request, draft: candidate, validationPass: attempts + 1 });
         if (validation.candidateStatus === 'parsed') candidate = validation.draft;
         if (validation.report.blockingIssueCount === 0 && validation.candidateStatus === 'parsed') {
-            return { status: 'approved-not-canon', draft: validation.draft, report: validation.report, repairAttempts: attempts };
+            if (!validation.context) {
+                const failure = createValidationIssue('INVALID_SOURCE_PLAN', 'critical', 'infrastructure');
+                return rejectValidation(validation, attempts, buildValidationReport(
+                    validation.report.chapterNumber, validation.report.validationPass,
+                    [...validation.report.issues, failure],
+                ));
+            }
+            const finalPlan = structuredClone(validation.context.chapterPlan);
+            const canonicalizationSourceIdentity = createCanonicalizationSourceIdentity({
+                storyControlId: request.control.id,
+                baseChapter: request.state.currentChapter,
+                baseRevision: request.state.revision,
+                chapterPlan: finalPlan,
+                draft: validation.draft,
+            });
+            return {
+                status: 'approved-not-canon', draft: validation.draft, report: validation.report, repairAttempts: attempts,
+                source: {
+                    kind: 'validated-chapter-source', storyControlId: request.control.id,
+                    baseChapter: request.state.currentChapter, baseRevision: request.state.revision,
+                    chapterPlan: finalPlan, canonicalizationSourceIdentity,
+                },
+            };
         }
         const repairCandidate = validation.candidateStatus === 'parsed' ? validation.repairCandidate : validation.candidate;
         if (validation.report.issues.some(issue => issue.blocking && !issue.repairable)

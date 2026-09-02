@@ -44,3 +44,17 @@ export * from './validatorContext';
 export * from './semanticValidator';
 export * from './validator';
 export * from './repair';
+export * from './stateExtractorTypes';
+export {
+    DEFAULT_STATE_EXTRACTION_CONTEXT_SELECTION_POLICY,
+    StateExtractionContextCapacityError,
+    buildStateExtractionContext,
+} from './stateExtractionContext';
+export { buildStateExtractorPrompt, extractState } from './stateExtractor';
+export {
+    DEFAULT_MAX_CANON_REVIEW_CHANGES,
+    buildCanonCommitReview,
+    prepareCanonCommit,
+    createMakeCanonConfirmation,
+    makeCanon,
+} from './canonCommit';

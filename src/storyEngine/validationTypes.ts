@@ -1,4 +1,5 @@
 import { ChapterNumber } from './types';
+import { WriterChapterPlan } from './plannerTypes';
 import { WriterChapterDraft } from './writerTypes';
 
 export const VALIDATION_ISSUE_CODES = [
@@ -52,6 +53,21 @@ export interface ValidationApprovedCandidate {
     readonly draft: WriterChapterDraft;
     readonly report: ValidationReport;
     readonly repairAttempts: number;
+    readonly source: ValidatedChapterSource;
+}
+
+/**
+ * Safe canonicalization lineage captured from the final successful Validator pass.
+ * It deliberately excludes ValidatorContext, FullStoryControl, StoryState, secrets,
+ * and every privileged strategic or relationship evidence view.
+ */
+export interface ValidatedChapterSource {
+    readonly kind: 'validated-chapter-source';
+    readonly storyControlId: string;
+    readonly baseChapter: number;
+    readonly baseRevision: number;
+    readonly chapterPlan: WriterChapterPlan;
+    readonly canonicalizationSourceIdentity: string;
 }
 
 export interface RejectedParsedValidationCandidate {
