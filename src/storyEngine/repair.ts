@@ -107,7 +107,21 @@ export const validateAndRepairWriterChapter = async (request: ValidateAndRepairR
         const validation = await validateWriterChapter({ ...request, draft: candidate, validationPass: attempts + 1 });
         if (validation.candidateStatus === 'parsed') candidate = validation.draft;
         if (validation.report.blockingIssueCount === 0 && validation.candidateStatus === 'parsed') {
-            return { status: 'approved-not-canon', draft: validation.draft, report: validation.report, repairAttempts: attempts };
+            if (!validation.context) {
+                const failure = createValidationIssue('INVALID_SOURCE_PLAN', 'critical', 'infrastructure');
+                return rejectValidation(validation, attempts, buildValidationReport(
+                    validation.report.chapterNumber, validation.report.validationPass,
+                    [...validation.report.issues, failure],
+                ));
+            }
+            return {
+                status: 'approved-not-canon', draft: validation.draft, report: validation.report, repairAttempts: attempts,
+                source: {
+                    kind: 'validated-chapter-source', storyControlId: request.control.id,
+                    baseChapter: request.state.currentChapter, baseRevision: request.state.revision,
+                    chapterPlan: structuredClone(validation.context.chapterPlan),
+                },
+            };
         }
         const repairCandidate = validation.candidateStatus === 'parsed' ? validation.repairCandidate : validation.candidate;
         if (validation.report.issues.some(issue => issue.blocking && !issue.repairable)
