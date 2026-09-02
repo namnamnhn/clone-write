@@ -40,7 +40,17 @@ const normalizePolicy = (
             throw new StateExtractionContextCapacityError(`${key} must be a positive safe integer`);
         }
     });
-    return { ...value };
+    return {
+        maxCharacters: value.maxCharacters,
+        maxRelationships: value.maxRelationships,
+        maxFacts: value.maxFacts,
+        maxUnresolvedClues: value.maxUnresolvedClues,
+        maxUnresolvedPromises: value.maxUnresolvedPromises,
+        maxContinuityEntries: value.maxContinuityEntries,
+        maxResourcesPerCharacter: value.maxResourcesPerCharacter,
+        maxPlotItems: value.maxPlotItems,
+        maxStatusesPerCharacter: value.maxStatusesPerCharacter,
+    };
 };
 
 const takeRequiredThenRecent = <T extends { readonly id: string }>(

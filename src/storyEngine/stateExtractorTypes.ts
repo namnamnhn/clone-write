@@ -16,11 +16,12 @@ import type { ValidatedChapterSource, ValidationPipelineResult } from './validat
 import type { WriterChapterDraft } from './writerTypes';
 
 export const STATE_EXTRACTION_ISSUE_CODES = [
-    'INVALID_APPROVED_SOURCE', 'SOURCE_CONTROL_MISMATCH', 'SOURCE_REVISION_MISMATCH',
+    'INVALID_APPROVED_SOURCE', 'APPROVED_SOURCE_IDENTITY_MISMATCH', 'SOURCE_IDENTITY_MISMATCH',
+    'SOURCE_CONTROL_MISMATCH', 'SOURCE_REVISION_MISMATCH',
     'SOURCE_CHAPTER_MISMATCH', 'EXTRACTOR_PROTOCOL_FAILURE', 'INVALID_EXTRACTOR_OUTPUT',
     'EXTRACTION_CONTEXT_CAPACITY_EXCEEDED',
     'UNSUPPORTED_DELTA_VERSION', 'DELTA_CHAPTER_MISMATCH', 'DELTA_REVISION_MISMATCH',
-    'PROVENANCE_VIOLATION', 'INTERNAL_FACT_NOT_ALLOWED',
+    'PROVENANCE_VIOLATION', 'INTERNAL_FACT_NOT_ALLOWED', 'INVALID_NEW_FACT_STATUS',
     'PLAN_RESOURCE_MISMATCH', 'RESOURCE_IDENTITY_MISMATCH', 'PLAN_RELATIONSHIP_MISMATCH',
     'PLAN_REVEAL_MISMATCH', 'PLAN_CLUE_MISMATCH', 'PLAN_CONTINUITY_MISMATCH', 'UNAUTHORIZED_CHARACTER_MUTATION',
     'INVALID_EPISTEMIC_CHANGE', 'UNREPRESENTABLE_CANON_OPERATION',
@@ -84,7 +85,7 @@ export interface ExtractStateRequest {
 }
 
 export type StateExtractionResult =
-    | { readonly status: 'extracted-not-canon'; readonly delta: StoryStateDeltaV2 }
+    | { readonly status: 'extracted-not-canon'; readonly sourceIdentity: string; readonly delta: StoryStateDeltaV2 }
     | { readonly status: 'blocked'; readonly issues: readonly StateExtractionIssue[] };
 
 export interface CanonCommitReview {
@@ -110,6 +111,8 @@ export interface CanonCommitProposal {
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly targetChapter: number;
+    readonly sourceIdentity: string;
+    readonly proposalIdentity: string;
     readonly source: ValidatedChapterSource;
     readonly delta: StoryStateDeltaV2;
     readonly review: CanonCommitReview;
@@ -133,6 +136,7 @@ export interface MakeCanonConfirmation {
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly targetChapter: number;
+    readonly proposalIdentity: string;
 }
 
 export const MAKE_CANON_ERROR_CODES = [
@@ -151,6 +155,7 @@ export class MakeCanonError extends Error {
 export interface MakeCanonRequest {
     readonly control: FullStoryControl;
     readonly state: StoryState | unknown;
+    readonly approved: ValidationPipelineResult | unknown;
     readonly proposal: CanonCommitProposal | unknown;
     readonly confirmation: MakeCanonConfirmation | unknown;
 }
@@ -158,7 +163,8 @@ export interface MakeCanonRequest {
 export type RepresentabilityClassification = 'DIRECT' | 'SEMANTIC + HUMAN REVIEW' | 'NOT REPRESENTABLE IN V2';
 
 export const STATE_DELTA_V2_REPRESENTABILITY_MATRIX = {
-    facts: 'SEMANTIC + HUMAN REVIEW',
+    newFacts: 'SEMANTIC + HUMAN REVIEW',
+    existingFactLifecycle: 'NOT REPRESENTABLE IN V2',
     epistemicChanges: 'SEMANTIC + HUMAN REVIEW',
     location: 'SEMANTIC + HUMAN REVIEW',
     status: 'SEMANTIC + HUMAN REVIEW',
@@ -171,5 +177,7 @@ export const STATE_DELTA_V2_REPRESENTABILITY_MATRIX = {
     foreshadow: 'SEMANTIC + HUMAN REVIEW',
     payoff: 'SEMANTIC + HUMAN REVIEW',
     genericStoryEvents: 'NOT REPRESENTABLE IN V2',
+    // No current StoryState consumer requires historical occurrence IDs. Persisting them remains history/analytics debt;
+    // the directive's actual state consequences can still be represented and committed through existing V2 operations.
     strategicActionOccurrence: 'NOT REPRESENTABLE IN V2',
 } as const satisfies Readonly<Record<string, RepresentabilityClassification>>;

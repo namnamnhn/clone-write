@@ -67,6 +67,7 @@ export interface ValidatedChapterSource {
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly chapterPlan: WriterChapterPlan;
+    readonly canonicalizationSourceIdentity: string;
 }
 
 export interface RejectedParsedValidationCandidate {

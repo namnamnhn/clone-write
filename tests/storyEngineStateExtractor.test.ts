@@ -1,21 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     applyStoryStateDelta,
+    buildPlannerContext,
+    buildValidatorStrategicView,
     buildCanonCommitReview,
     createInitialStoryState,
     createMakeCanonConfirmation,
     DEFAULT_STATE_EXTRACTION_CONTEXT_SELECTION_POLICY,
     extractState,
     getAuthorSecretStatus,
+    generateWriterDraft,
     makeCanon,
     MakeCanonError,
     parseStoryState,
     prepareCanonCommit,
+    sanitizeWriterChapterPlan,
     STATE_DELTA_V2_REPRESENTABILITY_MATRIX,
     type CanonCommitProposal,
     type FullStoryControl,
     type StateExtractionResult,
     type StateExtractorModelRequest,
+    type StrategicActionPlan,
     type StoryState,
     type StoryStateDeltaV2,
     type ValidationApprovedCandidate,
@@ -23,6 +28,23 @@ import {
     type WriterChapterPlan,
     validateAndRepairWriterChapter,
 } from '../src/storyEngine';
+import {
+    canonicalContentIdentity,
+    createCanonicalizationSourceIdentity,
+    createCanonProposalIdentity,
+} from '../src/storyEngine/canonicalIdentity';
+import {
+    LONG_RUN_CONTROL,
+    commerceActionFor,
+    militaryActionFor,
+    politicalActionFor,
+} from './fixtures/storyEngineLongRunFixture';
+import {
+    buildSampleInternalPlan,
+    deterministicSemanticValidatorModel,
+    deterministicWriterModel,
+    getLongRun,
+} from './helpers/storyEngineLongRunHarness';
 
 const RAW_VAULT = 'RAW VAULT OBSIDIAN KEY TRUTH';
 const control: FullStoryControl = {
@@ -109,6 +131,12 @@ const goldenDelta = (): StoryStateDeltaV2 => v2(2, 1, {
 });
 
 const modelFor = (output: unknown) => ({ async extract() { return structuredClone(output); } });
+const reversePropertyOrder = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(reversePropertyOrder);
+    if (typeof value !== 'object' || value === null) return value;
+    return Object.fromEntries(Object.entries(value).reverse()
+        .map(([key, child]) => [key, reversePropertyOrder(child)]));
+};
 const extractGolden = async (approved: ValidationApprovedCandidate): Promise<StateExtractionResult> => extractState({ approved, state: baseState(), control, model: modelFor(goldenDelta()) });
 const prepareGolden = async (): Promise<{ readonly approved: ValidationApprovedCandidate; readonly extraction: StateExtractionResult; readonly proposal: CanonCommitProposal }> => {
     const approved = await approve();
@@ -119,7 +147,55 @@ const prepareGolden = async (): Promise<{ readonly approved: ValidationApprovedC
     return { approved, extraction, proposal: prepared as CanonCommitProposal };
 };
 
+const canonizeStrategicSample = async (targetChapter: number, action: StrategicActionPlan): Promise<StoryState> => {
+    const state = getLongRun().checkpoints.get(targetChapter - 1)!;
+    const planner = buildPlannerContext(LONG_RUN_CONTROL, state, targetChapter);
+    const internal = buildSampleInternalPlan(planner, [action]);
+    const chapterPlan = sanitizeWriterChapterPlan(internal, LONG_RUN_CONTROL, state);
+    const strategicView = buildValidatorStrategicView(internal, planner);
+    const chapterDraft = await generateWriterDraft({
+        control: LONG_RUN_CONTROL, state, plan: chapterPlan, model: deterministicWriterModel,
+    });
+    const approved = await validateAndRepairWriterChapter({
+        control: LONG_RUN_CONTROL, state, plan: chapterPlan, draft: chapterDraft,
+        semanticModel: deterministicSemanticValidatorModel, repairModel: unusedRepair, strategicView,
+    });
+    expect(approved.status).toBe('approved-not-canon');
+    const resourceChanges = chapterPlan.expectedResourceDeltas.map((expected, index) => {
+        const canonical = state.projections.resources.find(value => value.characterId === expected.characterId
+            && value.resourceId === expected.resourceId)!;
+        return {
+            id: `strategic-${targetChapter}-resource-${index}`,
+            characterId: expected.characterId, resourceId: expected.resourceId, name: canonical.name,
+            ...(expected.quantityDelta === undefined ? {} : { quantityDelta: expected.quantityDelta }),
+            ...(expected.nextState === undefined ? {} : { nextState: expected.nextState }),
+            provenance: provenance(targetChapter, `strategic-${targetChapter}:resource:${index}`),
+        };
+    });
+    const delta = v2(targetChapter, state.revision, { resourceChanges });
+    const extraction = await extractState({
+        approved, state, control: LONG_RUN_CONTROL, model: modelFor(delta),
+    });
+    expect(extraction.status).toBe('extracted-not-canon');
+    const proposal = prepareCanonCommit({
+        approved, extraction, state, control: LONG_RUN_CONTROL,
+    }) as CanonCommitProposal;
+    expect(proposal.status).toBe('ready-for-review');
+    return makeCanon({
+        control: LONG_RUN_CONTROL, state, approved, proposal,
+        confirmation: createMakeCanonConfirmation(proposal),
+    });
+};
+
 describe('WORK 11 approved lineage and safe extraction source', () => {
+    it('uses canonical object-key ordering, order-sensitive arrays, and a stable SHA-256 vector', () => {
+        expect(canonicalContentIdentity('test', { b: 2, a: 1 }))
+            .toBe('test:sha256:43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777');
+        expect(canonicalContentIdentity('test', { a: 1, b: 2 }))
+            .toBe(canonicalContentIdentity('test', { b: 2, a: 1 }));
+        expect(canonicalContentIdentity('test', [1, 2])).not.toBe(canonicalContentIdentity('test', [2, 1]));
+    });
+
     it('emits final Validator plan plus exact non-mutating Canon lineage', async () => {
         const state = baseState(); const before = JSON.stringify(state);
         const result = await validateAndRepairWriterChapter({ control, state, plan: plan(), draft: draft(), semanticModel: semanticPass, repairModel: unusedRepair });
@@ -170,6 +246,40 @@ describe('WORK 11 approved lineage and safe extraction source', () => {
         const result = await extractState({ approved: tampered, state: baseState(), control, model: { extract } });
         expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code })]) });
         expect(extract).not.toHaveBeenCalled();
+    });
+
+    it('blocks approved draft tampering against its canonical source identity', async () => {
+        const approved = await approve();
+        const tampered = { ...approved, draft: { ...approved.draft, prose: `${approved.draft.prose} Altered.` } };
+        const extract = vi.fn(async () => goldenDelta());
+        const result = await extractState({ approved: tampered, state: baseState(), control, model: { extract } });
+        expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([
+            expect.objectContaining({ code: 'APPROVED_SOURCE_IDENTITY_MISMATCH' }),
+        ]) });
+        expect(extract).not.toHaveBeenCalled();
+    });
+
+    it('blocks final Validator plan tampering against its canonical source identity', async () => {
+        const approved = await approve();
+        const tampered = { ...approved, source: { ...approved.source, chapterPlan: {
+            ...approved.source.chapterPlan, primaryGoal: 'Tampered after approval.',
+        } } };
+        const extract = vi.fn(async () => goldenDelta());
+        const result = await extractState({ approved: tampered, state: baseState(), control, model: { extract } });
+        expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([
+            expect.objectContaining({ code: 'APPROVED_SOURCE_IDENTITY_MISMATCH' }),
+        ]) });
+        expect(extract).not.toHaveBeenCalled();
+    });
+
+    it('blocks extraction from Approved A when paired with same-plan Approved B', async () => {
+        const approvedA = await approve(plan(), draft('The duplicate key is publicly acknowledged. B names the envoy. Fact A is established.'));
+        const approvedB = await approve(plan(), draft('The duplicate key is publicly acknowledged. A pays and crosses; Fact A is absent.'));
+        const extractionFromA = await extractGolden(approvedA);
+        expect(approvedA.source.chapterPlan).toEqual(approvedB.source.chapterPlan);
+        expect(approvedA.source.canonicalizationSourceIdentity).not.toBe(approvedB.source.canonicalizationSourceIdentity);
+        expect(prepareCanonCommit({ approved: approvedB, extraction: extractionFromA, state: baseState(), control }))
+            .toMatchObject({ status: 'blocked', issues: [{ code: 'SOURCE_IDENTITY_MISMATCH' }] });
     });
 });
 
@@ -227,7 +337,20 @@ describe('WORK 11 untrusted V2 extractor protocol', () => {
 
 describe('WORK 11 deterministic extraction contract', () => {
     it('accepts the exact resource, relationship, reveal, clue, and continuity contract', async () => {
-        expect(await extractGolden(await approve())).toEqual({ status: 'extracted-not-canon', delta: goldenDelta() });
+        expect(await extractGolden(await approve())).toMatchObject({ status: 'extracted-not-canon', delta: goldenDelta() });
+    });
+
+    it('requires resolve, not supersede, for a planned clue payoff', async () => {
+        const superseded = goldenDelta().continuityChanges.map(value => value.operation === 'resolve'
+            ? { ...value, operation: 'supersede' as const } : value);
+        const blocked = await extractState({
+            approved: await approve(), state: baseState(), control,
+            model: modelFor({ ...goldenDelta(), continuityChanges: superseded }),
+        });
+        expect(blocked).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([
+            expect.objectContaining({ code: 'PLAN_CLUE_MISMATCH' }),
+        ]) });
+        expect(await extractGolden(await approve())).toMatchObject({ status: 'extracted-not-canon' });
     });
 
     it.each([
@@ -249,6 +372,7 @@ describe('WORK 11 deterministic extraction contract', () => {
 
     it.each([
         ['internal fact', { factChanges: [{ ...goldenDelta().factChanges[0], visibility: 'internal' }] }, 'INTERNAL_FACT_NOT_ALLOWED'],
+        ['non-active new fact', { factChanges: [{ ...goldenDelta().factChanges[0], status: 'superseded' }] }, 'INVALID_NEW_FACT_STATUS'],
         ['unrelated location', { locationChanges: [{ ...goldenDelta().locationChanges[0], characterId: 'c' }] }, 'UNAUTHORIZED_CHARACTER_MUTATION'],
         ['unrelated status', { statusChanges: [{ operation: 'add', record: { id: 'c-status', characterId: 'c', kind: 'status', state: 'changed', establishedChapter: 2, provenance: provenance(2, 'c-status') }, provenance: provenance(2, 'c-status') }] }, 'UNAUTHORIZED_CHARACTER_MUTATION'],
         ['unrelated activation', { activationChanges: [{ characterId: 'c', active: false, provenance: provenance(2, 'c-active') }] }, 'UNAUTHORIZED_CHARACTER_MUTATION'],
@@ -281,6 +405,82 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
     it('classifies strategic occurrence identity as unrepresentable in V2', () => {
         expect(STATE_DELTA_V2_REPRESENTABILITY_MATRIX.strategicActionOccurrence).toBe('NOT REPRESENTABLE IN V2');
         expect(STATE_DELTA_V2_REPRESENTABILITY_MATRIX.resources).toBe('DIRECT');
+        expect(STATE_DELTA_V2_REPRESENTABILITY_MATRIX.newFacts).toBe('SEMANTIC + HUMAN REVIEW');
+        expect(STATE_DELTA_V2_REPRESENTABILITY_MATRIX.existingFactLifecycle).toBe('NOT REPRESENTABLE IN V2');
+    });
+
+    it.each([
+        ['Politics', 100, politicalActionFor(100, 'atlas', 'fact-096')],
+        ['Military', 300, militaryActionFor(300, 'fact-288')],
+        ['Commerce', 600, commerceActionFor(600)],
+    ] as const)('allows a %s chapter to Make Canon through representable V2 consequences', async (_domain, target, action) => {
+        const next = await canonizeStrategicSample(target, action);
+        expect(next).toMatchObject({ currentChapter: target, revision: target });
+    }, 15_000);
+
+    it('rejects plan and resource-delta tandem tampering against original approval authority', async () => {
+        const { approved, proposal } = await prepareGolden();
+        const chapterPlan = {
+            ...proposal.source.chapterPlan,
+            expectedResourceDeltas: proposal.source.chapterPlan.expectedResourceDeltas.map(value => ({ ...value, quantityDelta: -20 })),
+        };
+        const delta = {
+            ...proposal.delta,
+            resourceChanges: proposal.delta.resourceChanges.map(value => ({ ...value, quantityDelta: -20 })),
+        };
+        const sourceIdentity = createCanonicalizationSourceIdentity({
+            storyControlId: proposal.storyControlId, baseChapter: proposal.baseChapter,
+            baseRevision: proposal.baseRevision, chapterPlan, draft: approved.draft,
+        });
+        const tampered = {
+            ...proposal, sourceIdentity,
+            source: { ...proposal.source, chapterPlan, canonicalizationSourceIdentity: sourceIdentity },
+            delta, review: buildCanonCommitReview(delta),
+            proposalIdentity: createCanonProposalIdentity({
+                sourceIdentity, storyControlId: proposal.storyControlId, baseChapter: proposal.baseChapter,
+                baseRevision: proposal.baseRevision, targetChapter: proposal.targetChapter, delta,
+            }),
+        };
+        const before = baseState();
+        expect(() => makeCanon({
+            control, state: before, approved, proposal: tampered,
+            confirmation: createMakeCanonConfirmation(tampered),
+        })).toThrowError(expect.objectContaining({ code: 'INVALID_PROPOSAL' }));
+        expect(before.resources.a[0].quantity).toBe(100);
+    });
+
+    it('rejects a newly identified semantic proposal with its old confirmation', async () => {
+        const { approved, proposal } = await prepareGolden();
+        const confirmation = createMakeCanonConfirmation(proposal);
+        const delta = {
+            ...proposal.delta,
+            factChanges: proposal.delta.factChanges.map(value => ({ ...value, text: 'A changed post-review fact.' })),
+        };
+        const tampered = {
+            ...proposal, delta, review: buildCanonCommitReview(delta),
+            proposalIdentity: createCanonProposalIdentity({
+                sourceIdentity: proposal.sourceIdentity, storyControlId: proposal.storyControlId,
+                baseChapter: proposal.baseChapter, baseRevision: proposal.baseRevision,
+                targetChapter: proposal.targetChapter, delta,
+            }),
+        };
+        expect(() => makeCanon({ control, state: baseState(), approved, proposal: tampered, confirmation }))
+            .toThrowError(expect.objectContaining({ code: 'CONFIRMATION_MISMATCH' }));
+    });
+
+    it('keeps proposal identity stable across persisted property-order reconstruction', async () => {
+        const { approved, proposal } = await prepareGolden();
+        const reconstructed = reversePropertyOrder(proposal) as CanonCommitProposal;
+        expect(reconstructed.proposalIdentity).toBe(proposal.proposalIdentity);
+        expect(createCanonProposalIdentity({
+            sourceIdentity: reconstructed.sourceIdentity, storyControlId: reconstructed.storyControlId,
+            baseChapter: reconstructed.baseChapter, baseRevision: reconstructed.baseRevision,
+            targetChapter: reconstructed.targetChapter, delta: reconstructed.delta,
+        })).toBe(proposal.proposalIdentity);
+        expect(makeCanon({
+            control, state: baseState(), approved, proposal: reconstructed,
+            confirmation: createMakeCanonConfirmation(reconstructed),
+        })).toMatchObject({ currentChapter: 2, revision: 2 });
     });
 
     it('projects every mutation with deterministic ordering and blocks review overflow', async () => {
@@ -310,7 +510,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
         const { approved, extraction, proposal } = await prepareGolden();
         expect(approved.status).toBe('approved-not-canon'); expect(extraction.status).toBe('extracted-not-canon');
         expect(JSON.stringify(state)).toBe(before);
-        const next = makeCanon({ control, state, proposal, confirmation: createMakeCanonConfirmation(proposal) });
+        const next = makeCanon({ control, state, approved, proposal, confirmation: createMakeCanonConfirmation(proposal) });
         expect(next).toMatchObject({ currentChapter: 2, revision: 2, characterLocations: { a: 'East bank' } });
         expect(next.facts).toContainEqual(expect.objectContaining({ id: 'fact-envoy' }));
         expect(next.characterKnowledge).toContainEqual({ characterId: 'a', factIds: ['fact-envoy'] });
@@ -324,24 +524,24 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
     });
 
     it.each([true, false, undefined])('rejects primitive confirmation %s', async (confirmation) => {
-        const { proposal } = await prepareGolden();
-        expect(() => makeCanon({ control, state: baseState(), proposal, confirmation })).toThrowError(expect.objectContaining({ code: 'CONFIRMATION_REQUIRED' }));
+        const { approved, proposal } = await prepareGolden();
+        expect(() => makeCanon({ control, state: baseState(), approved, proposal, confirmation })).toThrowError(expect.objectContaining({ code: 'CONFIRMATION_REQUIRED' }));
     });
 
     it('rejects mismatched confirmation', async () => {
-        const { proposal } = await prepareGolden();
-        expect(() => makeCanon({ control, state: baseState(), proposal, confirmation: { ...createMakeCanonConfirmation(proposal), targetChapter: 3 } })).toThrowError(expect.objectContaining({ code: 'CONFIRMATION_MISMATCH' }));
+        const { approved, proposal } = await prepareGolden();
+        expect(() => makeCanon({ control, state: baseState(), approved, proposal, confirmation: { ...createMakeCanonConfirmation(proposal), targetChapter: 3 } })).toThrowError(expect.objectContaining({ code: 'CONFIRMATION_MISMATCH' }));
     });
 
     it('blocks double commit and stale proposals', async () => {
-        const { proposal } = await prepareGolden(); const confirmation = createMakeCanonConfirmation(proposal);
-        const next = makeCanon({ control, state: baseState(), proposal, confirmation });
-        expect(() => makeCanon({ control, state: next, proposal, confirmation })).toThrowError(expect.objectContaining({ code: 'STALE_PROPOSAL' }));
+        const { approved, proposal } = await prepareGolden(); const confirmation = createMakeCanonConfirmation(proposal);
+        const next = makeCanon({ control, state: baseState(), approved, proposal, confirmation });
+        expect(() => makeCanon({ control, state: next, approved, proposal, confirmation })).toThrowError(expect.objectContaining({ code: 'STALE_PROPOSAL' }));
     });
 
     it('blocks wrong-story commits even with matching cursors', async () => {
-        const { proposal } = await prepareGolden();
-        expect(() => makeCanon({ control: { ...control, id: 'other-story' }, state: baseState(), proposal, confirmation: createMakeCanonConfirmation(proposal) })).toThrowError(expect.objectContaining({ code: 'WRONG_STORY' }));
+        const { approved, proposal } = await prepareGolden();
+        expect(() => makeCanon({ control: { ...control, id: 'other-story' }, state: baseState(), approved, proposal, confirmation: createMakeCanonConfirmation(proposal) })).toThrowError(expect.objectContaining({ code: 'WRONG_STORY' }));
     });
 
     it('commits an explicitly reviewed empty V2 delta as chapter progress', async () => {
@@ -350,7 +550,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
         const extraction = await extractState({ approved, state: baseState(), control, model: modelFor(v2(2, 1)) });
         const proposal = prepareCanonCommit({ approved, extraction, state: baseState(), control }) as CanonCommitProposal;
         expect(proposal.review.totalChanges).toBe(0);
-        const next = makeCanon({ control, state: baseState(), proposal, confirmation: createMakeCanonConfirmation(proposal) });
+        const next = makeCanon({ control, state: baseState(), approved, proposal, confirmation: createMakeCanonConfirmation(proposal) });
         expect(next).toMatchObject({ currentChapter: 2, revision: 2 });
     });
 

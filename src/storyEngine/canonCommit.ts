@@ -17,6 +17,7 @@ import {
     validateStateExtractionContract,
 } from './stateExtractor';
 import type { StoryState } from './types';
+import { canonicalValuesEqual, createCanonProposalIdentity } from './canonicalIdentity';
 
 export const DEFAULT_MAX_CANON_REVIEW_CHANGES = 128;
 
@@ -78,10 +79,6 @@ const representabilityIssues = (source: CanonCommitProposal['source']): readonly
         code: 'UNREPRESENTABLE_CANON_OPERATION', path: 'approved.source.chapterPlan.storyEvents',
         detail: source.chapterPlan.storyEvents.map(value => value.id).slice().sort().join(','),
     });
-    if ((source.chapterPlan.strategicDirectives ?? []).length > 0) issues.push({
-        code: 'UNREPRESENTABLE_CANON_OPERATION', path: 'approved.source.chapterPlan.strategicDirectives',
-        detail: (source.chapterPlan.strategicDirectives ?? []).map(value => value.id).slice().sort().join(','),
-    });
     return normalizeStateExtractionIssues(issues);
 };
 
@@ -89,8 +86,12 @@ export const prepareCanonCommit = (request: PrepareCanonCommitRequest): PrepareC
     const validated = validateApprovedExtractionSource(request.approved, request.state, request.control);
     if (!isValidatedExtractionSource(validated)) return blocked(validated);
     if (!isRecord(request.extraction) || request.extraction.status !== 'extracted-not-canon'
+        || typeof request.extraction.sourceIdentity !== 'string'
         || !isRecord(request.extraction.delta) || request.extraction.delta.schemaVersion !== 2) {
         return blocked([{ code: 'INVALID_EXTRACTOR_OUTPUT', path: 'extraction' }]);
+    }
+    if (request.extraction.sourceIdentity !== validated.source.canonicalizationSourceIdentity) {
+        return blocked([{ code: 'SOURCE_IDENTITY_MISMATCH', path: 'extraction.sourceIdentity' }]);
     }
     let delta: StoryStateDeltaV2;
     try {
@@ -118,10 +119,17 @@ export const prepareCanonCommit = (request: PrepareCanonCommitRequest): PrepareC
         }
         return blocked([{ code: 'CANON_PREVIEW_REJECTED', path: 'review' }]);
     }
+    const sourceIdentity = validated.source.canonicalizationSourceIdentity;
+    const proposalIdentity = createCanonProposalIdentity({
+        sourceIdentity, storyControlId: request.control.id,
+        baseChapter: validated.source.baseChapter, baseRevision: validated.source.baseRevision,
+        targetChapter: validated.source.chapterPlan.chapterNumber, delta,
+    });
     return {
         kind: 'canon-commit-proposal', status: 'ready-for-review', storyControlId: request.control.id,
         baseChapter: validated.source.baseChapter, baseRevision: validated.source.baseRevision,
         targetChapter: validated.source.chapterPlan.chapterNumber,
+        sourceIdentity, proposalIdentity,
         source: structuredClone(validated.source), delta: structuredClone(delta), review,
     };
 };
@@ -129,15 +137,18 @@ export const prepareCanonCommit = (request: PrepareCanonCommitRequest): PrepareC
 export const createMakeCanonConfirmation = (proposal: CanonCommitProposal): MakeCanonConfirmation => ({
     kind: 'make-canon-confirmation', confirmed: true, storyControlId: proposal.storyControlId,
     baseChapter: proposal.baseChapter, baseRevision: proposal.baseRevision, targetChapter: proposal.targetChapter,
+    proposalIdentity: proposal.proposalIdentity,
 });
 
 const requireProposal = (value: unknown): CanonCommitProposal => {
     if (!isRecord(value) || value.kind !== 'canon-commit-proposal' || value.status !== 'ready-for-review'
         || typeof value.storyControlId !== 'string' || !Number.isSafeInteger(value.baseChapter)
         || !Number.isSafeInteger(value.baseRevision) || !Number.isSafeInteger(value.targetChapter)
+        || typeof value.sourceIdentity !== 'string' || typeof value.proposalIdentity !== 'string'
         || !isRecord(value.source) || value.source.kind !== 'validated-chapter-source'
         || typeof value.source.storyControlId !== 'string' || !Number.isSafeInteger(value.source.baseChapter)
         || !Number.isSafeInteger(value.source.baseRevision) || !isRecord(value.source.chapterPlan)
+        || typeof value.source.canonicalizationSourceIdentity !== 'string'
         || value.source.chapterPlan.kind !== 'writer-chapter-plan'
         || !isRecord(value.delta) || value.delta.kind !== 'story-state-delta'
         || !isRecord(value.review) || value.review.kind !== 'canon-commit-review') {
@@ -150,12 +161,13 @@ const requireConfirmation = (value: unknown, proposal: CanonCommitProposal): voi
     if (!isRecord(value) || value.kind !== 'make-canon-confirmation' || value.confirmed !== true) {
         throw new MakeCanonError('CONFIRMATION_REQUIRED', 'structured explicit Make Canon confirmation is required');
     }
-    const fields = ['kind', 'confirmed', 'storyControlId', 'baseChapter', 'baseRevision', 'targetChapter'];
+    const fields = ['kind', 'confirmed', 'storyControlId', 'baseChapter', 'baseRevision', 'targetChapter', 'proposalIdentity'];
     if (Object.keys(value).length !== fields.length || Object.keys(value).some(key => !fields.includes(key))) {
         throw new MakeCanonError('CONFIRMATION_MISMATCH', 'Make Canon confirmation contains an unexpected field');
     }
     if (value.storyControlId !== proposal.storyControlId || value.baseChapter !== proposal.baseChapter
-        || value.baseRevision !== proposal.baseRevision || value.targetChapter !== proposal.targetChapter) {
+        || value.baseRevision !== proposal.baseRevision || value.targetChapter !== proposal.targetChapter
+        || value.proposalIdentity !== proposal.proposalIdentity) {
         throw new MakeCanonError('CONFIRMATION_MISMATCH', 'Make Canon confirmation does not match the proposal');
     }
 };
@@ -168,6 +180,16 @@ export const makeCanon = (request: MakeCanonRequest): StoryState => {
     } catch {
         throw new MakeCanonError('INVALID_CURRENT_CANON', 'strict current StoryState is required');
     }
+    const validated = validateApprovedExtractionSource(request.approved, current, request.control);
+    if (!isValidatedExtractionSource(validated)) {
+        if (validated.some(value => value.code === 'SOURCE_CONTROL_MISMATCH')) {
+            throw new MakeCanonError('WRONG_STORY', 'approved source belongs to another StoryControl');
+        }
+        if (validated.some(value => value.code === 'SOURCE_CHAPTER_MISMATCH' || value.code === 'SOURCE_REVISION_MISMATCH')) {
+            throw new MakeCanonError('STALE_PROPOSAL', 'approved source base no longer matches current Canon');
+        }
+        throw new MakeCanonError('INVALID_PROPOSAL', 'original approved source is invalid or has changed');
+    }
     const proposal = requireProposal(request.proposal);
     if (proposal.storyControlId !== request.control.id || proposal.source.storyControlId !== request.control.id) {
         throw new MakeCanonError('WRONG_STORY', 'proposal belongs to another StoryControl');
@@ -175,25 +197,35 @@ export const makeCanon = (request: MakeCanonRequest): StoryState => {
     if (current.currentChapter !== proposal.baseChapter || current.revision !== proposal.baseRevision) {
         throw new MakeCanonError('STALE_PROPOSAL', 'proposal base no longer matches current Canon');
     }
-    requireConfirmation(request.confirmation, proposal);
     let delta: StoryStateDeltaV2;
     try {
         if (proposal.targetChapter !== proposal.baseChapter + 1
             || proposal.source.baseChapter !== proposal.baseChapter
             || proposal.source.baseRevision !== proposal.baseRevision
             || proposal.source.chapterPlan.chapterNumber !== proposal.targetChapter
+            || proposal.sourceIdentity !== validated.source.canonicalizationSourceIdentity
+            || proposal.source.canonicalizationSourceIdentity !== validated.source.canonicalizationSourceIdentity
+            || proposal.source.storyControlId !== validated.source.storyControlId
+            || !canonicalValuesEqual(proposal.source.chapterPlan, validated.source.chapterPlan)
             || proposal.delta.schemaVersion !== 2) throw new Error('proposal cursor mismatch');
         delta = parseStoryStateDelta(proposal.delta);
         if (delta.chapterNumber !== proposal.targetChapter || delta.expectedRevision !== proposal.baseRevision) {
             throw new Error('delta cursor mismatch');
         }
-        const contractIssues = validateStateExtractionContract(delta, proposal.source, current);
-        if (contractIssues.length > 0 || representabilityIssues(proposal.source).length > 0) throw new Error('proposal contract mismatch');
+        const recomputedIdentity = createCanonProposalIdentity({
+            sourceIdentity: proposal.sourceIdentity, storyControlId: proposal.storyControlId,
+            baseChapter: proposal.baseChapter, baseRevision: proposal.baseRevision,
+            targetChapter: proposal.targetChapter, delta,
+        });
+        if (recomputedIdentity !== proposal.proposalIdentity) throw new Error('proposal identity mismatch');
+        const contractIssues = validateStateExtractionContract(delta, validated.source, current);
+        if (contractIssues.length > 0 || representabilityIssues(validated.source).length > 0) throw new Error('proposal contract mismatch');
         const rebuiltReview = buildCanonCommitReview(delta, DEFAULT_MAX_CANON_REVIEW_CHANGES);
-        if (JSON.stringify(rebuiltReview) !== JSON.stringify(proposal.review)) throw new Error('review mismatch');
+        if (!canonicalValuesEqual(rebuiltReview, proposal.review)) throw new Error('review mismatch');
     } catch {
         throw new MakeCanonError('INVALID_PROPOSAL', 'proposal and delta are inconsistent');
     }
+    requireConfirmation(request.confirmation, proposal);
     try {
         return applyStoryStateDelta(request.control, current, delta);
     } catch {

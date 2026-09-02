@@ -10,6 +10,7 @@ import { parseStoryState, parseStoryStateDelta } from './storyStateRuntime';
 import type { FactProvenance, StoryStateDeltaV2 } from './storyStateTypes';
 import type { FullStoryControl, StoryState } from './types';
 import type { ValidatedChapterSource, ValidationApprovedCandidate } from './validationTypes';
+import { createCanonicalizationSourceIdentity } from './canonicalIdentity';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -41,6 +42,7 @@ export const validateApprovedExtractionSource = (
         || approvedValue.report.status !== 'passed' || approvedValue.report.blockingIssueCount !== 0
         || !isRecord(approvedValue.draft) || !isRecord(approvedValue.source)
         || approvedValue.source.kind !== 'validated-chapter-source'
+        || typeof approvedValue.source.canonicalizationSourceIdentity !== 'string'
         || !isRecord(approvedValue.source.chapterPlan)) {
         return [issue('INVALID_APPROVED_SOURCE', 'approved')];
     }
@@ -56,6 +58,21 @@ export const validateApprovedExtractionSource = (
     if (source.storyControlId !== control.id) issues.push(issue('SOURCE_CONTROL_MISMATCH', 'approved.source.storyControlId'));
     if (source.baseChapter !== state.currentChapter) issues.push(issue('SOURCE_CHAPTER_MISMATCH', 'approved.source.baseChapter'));
     if (source.baseRevision !== state.revision) issues.push(issue('SOURCE_REVISION_MISMATCH', 'approved.source.baseRevision'));
+    let recomputedIdentity: string | undefined;
+    try {
+        recomputedIdentity = createCanonicalizationSourceIdentity({
+            storyControlId: source.storyControlId,
+            baseChapter: source.baseChapter,
+            baseRevision: source.baseRevision,
+            chapterPlan: source.chapterPlan,
+            draft: approved.draft,
+        });
+    } catch {
+        issues.push(issue('INVALID_APPROVED_SOURCE', 'approved.source.canonicalizationSourceIdentity'));
+    }
+    if (recomputedIdentity !== undefined && recomputedIdentity !== source.canonicalizationSourceIdentity) {
+        issues.push(issue('APPROVED_SOURCE_IDENTITY_MISMATCH', 'approved.source.canonicalizationSourceIdentity'));
+    }
     const target = state.currentChapter + 1;
     if (source.chapterPlan.chapterNumber !== target
         || approved.draft.chapterNumber !== source.chapterPlan.chapterNumber
@@ -121,6 +138,7 @@ export const validateStateExtractionContract = (
     });
     delta.factChanges.forEach((value, index) => {
         if (value.visibility === 'internal') issues.push(issue('INTERNAL_FACT_NOT_ALLOWED', `delta.factChanges[${index}].visibility`));
+        if (value.status !== 'active') issues.push(issue('INVALID_NEW_FACT_STATUS', `delta.factChanges[${index}].status`));
     });
 
     const participants = new Set(plan.participantIds);
@@ -183,7 +201,7 @@ export const validateStateExtractionContract = (
     if (!sameIds(expectedRevealIds, actualRevealIds)) issues.push(issue('PLAN_REVEAL_MISMATCH', 'delta.revealChanges'));
 
     const plantedClueIds = delta.continuityChanges.filter(value => value.operation === 'open' && value.entry!.kind === 'clue').map(value => value.entry!.id);
-    const paidClueIds = delta.continuityChanges.filter(value => value.operation !== 'open')
+    const paidClueIds = delta.continuityChanges.filter(value => value.operation === 'resolve')
         .filter(value => state.ledgers.continuity.find(entry => entry.id === value.continuityId)?.kind === 'clue')
         .map(value => value.continuityId!);
     if (!sameIds(plan.cluesPlantedIds, plantedClueIds) || !sameIds(plan.cluesPaidOffIds, paidClueIds)) {
@@ -240,5 +258,7 @@ export const extractState = async (request: ExtractStateRequest): Promise<StateE
         return { status: 'blocked', issues: [issue('INVALID_EXTRACTOR_OUTPUT', 'model.output')] };
     }
     const issues = validateStateExtractionContract(delta, validated.source, validated.state);
-    return issues.length > 0 ? { status: 'blocked', issues } : { status: 'extracted-not-canon', delta };
+    return issues.length > 0 ? { status: 'blocked', issues } : {
+        status: 'extracted-not-canon', sourceIdentity: validated.source.canonicalizationSourceIdentity, delta,
+    };
 };
