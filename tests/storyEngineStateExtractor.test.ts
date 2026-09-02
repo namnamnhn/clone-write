@@ -430,6 +430,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
         };
         const sourceIdentity = createCanonicalizationSourceIdentity({
             storyControlId: proposal.storyControlId, baseChapter: proposal.baseChapter,
+            storyControlIdentity: proposal.storyControlIdentity,
             baseRevision: proposal.baseRevision, chapterPlan, draft: approved.draft,
         });
         const tampered = {
@@ -438,6 +439,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
             delta, review: buildCanonCommitReview(delta),
             proposalIdentity: createCanonProposalIdentity({
                 sourceIdentity, storyControlId: proposal.storyControlId, baseChapter: proposal.baseChapter,
+                storyControlIdentity: proposal.storyControlIdentity,
                 baseRevision: proposal.baseRevision, targetChapter: proposal.targetChapter, delta,
             }),
         };
@@ -460,6 +462,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
             ...proposal, delta, review: buildCanonCommitReview(delta),
             proposalIdentity: createCanonProposalIdentity({
                 sourceIdentity: proposal.sourceIdentity, storyControlId: proposal.storyControlId,
+                storyControlIdentity: proposal.storyControlIdentity,
                 baseChapter: proposal.baseChapter, baseRevision: proposal.baseRevision,
                 targetChapter: proposal.targetChapter, delta,
             }),
@@ -474,6 +477,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
         expect(reconstructed.proposalIdentity).toBe(proposal.proposalIdentity);
         expect(createCanonProposalIdentity({
             sourceIdentity: reconstructed.sourceIdentity, storyControlId: reconstructed.storyControlId,
+            storyControlIdentity: reconstructed.storyControlIdentity,
             baseChapter: reconstructed.baseChapter, baseRevision: reconstructed.baseRevision,
             targetChapter: reconstructed.targetChapter, delta: reconstructed.delta,
         })).toBe(proposal.proposalIdentity);

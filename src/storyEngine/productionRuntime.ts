@@ -1,4 +1,5 @@
 import { prepareCanonCommit } from './canonCommit';
+import { createStoryControlIdentity } from './canonicalIdentity';
 import { buildPlannerContext } from './contextBuilder';
 import { createStructuredPlanner } from './planner';
 import {
@@ -65,10 +66,11 @@ const strictState = (control: FullStoryControl, value: StoryState | unknown, sta
 };
 
 const assertCursor = (
-    storyControlId: string,
+    control: FullStoryControl,
     state: StoryState,
     artifact: {
         readonly storyControlId: string;
+        readonly storyControlIdentity: string;
         readonly baseChapter: number;
         readonly baseRevision: number;
         readonly targetChapter: number;
@@ -76,7 +78,9 @@ const assertCursor = (
     },
     stage: ProductionRuntimeError['stage'],
 ): void => {
-    if (artifact.storyControlId !== storyControlId || artifact.baseChapter !== state.currentChapter
+    if (artifact.storyControlId !== control.id
+        || artifact.storyControlIdentity !== createStoryControlIdentity(control)
+        || artifact.baseChapter !== state.currentChapter
         || artifact.baseRevision !== state.revision || artifact.targetChapter !== state.currentChapter + 1) {
         throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, state.currentChapter + 1);
     }
@@ -86,18 +90,20 @@ const assertCursor = (
 };
 
 const requireProductionMemory = (
-    controlId: string,
+    control: FullStoryControl,
     state: StoryState,
     memoryState: NarrativeMemoryState,
     stage: ProductionRuntimeError['stage'],
     chapter: number,
 ): NarrativeMemoryState => {
     try {
-        const parsed = parseNarrativeMemoryState(memoryState, controlId);
+        const parsed = parseNarrativeMemoryState(memoryState, control);
         const latest = parsed.records.at(-1);
-        if (latest !== undefined && (latest.chapterNumber !== state.currentChapter
-            || latest.afterCanonIdentity !== createProductionCanonIdentity(state))) {
-            throw new ProductionRuntimeError('INVALID_PROJECT', stage, chapter);
+        if ((state.currentChapter === 0 && latest !== undefined)
+            || (state.currentChapter > 0 && (latest === undefined
+                || latest.chapterNumber !== state.currentChapter
+                || latest.afterCanonIdentity !== createProductionCanonIdentity(state)))) {
+            throw new ProductionRuntimeError('MEMORY_CANON_MISMATCH', stage, chapter);
         }
         return parsed;
     } catch (error) {
@@ -200,9 +206,9 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         const targetChapter = request.targetChapter ?? state.currentChapter + 1;
         if (targetChapter !== state.currentChapter + 1) throw new ProductionRuntimeError('INVALID_PROJECT', 'planning', targetChapter);
         if (targetChapter > request.control.engine.plannedChapterCount) throw new ProductionRuntimeError('STORY_COMPLETE', 'planning', targetChapter);
-        const memory = requireProductionMemory(request.control.id, state, request.memoryState, 'planning', targetChapter);
-        const memoryInput = buildNarrativeMemoryInput(memory, request.control.id);
-        const memoryIdentity = createNarrativeMemoryIdentity(memory, request.control.id);
+        const memory = requireProductionMemory(request.control, state, request.memoryState, 'planning', targetChapter);
+        const memoryInput = buildNarrativeMemoryInput(memory, request.control);
+        const memoryIdentity = createNarrativeMemoryIdentity(memory, request.control);
         let plannerContext;
         try {
             plannerContext = buildPlannerContext(
@@ -232,7 +238,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
                 relationshipView: buildValidatorRelationshipView(request.control, internalPlan, plannerContext, runtimePolicy.validatorContextSelectionPolicy.maxRelationshipItems),
             };
             const body = {
-                storyControlId: request.control.id, baseChapter: state.currentChapter, baseRevision: state.revision,
+                storyControlId: request.control.id, storyControlIdentity: createStoryControlIdentity(request.control),
+                baseChapter: state.currentChapter, baseRevision: state.revision,
                 targetChapter, baseCanonIdentity: createProductionCanonIdentity(state), memoryIdentity,
                 writerPlan: structuredClone(writerPlan), privileged: structuredClone(privileged),
             };
@@ -244,9 +251,10 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
 
     const requirePlan = (control: FullStoryControl, state: StoryState, value: ProductionPlanArtifact, stage: ProductionRuntimeError['stage']): ProductionPlanArtifact => {
         if (!value || value.kind !== 'production-plan-artifact') throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, state.currentChapter + 1);
-        assertCursor(control.id, state, value, stage);
+        assertCursor(control, state, value, stage);
         const expected = createProductionPlanArtifactIdentity({
             storyControlId: value.storyControlId, baseChapter: value.baseChapter, baseRevision: value.baseRevision,
+            storyControlIdentity: value.storyControlIdentity,
             targetChapter: value.targetChapter, baseCanonIdentity: value.baseCanonIdentity,
             memoryIdentity: value.memoryIdentity, writerPlan: value.writerPlan, privileged: value.privileged,
         });
@@ -260,15 +268,15 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
     ): Promise<ProductionDraftArtifact> => {
         const state = strictState(request.control, request.state, 'writing', request.plan?.targetChapter ?? 0);
         const plan = requirePlan(request.control, state, request.plan, 'writing');
-        const memory = requireProductionMemory(request.control.id, state, request.memoryState, 'writing', plan.targetChapter);
-        if (createNarrativeMemoryIdentity(memory, request.control.id) !== plan.memoryIdentity) {
+        const memory = requireProductionMemory(request.control, state, request.memoryState, 'writing', plan.targetChapter);
+        if (createNarrativeMemoryIdentity(memory, request.control) !== plan.memoryIdentity) {
             throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'writing', plan.targetChapter);
         }
         let draft;
         try {
             draft = await generateWriterDraft({
                 control: request.control, state, plan: plan.writerPlan,
-                memoryInput: buildNarrativeMemoryInput(memory, request.control.id),
+                memoryInput: buildNarrativeMemoryInput(memory, request.control),
                 memoryPolicy: runtimePolicy.narrativeMemorySelectionPolicy,
                 contextSelectionPolicy: runtimePolicy.writerContextSelectionPolicy,
                 model: instrumentWriter(models.writer, calls),
@@ -278,24 +286,29 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             throw new ProductionRuntimeError('WRITER_PROTOCOL_FAILURE', 'writing', plan.targetChapter, 'writer');
         }
         const body = {
-            storyControlId: plan.storyControlId, baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
+            storyControlId: plan.storyControlId, storyControlIdentity: plan.storyControlIdentity,
+            baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
             targetChapter: plan.targetChapter, baseCanonIdentity: plan.baseCanonIdentity,
             planArtifactIdentity: plan.artifactIdentity, draft: structuredClone(draft),
         };
         return { kind: 'production-draft-artifact', artifactIdentity: createProductionDraftArtifactIdentity(body), ...body };
     };
 
-    const requireDraft = (state: StoryState, plan: ProductionPlanArtifact, value: ProductionDraftArtifact): ProductionDraftArtifact => {
+    const requireDraft = (
+        control: FullStoryControl, state: StoryState, plan: ProductionPlanArtifact,
+        value: ProductionDraftArtifact, stage: ProductionRuntimeError['stage'],
+    ): ProductionDraftArtifact => {
         if (!value || value.kind !== 'production-draft-artifact' || value.planArtifactIdentity !== plan.artifactIdentity) {
-            throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'validation', plan.targetChapter);
+            throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, plan.targetChapter);
         }
-        assertCursor(plan.storyControlId, state, value, 'validation');
+        assertCursor(control, state, value, stage);
         const expected = createProductionDraftArtifactIdentity({
             storyControlId: value.storyControlId, baseChapter: value.baseChapter, baseRevision: value.baseRevision,
+            storyControlIdentity: value.storyControlIdentity,
             targetChapter: value.targetChapter, baseCanonIdentity: value.baseCanonIdentity,
             planArtifactIdentity: value.planArtifactIdentity, draft: value.draft,
         });
-        if (expected !== value.artifactIdentity) throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'validation', plan.targetChapter);
+        if (expected !== value.artifactIdentity) throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, plan.targetChapter);
         return value;
     };
 
@@ -305,7 +318,7 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
     ): Promise<ProductionValidationArtifact> => {
         const state = strictState(request.control, request.state, 'validation', request.plan?.targetChapter ?? 0);
         const plan = requirePlan(request.control, state, request.plan, 'validation');
-        const draft = requireDraft(state, plan, request.draft);
+        const draft = requireDraft(request.control, state, plan, request.draft, 'validation');
         const validationCallOffset = calls.length;
         let result;
         try {
@@ -330,7 +343,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             throw new ProductionRuntimeError('MODEL_RUNTIME_FAILURE', 'validation', plan.targetChapter, 'semanticValidator');
         }
         const body = {
-            storyControlId: plan.storyControlId, baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
+            storyControlId: plan.storyControlId, storyControlIdentity: plan.storyControlIdentity,
+            baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
             targetChapter: plan.targetChapter, baseCanonIdentity: plan.baseCanonIdentity, planArtifactIdentity: plan.artifactIdentity,
             draftArtifactIdentity: draft.artifactIdentity, result: structuredClone(result),
         };
@@ -338,19 +352,21 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
     };
 
     const requireValidation = (
-        state: StoryState, plan: ProductionPlanArtifact, draft: ProductionDraftArtifact, value: ProductionValidationArtifact,
+        control: FullStoryControl, state: StoryState, plan: ProductionPlanArtifact, draft: ProductionDraftArtifact,
+        value: ProductionValidationArtifact, stage: ProductionRuntimeError['stage'],
     ): ProductionValidationArtifact => {
-        if (!value || value.kind !== 'production-validation-artifact') throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'extraction', plan.targetChapter);
-        assertCursor(plan.storyControlId, state, value, 'extraction');
+        if (!value || value.kind !== 'production-validation-artifact') throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, plan.targetChapter);
+        assertCursor(control, state, value, stage);
         if (value.planArtifactIdentity !== plan.artifactIdentity || value.draftArtifactIdentity !== draft.artifactIdentity) {
-            throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'extraction', plan.targetChapter);
+            throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, plan.targetChapter);
         }
         const expected = createProductionValidationArtifactIdentity({
             storyControlId: value.storyControlId, baseChapter: value.baseChapter, baseRevision: value.baseRevision,
+            storyControlIdentity: value.storyControlIdentity,
             targetChapter: value.targetChapter, baseCanonIdentity: value.baseCanonIdentity, planArtifactIdentity: value.planArtifactIdentity,
             draftArtifactIdentity: value.draftArtifactIdentity, result: value.result,
         });
-        if (expected !== value.artifactIdentity) throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'extraction', plan.targetChapter);
+        if (expected !== value.artifactIdentity) throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, plan.targetChapter);
         return value;
     };
 
@@ -364,8 +380,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
     ): Promise<ProductionExtractionArtifact> => {
         const state = strictState(request.control, request.state, 'extraction', request.plan?.targetChapter ?? 0);
         const plan = requirePlan(request.control, state, request.plan, 'extraction');
-        const draft = requireDraft(state, plan, request.draft);
-        const validation = requireValidation(state, plan, draft, request.validation);
+        const draft = requireDraft(request.control, state, plan, request.draft, 'extraction');
+        const validation = requireValidation(request.control, state, plan, draft, request.validation, 'extraction');
         if (validation.result.status !== 'approved-not-canon') {
             throw new ProductionRuntimeError('VALIDATION_REJECTED', 'extraction', plan.targetChapter);
         }
@@ -387,7 +403,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             throw new ProductionRuntimeError('EXTRACTION_BLOCKED', 'extraction', plan.targetChapter, 'stateExtractor', issueCodes(result.issues));
         }
         const body = {
-            storyControlId: plan.storyControlId, baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
+            storyControlId: plan.storyControlId, storyControlIdentity: plan.storyControlIdentity,
+            baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
             targetChapter: plan.targetChapter, baseCanonIdentity: plan.baseCanonIdentity,
             validationArtifactIdentity: validation.artifactIdentity,
             result: structuredClone(result),
@@ -405,21 +422,22 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
     ) => {
         const state = strictState(request.control, request.state, 'canon-review', request.plan?.targetChapter ?? 0);
         const plan = requirePlan(request.control, state, request.plan, 'canon-review');
-        const draft = requireDraft(state, plan, request.draft);
-        const validation = requireValidation(state, plan, draft, request.validation);
+        const draft = requireDraft(request.control, state, plan, request.draft, 'canon-review');
+        const validation = requireValidation(request.control, state, plan, draft, request.validation, 'canon-review');
         if (validation.result.status !== 'approved-not-canon') throw new ProductionRuntimeError('VALIDATION_REJECTED', 'canon-review', plan.targetChapter);
         const extraction = request.extraction;
         if (!extraction || extraction.kind !== 'production-extraction-artifact'
             || extraction.validationArtifactIdentity !== validation.artifactIdentity
             || createProductionExtractionArtifactIdentity({
                 storyControlId: extraction.storyControlId, baseChapter: extraction.baseChapter,
+                storyControlIdentity: extraction.storyControlIdentity,
                 baseRevision: extraction.baseRevision, targetChapter: extraction.targetChapter,
                 baseCanonIdentity: extraction.baseCanonIdentity,
                 validationArtifactIdentity: extraction.validationArtifactIdentity, result: extraction.result,
             }) !== extraction.artifactIdentity) {
             throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'canon-review', plan.targetChapter);
         }
-        assertCursor(request.control.id, state, extraction, 'canon-review');
+        assertCursor(request.control, state, extraction, 'canon-review');
         const proposal = prepareCanonCommit({
             approved: validation.result, extraction: extraction.result, state, control: request.control,
             maxTotalChanges: runtimePolicy.maxCanonReviewChanges,

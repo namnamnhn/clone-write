@@ -3,6 +3,7 @@ import {
     StoryBlueprintDocument,
     StoryBlueprintParseError,
     createEmptyNarrativeMemoryState,
+    createStoryControlIdentity,
     createV4ProjectSeed,
     parseStoryBlueprint,
     parseStoryBlueprintDocument,
@@ -62,10 +63,11 @@ const fullDocument = (): StoryBlueprintDocument => ({
 
 describe('WORK 12 strict serialized StoryBlueprint boundary', () => {
     it('creates only story-bound empty narrative memory', () => {
-        expect(createEmptyNarrativeMemoryState('story-owner')).toEqual({
-            kind: 'narrative-memory-state', storyControlId: 'story-owner', records: [],
+        const seed = createV4ProjectSeed(minimalDocument());
+        expect(createEmptyNarrativeMemoryState(seed.control)).toEqual({
+            kind: 'narrative-memory-state', storyControlId: 'production-story',
+            storyControlIdentity: createStoryControlIdentity(seed.control), records: [],
         });
-        expect(() => createEmptyNarrativeMemoryState('')).toThrow(/non-empty/);
     });
 
     it('parses a valid minimal V4 setup document into a fresh value', () => {
@@ -151,7 +153,11 @@ describe('WORK 12 strict serialized StoryBlueprint boundary', () => {
         const seed = createV4ProjectSeed(minimalDocument());
         expect(seed.control).toMatchObject({ kind: 'full-story-control', id: 'production-story', engine: { schemaVersion: 4 } });
         expect(seed.state).toMatchObject({ kind: 'story-state', currentChapter: 0, revision: 0 });
-        expect(seed.memory).toEqual({ kind: 'narrative-memory-state', storyControlId: seed.control.id, records: [] });
+        expect(seed.storyControlIdentity).toBe(createStoryControlIdentity(seed.control));
+        expect(seed.memory).toEqual({
+            kind: 'narrative-memory-state', storyControlId: seed.control.id,
+            storyControlIdentity: seed.storyControlIdentity, records: [],
+        });
     });
 
     it('uses dedicated safe parse errors for runtime shape failures', () => {

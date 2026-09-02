@@ -10,6 +10,7 @@ import type {
 
 const cursor = (value: ProductionStageCursor) => ({
     storyControlId: value.storyControlId,
+    storyControlIdentity: value.storyControlIdentity,
     baseChapter: value.baseChapter,
     baseRevision: value.baseRevision,
     targetChapter: value.targetChapter,

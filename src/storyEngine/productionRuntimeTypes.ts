@@ -44,6 +44,7 @@ export interface ProductionStoryRuntimePolicy {
 
 export interface ProductionStageCursor {
     readonly storyControlId: string;
+    readonly storyControlIdentity: string;
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly targetChapter: number;
@@ -97,7 +98,7 @@ export interface ProductionRunTelemetry {
 
 export const PRODUCTION_RUNTIME_ERROR_CODES = [
     'INVALID_PROJECT', 'INVALID_CURRENT_CANON', 'STORY_COMPLETE', 'STALE_STAGE_ARTIFACT',
-    'MEMORY_STORY_MISMATCH',
+    'MEMORY_STORY_MISMATCH', 'MEMORY_CANON_MISMATCH',
     'PLAN_PROTOCOL_FAILURE', 'PLAN_VALIDATION_FAILURE', 'WRITER_PROTOCOL_FAILURE',
     'VALIDATION_REJECTED', 'VALIDATOR_INFRASTRUCTURE_FAILURE', 'EXTRACTION_BLOCKED',
     'CANON_REVIEW_BLOCKED', 'MODEL_RUNTIME_FAILURE', 'NO_MODEL_AVAILABLE', 'CANCELLED',

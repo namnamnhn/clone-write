@@ -10,7 +10,7 @@ import { parseStoryState, parseStoryStateDelta } from './storyStateRuntime';
 import type { FactProvenance, StoryStateDeltaV2 } from './storyStateTypes';
 import type { FullStoryControl, StoryState } from './types';
 import type { ValidatedChapterSource, ValidationApprovedCandidate } from './validationTypes';
-import { createCanonicalizationSourceIdentity } from './canonicalIdentity';
+import { createCanonicalizationSourceIdentity, createStoryControlIdentity } from './canonicalIdentity';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -42,6 +42,7 @@ export const validateApprovedExtractionSource = (
         || approvedValue.report.status !== 'passed' || approvedValue.report.blockingIssueCount !== 0
         || !isRecord(approvedValue.draft) || !isRecord(approvedValue.source)
         || approvedValue.source.kind !== 'validated-chapter-source'
+        || typeof approvedValue.source.storyControlIdentity !== 'string'
         || typeof approvedValue.source.canonicalizationSourceIdentity !== 'string'
         || !isRecord(approvedValue.source.chapterPlan)) {
         return [issue('INVALID_APPROVED_SOURCE', 'approved')];
@@ -56,12 +57,17 @@ export const validateApprovedExtractionSource = (
     const source = approved.source;
     const issues: StateExtractionIssue[] = [];
     if (source.storyControlId !== control.id) issues.push(issue('SOURCE_CONTROL_MISMATCH', 'approved.source.storyControlId'));
+    const expectedStoryControlIdentity = createStoryControlIdentity(control);
+    if (source.storyControlIdentity !== expectedStoryControlIdentity) {
+        issues.push(issue('SOURCE_CONTROL_MISMATCH', 'approved.source.storyControlIdentity'));
+    }
     if (source.baseChapter !== state.currentChapter) issues.push(issue('SOURCE_CHAPTER_MISMATCH', 'approved.source.baseChapter'));
     if (source.baseRevision !== state.revision) issues.push(issue('SOURCE_REVISION_MISMATCH', 'approved.source.baseRevision'));
     let recomputedIdentity: string | undefined;
     try {
         recomputedIdentity = createCanonicalizationSourceIdentity({
             storyControlId: source.storyControlId,
+            storyControlIdentity: source.storyControlIdentity,
             baseChapter: source.baseChapter,
             baseRevision: source.baseRevision,
             chapterPlan: source.chapterPlan,

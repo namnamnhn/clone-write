@@ -32,6 +32,7 @@ import {
     WriterCharacterProfile,
 } from './types';
 import { createEmptyNarrativeMemoryState, NarrativeMemoryState } from './narrativeMemory';
+import { createStoryControlIdentity } from './canonicalIdentity';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -360,6 +361,7 @@ export const parseStoryBlueprintJson = (source: string): StoryBlueprintDocument 
 
 export interface V4ProjectSeed {
     readonly kind: 'v4-project-seed';
+    readonly storyControlIdentity: string;
     readonly control: ReturnType<typeof compileStoryControl>;
     readonly state: ReturnType<typeof parseStoryState>;
     readonly memory: NarrativeMemoryState;
@@ -369,5 +371,6 @@ export const createV4ProjectSeed = (documentValue: unknown): V4ProjectSeed => {
     const document = parseStoryBlueprintDocument(documentValue);
     const control = compileStoryControl(document.blueprint);
     const state = parseStoryState(createInitialStoryState(), control);
-    return { kind: 'v4-project-seed', control, state, memory: createEmptyNarrativeMemoryState(control.id) };
+    const storyControlIdentity = createStoryControlIdentity(control);
+    return { kind: 'v4-project-seed', storyControlIdentity, control, state, memory: createEmptyNarrativeMemoryState(control) };
 };

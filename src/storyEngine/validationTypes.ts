@@ -64,6 +64,7 @@ export interface ValidationApprovedCandidate {
 export interface ValidatedChapterSource {
     readonly kind: 'validated-chapter-source';
     readonly storyControlId: string;
+    readonly storyControlIdentity: string;
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly chapterPlan: WriterChapterPlan;

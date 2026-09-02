@@ -108,6 +108,7 @@ export interface CanonCommitProposal {
     readonly kind: 'canon-commit-proposal';
     readonly status: 'ready-for-review';
     readonly storyControlId: string;
+    readonly storyControlIdentity: string;
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly targetChapter: number;

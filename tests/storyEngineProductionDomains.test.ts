@@ -13,6 +13,7 @@ import {
 } from '../src/storyEngine';
 import { LONG_RUN_CONTROL, politicalActionFor } from './fixtures/storyEngineLongRunFixture';
 import { buildSampleInternalPlan, runLongRun } from './helpers/storyEngineLongRunHarness';
+import { createSyntheticNarrativeMemory } from './helpers/storyEngineNarrativeMemoryFixture';
 
 const emptyDelta = (chapter: number, changes: Partial<Record<string, readonly unknown[]>> = {}) => ({
     kind: 'story-state-delta' as const, schemaVersion: 2 as const, chapterNumber: chapter, expectedRevision: chapter - 1,
@@ -26,8 +27,9 @@ describe('WORK 12 privileged domain orchestration', () => {
         const state = runLongRun(createInitialStoryState(), 588).finalState;
         let writerPlan: unknown;
         let validatorView: unknown;
+        let plannerCalls = 0;
         const models: StoryEngineModelBundle = {
-            planner: { async plan(context) { return buildSampleInternalPlan(context, [politicalActionFor(589)]); } },
+            planner: { async plan(context) { plannerCalls += 1; return buildSampleInternalPlan(context, [politicalActionFor(589)]); } },
             writer: { async write(request) {
                 writerPlan = request.context.chapterPlan;
                 return { kind: 'writer-chapter-draft', chapterNumber: 589, prose: 'Atlas follows the charter procedure and accepts the delay risk.' };
@@ -48,7 +50,14 @@ describe('WORK 12 privileged domain orchestration', () => {
             } },
         };
         const runtime = createProductionStoryRuntime({ models });
-        const result = await runtime.runChapterToCanonReview({ control: LONG_RUN_CONTROL, state, memoryState: createEmptyNarrativeMemoryState(LONG_RUN_CONTROL.id) });
+        const missingMemory = await runtime.runChapterToCanonReview({
+            control: LONG_RUN_CONTROL, state, memoryState: createEmptyNarrativeMemoryState(LONG_RUN_CONTROL),
+        });
+        expect(missingMemory).toMatchObject({ status: 'blocked', stage: 'planning', code: 'MEMORY_CANON_MISMATCH' });
+        expect(plannerCalls).toBe(0);
+        const result = await runtime.runChapterToCanonReview({
+            control: LONG_RUN_CONTROL, state, memoryState: createSyntheticNarrativeMemory(LONG_RUN_CONTROL, state),
+        });
         expect(result.status).toBe('ready-for-canon-review');
         expect(writerPlan).toMatchObject({ strategicDirectives: [{ domain: 'politics' }] });
         expect(JSON.stringify(writerPlan)).not.toContain('evidenceRefs');
@@ -123,7 +132,7 @@ describe('WORK 12 privileged domain orchestration', () => {
             }; } },
         };
         const runtime = createProductionStoryRuntime({ models });
-        const result = await runtime.runChapterToCanonReview({ control, state, memoryState: createEmptyNarrativeMemoryState(control.id) });
+        const result = await runtime.runChapterToCanonReview({ control, state, memoryState: createSyntheticNarrativeMemory(control, state) });
         expect(result.status).toBe('ready-for-canon-review');
         expect(writerDirective).toMatchObject([{ relationshipId: 'a-b', intendedProgression: { romanticMilestone: 'interest', expectedState: 'interest' } }]);
         expect(validatorRelationshipView).toMatchObject({ kind: 'validator-relationship-view', actions: [{ relationshipId: 'a-b' }] });

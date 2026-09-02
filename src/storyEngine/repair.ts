@@ -6,7 +6,7 @@ import { SemanticValidatorModel } from './semanticValidator';
 import { validateWriterChapter, WriterChapterValidationResult } from './validator';
 import { ValidatorContextSelectionPolicy } from './validatorContext';
 import { buildValidationReport, createValidationIssue, RepairCandidateSnapshot, ValidationIssueCode, ValidationPipelineResult, ValidationReport } from './validationTypes';
-import { createCanonicalizationSourceIdentity } from './canonicalIdentity';
+import { createCanonicalizationSourceIdentity, createStoryControlIdentity } from './canonicalIdentity';
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
 
@@ -116,8 +116,10 @@ export const validateAndRepairWriterChapter = async (request: ValidateAndRepairR
                 ));
             }
             const finalPlan = structuredClone(validation.context.chapterPlan);
+            const storyControlIdentity = createStoryControlIdentity(request.control);
             const canonicalizationSourceIdentity = createCanonicalizationSourceIdentity({
                 storyControlId: request.control.id,
+                storyControlIdentity,
                 baseChapter: request.state.currentChapter,
                 baseRevision: request.state.revision,
                 chapterPlan: finalPlan,
@@ -127,6 +129,7 @@ export const validateAndRepairWriterChapter = async (request: ValidateAndRepairR
                 status: 'approved-not-canon', draft: validation.draft, report: validation.report, repairAttempts: attempts,
                 source: {
                     kind: 'validated-chapter-source', storyControlId: request.control.id,
+                    storyControlIdentity,
                     baseChapter: request.state.currentChapter, baseRevision: request.state.revision,
                     chapterPlan: finalPlan, canonicalizationSourceIdentity,
                 },
