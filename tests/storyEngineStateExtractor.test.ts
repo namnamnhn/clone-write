@@ -6,6 +6,7 @@ import {
     createMakeCanonConfirmation,
     DEFAULT_STATE_EXTRACTION_CONTEXT_SELECTION_POLICY,
     extractState,
+    getAuthorSecretStatus,
     makeCanon,
     MakeCanonError,
     parseStoryState,
@@ -316,6 +317,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
         expect(next.resources.a[0]).toMatchObject({ id: 'money', name: 'Money', quantity: 90 });
         expect(next.relationships).toContainEqual(expect.objectContaining({ id: 'rel-ab', state: 'allies' }));
         expect(next.ledgers.revealOccurrences).toContainEqual(expect.objectContaining({ revealId: 'reveal-alpha' }));
+        expect(getAuthorSecretStatus(control, next, 'vault-alpha', 2)).toBe('revealed');
         expect(JSON.stringify(next)).not.toContain(RAW_VAULT);
         expect(parseStoryState(next, control)).toEqual(next);
         expect(JSON.stringify(state)).toBe(before);
