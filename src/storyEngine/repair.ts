@@ -142,7 +142,8 @@ export const validateAndRepairWriterChapter = async (request: ValidateAndRepairR
         try {
             const output = await request.repairModel.repair({ kind: 'repair-model-request', context: repairContext, prompt: buildRepairPrompt(repairContext) });
             candidate = parseWriterChapterDraft(output, request.plan.chapterNumber);
-        } catch {
+        } catch (error) {
+            if (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError')) throw error;
             const failure = createValidationIssue('REPAIR_PROTOCOL_FAILURE', 'critical', 'infrastructure');
             return rejectValidation(validation, attempts, buildValidationReport(request.plan.chapterNumber, attempts + 1, [...validation.report.issues, failure]));
         }

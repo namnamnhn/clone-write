@@ -236,7 +236,8 @@ export const extractState = async (request: ExtractStateRequest): Promise<StateE
     let output: unknown;
     try {
         output = await request.model.extract(modelRequest);
-    } catch {
+    } catch (error) {
+        if (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError')) throw error;
         return { status: 'blocked', issues: [issue('EXTRACTOR_PROTOCOL_FAILURE', 'model.extract')] };
     }
     if (!isRecord(output) || output.kind !== 'story-state-delta') {
