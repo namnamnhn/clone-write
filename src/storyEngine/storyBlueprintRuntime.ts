@@ -369,5 +369,5 @@ export const createV4ProjectSeed = (documentValue: unknown): V4ProjectSeed => {
     const document = parseStoryBlueprintDocument(documentValue);
     const control = compileStoryControl(document.blueprint);
     const state = parseStoryState(createInitialStoryState(), control);
-    return { kind: 'v4-project-seed', control, state, memory: createEmptyNarrativeMemoryState() };
+    return { kind: 'v4-project-seed', control, state, memory: createEmptyNarrativeMemoryState(control.id) };
 };

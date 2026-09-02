@@ -95,7 +95,11 @@ export const resolveStoryEngineModelRoute = (
     availableModelIds: readonly string[] = MODEL_CONFIGS.map(model => model.id),
 ): StoryEngineModelRoute => {
     const route = normalizeStoryEngineModelRoute(routeValue, `modelRolePolicy.${role}`);
-    const enabled = new Set(availableModelIds.filter(id => typeof id === 'string' && id.trim().toLowerCase().startsWith('gemini-')));
+    const configuredTextModels = new Set(MODEL_CONFIGS
+        .filter(model => model.id.toLowerCase().startsWith('gemini-') && model.family !== 'image')
+        .map(model => model.id));
+    const callerAvailability = new Set(availableModelIds.filter(id => typeof id === 'string'));
+    const enabled = new Set([...configuredTextModels].filter(id => callerAvailability.has(id)));
     const candidateModelIds = route.candidateModelIds.filter(id => enabled.has(id));
     if (candidateModelIds.length === 0) {
         throw new StoryEngineModelPolicyError('NO_MODEL_AVAILABLE', `no configured Gemini model is available for ${role}`);

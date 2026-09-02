@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     StoryBlueprintDocument,
     StoryBlueprintParseError,
+    createEmptyNarrativeMemoryState,
     createV4ProjectSeed,
     parseStoryBlueprint,
     parseStoryBlueprintDocument,
@@ -60,6 +61,13 @@ const fullDocument = (): StoryBlueprintDocument => ({
 });
 
 describe('WORK 12 strict serialized StoryBlueprint boundary', () => {
+    it('creates only story-bound empty narrative memory', () => {
+        expect(createEmptyNarrativeMemoryState('story-owner')).toEqual({
+            kind: 'narrative-memory-state', storyControlId: 'story-owner', records: [],
+        });
+        expect(() => createEmptyNarrativeMemoryState('')).toThrow(/non-empty/);
+    });
+
     it('parses a valid minimal V4 setup document into a fresh value', () => {
         const input = minimalDocument();
         const parsed = parseStoryBlueprintDocument(input);
@@ -143,7 +151,7 @@ describe('WORK 12 strict serialized StoryBlueprint boundary', () => {
         const seed = createV4ProjectSeed(minimalDocument());
         expect(seed.control).toMatchObject({ kind: 'full-story-control', id: 'production-story', engine: { schemaVersion: 4 } });
         expect(seed.state).toMatchObject({ kind: 'story-state', currentChapter: 0, revision: 0 });
-        expect(seed.memory).toEqual({ kind: 'narrative-memory-state', records: [] });
+        expect(seed.memory).toEqual({ kind: 'narrative-memory-state', storyControlId: seed.control.id, records: [] });
     });
 
     it('uses dedicated safe parse errors for runtime shape failures', () => {

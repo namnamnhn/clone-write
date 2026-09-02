@@ -1,4 +1,5 @@
 import { canonicalContentIdentity } from './canonicalIdentity';
+import type { StoryState } from './types';
 import type {
     ProductionDraftArtifact,
     ProductionExtractionArtifact,
@@ -12,12 +13,17 @@ const cursor = (value: ProductionStageCursor) => ({
     baseChapter: value.baseChapter,
     baseRevision: value.baseRevision,
     targetChapter: value.targetChapter,
+    baseCanonIdentity: value.baseCanonIdentity,
 });
+
+export const createProductionCanonIdentity = (state: StoryState): string =>
+    canonicalContentIdentity('production-canon-state-v1', state);
 
 export const createProductionPlanArtifactIdentity = (
     value: Omit<ProductionPlanArtifact, 'kind' | 'artifactIdentity'>,
 ): string => canonicalContentIdentity('production-plan-artifact-v1', {
-    ...cursor(value), writerPlan: value.writerPlan, privileged: value.privileged,
+    ...cursor(value), memoryIdentity: value.memoryIdentity,
+    writerPlan: value.writerPlan, privileged: value.privileged,
 });
 
 export const createProductionDraftArtifactIdentity = (

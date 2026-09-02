@@ -1,5 +1,5 @@
 import { buildCanonCommitReview, prepareCanonCommit } from './canonCommit';
-import { canonicalValuesEqual, createCanonProposalIdentity } from './canonicalIdentity';
+import { canonicalContentIdentity, canonicalValuesEqual, createCanonProposalIdentity } from './canonicalIdentity';
 import { NarrativeMemoryInput, RawChapterMemory, StructuredChapterMemory, LongTermMemory } from './plannerTypes';
 import { assertModelBoundaryStringsSecretSafe } from './secretTextSafety';
 import { CanonCommitProposal } from './stateExtractorTypes';
@@ -7,12 +7,16 @@ import { applyStoryStateDelta, parseStoryState } from './storyStateRuntime';
 import { FullStoryControl, StoryState } from './types';
 import { ValidationApprovedCandidate } from './validationTypes';
 import { validateApprovedExtractionSource, isValidatedExtractionSource } from './stateExtractor';
+import { createProductionCanonIdentity } from './productionArtifactIdentity';
 
 export interface CanonicalChapterMemoryRecord {
     readonly kind: 'canonical-chapter-memory-record';
+    readonly storyControlId: string;
     readonly chapterNumber: number;
     readonly canonicalizationSourceIdentity: string;
     readonly proposalIdentity: string;
+    readonly beforeCanonIdentity: string;
+    readonly afterCanonIdentity: string;
     readonly raw: RawChapterMemory;
     readonly structured: StructuredChapterMemory;
     readonly longTerm?: LongTermMemory;
@@ -20,6 +24,7 @@ export interface CanonicalChapterMemoryRecord {
 
 export interface NarrativeMemoryState {
     readonly kind: 'narrative-memory-state';
+    readonly storyControlId: string;
     readonly records: readonly CanonicalChapterMemoryRecord[];
 }
 
@@ -39,6 +44,7 @@ export const LONG_TERM_MEMORY_MINIMUM_SALIENCE = 3;
 
 export type NarrativeMemoryErrorCode =
     | 'INVALID_MEMORY_STATE'
+    | 'MEMORY_STORY_MISMATCH'
     | 'INVALID_CANON_TRANSITION'
     | 'MEMORY_SOURCE_MISMATCH'
     | 'MEMORY_CHAPTER_CONFLICT'
@@ -54,42 +60,110 @@ export class NarrativeMemoryError extends Error {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
 
-export const createEmptyNarrativeMemoryState = (): NarrativeMemoryState => ({
+const exactObject = (value: unknown, path: string, keys: readonly string[]): Record<string, unknown> => {
+    if (!isRecord(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+        throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path} must be a plain object`);
+    }
+    const unsupported = Object.keys(value).find(key => !keys.includes(key));
+    if (unsupported !== undefined) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.${unsupported} is unsupported`);
+    return value;
+};
+
+const nonEmptyString = (value: unknown, path: string): string => {
+    if (typeof value !== 'string' || !value.trim()) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path} must be a non-empty string`);
+    return value;
+};
+
+const positiveChapter = (value: unknown, path: string): number => {
+    if (!Number.isSafeInteger(value) || (value as number) < 1) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path} must be a positive safe integer`);
+    return value as number;
+};
+
+const parseRawMemory = (value: unknown, chapterNumber: number, path: string): RawChapterMemory => {
+    const input = exactObject(value, path, ['chapterNumber', 'text']);
+    const parsed = { chapterNumber: positiveChapter(input.chapterNumber, `${path}.chapterNumber`), text: nonEmptyString(input.text, `${path}.text`) };
+    if (parsed.chapterNumber !== chapterNumber) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.chapterNumber must match its record`);
+    return parsed;
+};
+
+const parseStructuredMemory = (value: unknown, chapterNumber: number, path: string): StructuredChapterMemory => {
+    const input = exactObject(value, path, ['chapterNumber', 'summary', 'factIds']);
+    const parsedChapter = positiveChapter(input.chapterNumber, `${path}.chapterNumber`);
+    if (parsedChapter !== chapterNumber) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.chapterNumber must match its record`);
+    let factIds: string[] | undefined;
+    if (input.factIds !== undefined) {
+        if (!Array.isArray(input.factIds)) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.factIds must be an array`);
+        factIds = input.factIds.map((entry, index) => nonEmptyString(entry, `${path}.factIds.${index}`));
+        if (new Set(factIds).size !== factIds.length) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.factIds must not contain duplicates`);
+    }
+    return { chapterNumber: parsedChapter, summary: nonEmptyString(input.summary, `${path}.summary`), ...(factIds === undefined ? {} : { factIds }) };
+};
+
+const parseLongTermMemory = (value: unknown, chapterNumber: number, path: string): LongTermMemory => {
+    const input = exactObject(value, path, ['id', 'establishedChapter', 'summary', 'relevance']);
+    const establishedChapter = positiveChapter(input.establishedChapter, `${path}.establishedChapter`);
+    if (establishedChapter !== chapterNumber) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.establishedChapter must match its record`);
+    if (input.relevance !== undefined && (typeof input.relevance !== 'number' || !Number.isFinite(input.relevance) || input.relevance < 0)) {
+        throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.relevance must be a finite non-negative number`);
+    }
+    return {
+        id: nonEmptyString(input.id, `${path}.id`), establishedChapter,
+        summary: nonEmptyString(input.summary, `${path}.summary`),
+        ...(input.relevance === undefined ? {} : { relevance: input.relevance as number }),
+    };
+};
+
+export const createEmptyNarrativeMemoryState = (storyControlId: string): NarrativeMemoryState => ({
     kind: 'narrative-memory-state',
+    storyControlId: nonEmptyString(storyControlId, 'storyControlId'),
     records: [],
 });
 
-const requireMemoryState = (value: NarrativeMemoryState): NarrativeMemoryState => {
-    if (!value || value.kind !== 'narrative-memory-state' || !Array.isArray(value.records)) {
+export const parseNarrativeMemoryState = (value: unknown, expectedStoryControlId?: string): NarrativeMemoryState => {
+    const input = exactObject(value, 'memoryState', ['kind', 'storyControlId', 'records']);
+    if (input.kind !== 'narrative-memory-state' || !Array.isArray(input.records)) {
         throw new NarrativeMemoryError('INVALID_MEMORY_STATE', 'a narrative-memory-state is required');
     }
-    let previous = 0;
-    const seen = new Set<number>();
-    const records = value.records.map((entry) => {
-        if (!entry || entry.kind !== 'canonical-chapter-memory-record'
-            || !Number.isSafeInteger(entry.chapterNumber) || entry.chapterNumber < 1
-            || typeof entry.canonicalizationSourceIdentity !== 'string' || !entry.canonicalizationSourceIdentity
-            || typeof entry.proposalIdentity !== 'string' || !entry.proposalIdentity
-            || entry.raw?.chapterNumber !== entry.chapterNumber || typeof entry.raw.text !== 'string' || !entry.raw.text.trim()
-            || entry.structured?.chapterNumber !== entry.chapterNumber || typeof entry.structured.summary !== 'string' || !entry.structured.summary.trim()
-            || (entry.longTerm !== undefined && (entry.longTerm.establishedChapter !== entry.chapterNumber
-                || typeof entry.longTerm.id !== 'string' || !entry.longTerm.id
-                || typeof entry.longTerm.summary !== 'string' || !entry.longTerm.summary.trim()
-                || (entry.longTerm.relevance !== undefined && (!Number.isFinite(entry.longTerm.relevance) || entry.longTerm.relevance < 0))))) {
-            throw new NarrativeMemoryError('INVALID_MEMORY_STATE', 'memory contains a malformed record');
+    const storyControlId = nonEmptyString(input.storyControlId, 'memoryState.storyControlId');
+    if (expectedStoryControlId !== undefined && storyControlId !== expectedStoryControlId) {
+        throw new NarrativeMemoryError('MEMORY_STORY_MISMATCH', 'narrative memory belongs to a different story');
+    }
+    let previousAfterCanonIdentity: string | undefined;
+    const records = input.records.map((valueEntry, index): CanonicalChapterMemoryRecord => {
+        const path = `memoryState.records.${index}`;
+        const entry = exactObject(valueEntry, path, [
+            'kind', 'storyControlId', 'chapterNumber', 'canonicalizationSourceIdentity', 'proposalIdentity',
+            'beforeCanonIdentity', 'afterCanonIdentity', 'raw', 'structured', 'longTerm',
+        ]);
+        if (entry.kind !== 'canonical-chapter-memory-record') throw new NarrativeMemoryError('INVALID_MEMORY_STATE', `${path}.kind is invalid`);
+        const recordStoryControlId = nonEmptyString(entry.storyControlId, `${path}.storyControlId`);
+        if (recordStoryControlId !== storyControlId) throw new NarrativeMemoryError('MEMORY_STORY_MISMATCH', `${path} belongs to a different story`);
+        const chapterNumber = positiveChapter(entry.chapterNumber, `${path}.chapterNumber`);
+        if (chapterNumber !== index + 1) throw new NarrativeMemoryError('INVALID_MEMORY_STATE', 'memory chapters must begin at C1 and append sequentially');
+        const beforeCanonIdentity = nonEmptyString(entry.beforeCanonIdentity, `${path}.beforeCanonIdentity`);
+        const afterCanonIdentity = nonEmptyString(entry.afterCanonIdentity, `${path}.afterCanonIdentity`);
+        if (previousAfterCanonIdentity !== undefined && beforeCanonIdentity !== previousAfterCanonIdentity) {
+            throw new NarrativeMemoryError('MEMORY_CHAPTER_CONFLICT', 'memory Canon lineage is not continuous');
         }
-        if (seen.has(entry.chapterNumber) || entry.chapterNumber <= previous) {
-            throw new NarrativeMemoryError('INVALID_MEMORY_STATE', 'memory chapters must be unique and strictly increasing');
-        }
-        seen.add(entry.chapterNumber);
-        previous = entry.chapterNumber;
-        return structuredClone(entry);
+        previousAfterCanonIdentity = afterCanonIdentity;
+        return {
+            kind: 'canonical-chapter-memory-record', storyControlId, chapterNumber,
+            canonicalizationSourceIdentity: nonEmptyString(entry.canonicalizationSourceIdentity, `${path}.canonicalizationSourceIdentity`),
+            proposalIdentity: nonEmptyString(entry.proposalIdentity, `${path}.proposalIdentity`),
+            beforeCanonIdentity, afterCanonIdentity,
+            raw: parseRawMemory(entry.raw, chapterNumber, `${path}.raw`),
+            structured: parseStructuredMemory(entry.structured, chapterNumber, `${path}.structured`),
+            ...(entry.longTerm === undefined ? {} : { longTerm: parseLongTermMemory(entry.longTerm, chapterNumber, `${path}.longTerm`) }),
+        };
     });
-    return { kind: 'narrative-memory-state', records };
+    return { kind: 'narrative-memory-state', storyControlId, records };
 };
 
-export const buildNarrativeMemoryInput = (memoryState: NarrativeMemoryState): NarrativeMemoryInput => {
-    const state = requireMemoryState(memoryState);
+export const createNarrativeMemoryIdentity = (memoryState: unknown, expectedStoryControlId?: string): string =>
+    canonicalContentIdentity('production-narrative-memory-v1', parseNarrativeMemoryState(memoryState, expectedStoryControlId));
+
+export const buildNarrativeMemoryInput = (memoryState: unknown, expectedStoryControlId?: string): NarrativeMemoryInput => {
+    const state = parseNarrativeMemoryState(memoryState, expectedStoryControlId);
     return {
         recentRawChapters: state.records.map(entry => structuredClone(entry.raw)),
         structuredRecentSummaries: state.records.map(entry => structuredClone(entry.structured)),
@@ -177,11 +251,11 @@ export interface RecordCanonicalChapterMemoryRequest {
     readonly afterState: StoryState | unknown;
     readonly approved: ValidationApprovedCandidate | unknown;
     readonly proposal: CanonCommitProposal | unknown;
-    readonly memoryState: NarrativeMemoryState;
+    readonly memoryState: NarrativeMemoryState | unknown;
 }
 
 export const recordCanonicalChapterMemory = (request: RecordCanonicalChapterMemoryRequest): NarrativeMemoryState => {
-    const memory = requireMemoryState(request.memoryState);
+    const memory = parseNarrativeMemoryState(request.memoryState, request.control.id);
     try {
         assertModelBoundaryStringsSecretSafe(request.control, memory, 'narrativeMemoryState');
     } catch {
@@ -237,18 +311,31 @@ export const recordCanonicalChapterMemory = (request: RecordCanonicalChapterMemo
     if (!canonicalValuesEqual(expected, after)) {
         throw new NarrativeMemoryError('INVALID_CANON_TRANSITION', 'afterState is not the exact committed proposal result');
     }
+    const beforeCanonIdentity = createProductionCanonIdentity(before);
+    const afterCanonIdentity = createProductionCanonIdentity(after);
     const existing = memory.records.find(entry => entry.chapterNumber === proposal.targetChapter);
     if (existing !== undefined) {
-        if (existing.canonicalizationSourceIdentity === proposal.sourceIdentity && existing.proposalIdentity === proposal.proposalIdentity) {
-            return request.memoryState;
+        if (existing.storyControlId === request.control.id
+            && existing.canonicalizationSourceIdentity === proposal.sourceIdentity
+            && existing.proposalIdentity === proposal.proposalIdentity
+            && existing.beforeCanonIdentity === beforeCanonIdentity
+            && existing.afterCanonIdentity === afterCanonIdentity) {
+            return memory;
         }
         throw new NarrativeMemoryError('MEMORY_CHAPTER_CONFLICT', 'a different canonical source is already recorded for this chapter');
+    }
+    const previous = memory.records.at(-1);
+    if ((previous === undefined && (proposal.targetChapter !== 1 || before.currentChapter !== 0))
+        || (previous !== undefined && (proposal.targetChapter !== previous.chapterNumber + 1
+            || previous.afterCanonIdentity !== beforeCanonIdentity))) {
+        throw new NarrativeMemoryError('MEMORY_CHAPTER_CONFLICT', 'canonical memory must append one continuous chapter transition');
     }
     const structured = buildStructuredMemory(request.control, approved, proposal);
     const relevance = salienceFor(proposal);
     const record: CanonicalChapterMemoryRecord = {
-        kind: 'canonical-chapter-memory-record', chapterNumber: proposal.targetChapter,
+        kind: 'canonical-chapter-memory-record', storyControlId: request.control.id, chapterNumber: proposal.targetChapter,
         canonicalizationSourceIdentity: proposal.sourceIdentity, proposalIdentity: proposal.proposalIdentity,
+        beforeCanonIdentity, afterCanonIdentity,
         raw: { chapterNumber: proposal.targetChapter, text: approved.draft.prose },
         structured,
         ...(relevance < LONG_TERM_MEMORY_MINIMUM_SALIENCE ? {} : {
@@ -265,5 +352,5 @@ export const recordCanonicalChapterMemory = (request: RecordCanonicalChapterMemo
     } catch {
         throw new NarrativeMemoryError('MEMORY_SECRET_BOUNDARY', 'canonical memory failed the protected-text boundary');
     }
-    return { kind: 'narrative-memory-state', records: [...memory.records, record] };
+    return { kind: 'narrative-memory-state', storyControlId: request.control.id, records: [...memory.records, record] };
 };

@@ -48,7 +48,7 @@ describe('WORK 12 privileged domain orchestration', () => {
             } },
         };
         const runtime = createProductionStoryRuntime({ models });
-        const result = await runtime.runChapterToCanonReview({ control: LONG_RUN_CONTROL, state, memoryState: createEmptyNarrativeMemoryState() });
+        const result = await runtime.runChapterToCanonReview({ control: LONG_RUN_CONTROL, state, memoryState: createEmptyNarrativeMemoryState(LONG_RUN_CONTROL.id) });
         expect(result.status).toBe('ready-for-canon-review');
         expect(writerPlan).toMatchObject({ strategicDirectives: [{ domain: 'politics' }] });
         expect(JSON.stringify(writerPlan)).not.toContain('evidenceRefs');
@@ -123,7 +123,7 @@ describe('WORK 12 privileged domain orchestration', () => {
             }; } },
         };
         const runtime = createProductionStoryRuntime({ models });
-        const result = await runtime.runChapterToCanonReview({ control, state, memoryState: createEmptyNarrativeMemoryState() });
+        const result = await runtime.runChapterToCanonReview({ control, state, memoryState: createEmptyNarrativeMemoryState(control.id) });
         expect(result.status).toBe('ready-for-canon-review');
         expect(writerDirective).toMatchObject([{ relationshipId: 'a-b', intendedProgression: { romanticMilestone: 'interest', expectedState: 'interest' } }]);
         expect(validatorRelationshipView).toMatchObject({ kind: 'validator-relationship-view', actions: [{ relationshipId: 'a-b' }] });

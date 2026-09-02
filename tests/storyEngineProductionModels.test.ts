@@ -65,7 +65,7 @@ describe('WORK 12 Story Engine model policy', () => {
             .toThrow(StoryEngineModelPolicyError);
     });
 
-    it('filters candidates to configured Gemini IDs and safely rebinds preferred', () => {
+    it('supports Lite-style Pro removal by safely falling back to configured Flash', () => {
         expect(resolveStoryEngineModelRoute('planner', route, ['gemini-3.7-flash'])).toEqual({
             preferredModelId: 'gemini-3.7-flash', candidateModelIds: ['gemini-3.7-flash'], temperature: 0.3,
         });
@@ -73,6 +73,21 @@ describe('WORK 12 Story Engine model policy', () => {
 
     it('fails when an edition has no configured candidate for a role', () => {
         expect(() => resolveStoryEngineModelRoute('planner', route, ['gemini-unrelated'])).toThrow(/no configured Gemini/i);
+    });
+
+    it('does not let caller availability expand the real configured catalog', () => {
+        const fake = { preferredModelId: 'gemini-fake', candidateModelIds: ['gemini-fake'], temperature: 0.2 };
+        expect(() => resolveStoryEngineModelRoute('planner', fake, ['gemini-fake']))
+            .toThrow(expect.objectContaining({ code: 'NO_MODEL_AVAILABLE' } satisfies Partial<StoryEngineModelPolicyError>));
+    });
+
+    it('excludes configured image-only Gemini models from every text role', () => {
+        const imageId = 'gemini-3.1-flash-lite-image';
+        const imageRoute = { preferredModelId: imageId, candidateModelIds: [imageId], temperature: 0.2 };
+        for (const role of STORY_ENGINE_MODEL_ROLES) {
+            expect(() => resolveStoryEngineModelRoute(role, imageRoute, [imageId]))
+                .toThrow(expect.objectContaining({ code: 'NO_MODEL_AVAILABLE' } satisfies Partial<StoryEngineModelPolicyError>));
+        }
     });
 
     it('keeps all default candidates Gemini-only', () => {

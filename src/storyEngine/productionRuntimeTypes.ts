@@ -47,11 +47,13 @@ export interface ProductionStageCursor {
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly targetChapter: number;
+    readonly baseCanonIdentity: string;
 }
 
 export interface ProductionPlanArtifact extends ProductionStageCursor {
     readonly kind: 'production-plan-artifact';
     readonly artifactIdentity: string;
+    readonly memoryIdentity: string;
     readonly writerPlan: WriterChapterPlan;
     readonly privileged: {
         readonly internalPlan: InternalChapterPlan;
@@ -95,6 +97,7 @@ export interface ProductionRunTelemetry {
 
 export const PRODUCTION_RUNTIME_ERROR_CODES = [
     'INVALID_PROJECT', 'INVALID_CURRENT_CANON', 'STORY_COMPLETE', 'STALE_STAGE_ARTIFACT',
+    'MEMORY_STORY_MISMATCH',
     'PLAN_PROTOCOL_FAILURE', 'PLAN_VALIDATION_FAILURE', 'WRITER_PROTOCOL_FAILURE',
     'VALIDATION_REJECTED', 'VALIDATOR_INFRASTRUCTURE_FAILURE', 'EXTRACTION_BLOCKED',
     'CANON_REVIEW_BLOCKED', 'MODEL_RUNTIME_FAILURE', 'NO_MODEL_AVAILABLE', 'CANCELLED',

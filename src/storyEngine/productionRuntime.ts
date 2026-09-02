@@ -2,14 +2,13 @@ import { prepareCanonCommit } from './canonCommit';
 import { buildPlannerContext } from './contextBuilder';
 import { createStructuredPlanner } from './planner';
 import {
-    DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
-    DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
     PlannerModel,
 } from './plannerTypes';
 import { sanitizeWriterChapterPlan } from './planSanitizer';
 import {
     createProductionDraftArtifactIdentity,
     createProductionExtractionArtifactIdentity,
+    createProductionCanonIdentity,
     createProductionPlanArtifactIdentity,
     createProductionValidationArtifactIdentity,
 } from './productionArtifactIdentity';
@@ -25,21 +24,24 @@ import {
     ProductionValidationArtifact,
     StoryEngineModelBundle,
 } from './productionRuntimeTypes';
-import { DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY } from './relationshipContext';
 import { buildValidatorRelationshipView } from './relationshipValidatorContext';
-import { DEFAULT_MAX_REPAIR_ATTEMPTS, RepairModel, validateAndRepairWriterChapter } from './repair';
+import { RepairModel, validateAndRepairWriterChapter } from './repair';
 import { SemanticValidatorModel } from './semanticValidator';
-import { buildNarrativeMemoryInput, NarrativeMemoryState } from './narrativeMemory';
-import { DEFAULT_STATE_EXTRACTION_CONTEXT_SELECTION_POLICY } from './stateExtractionContext';
+import {
+    buildNarrativeMemoryInput,
+    createNarrativeMemoryIdentity,
+    NarrativeMemoryError,
+    NarrativeMemoryState,
+    parseNarrativeMemoryState,
+} from './narrativeMemory';
 import { extractState } from './stateExtractor';
 import { StateExtractorModel } from './stateExtractorTypes';
 import { parseStoryState } from './storyStateRuntime';
 import { buildValidatorStrategicView } from './strategicContext';
 import { FullStoryControl, StoryState } from './types';
-import { DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY } from './validatorContext';
 import { generateWriterDraft } from './writer';
-import { DEFAULT_WRITER_CONTEXT_SELECTION_POLICY, WriterModel } from './writerTypes';
-import { DEFAULT_MAX_CANON_REVIEW_CHANGES } from './canonCommit';
+import { WriterModel } from './writerTypes';
+import { normalizeProductionStoryRuntimePolicy } from './productionRuntimePolicy';
 
 interface ModelTelemetrySource {
     getLastSelectedModelId(): string | undefined;
@@ -54,34 +56,6 @@ const selectedModel = (value: unknown): string | undefined => hasTelemetry(value
 const isCancelled = (error: unknown): boolean => error instanceof Error
     && (error.message === 'ABORTED' || error.name === 'AbortError');
 
-const safeInteger = (value: number, name: string): number => {
-    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative safe integer`);
-    return value;
-};
-
-export const DEFAULT_PRODUCTION_STORY_RUNTIME_POLICY: ProductionStoryRuntimePolicy = {
-    narrativeMemorySelectionPolicy: DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY,
-    plannerContextSelectionPolicy: DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY,
-    writerContextSelectionPolicy: DEFAULT_WRITER_CONTEXT_SELECTION_POLICY,
-    validatorContextSelectionPolicy: DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY,
-    stateExtractionContextSelectionPolicy: DEFAULT_STATE_EXTRACTION_CONTEXT_SELECTION_POLICY,
-    relationshipContextSelectionPolicy: DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY,
-    maxRepairAttempts: DEFAULT_MAX_REPAIR_ATTEMPTS,
-    maxCanonReviewChanges: DEFAULT_MAX_CANON_REVIEW_CHANGES,
-};
-
-const normalizeRuntimePolicy = (value: Partial<ProductionStoryRuntimePolicy> = {}): ProductionStoryRuntimePolicy => ({
-    narrativeMemorySelectionPolicy: structuredClone(value.narrativeMemorySelectionPolicy ?? DEFAULT_NARRATIVE_MEMORY_SELECTION_POLICY),
-    plannerContextSelectionPolicy: structuredClone(value.plannerContextSelectionPolicy ?? DEFAULT_PLANNER_CONTEXT_SELECTION_POLICY),
-    writerContextSelectionPolicy: structuredClone(value.writerContextSelectionPolicy ?? DEFAULT_WRITER_CONTEXT_SELECTION_POLICY),
-    validatorContextSelectionPolicy: structuredClone(value.validatorContextSelectionPolicy ?? DEFAULT_VALIDATOR_CONTEXT_SELECTION_POLICY),
-    stateExtractionContextSelectionPolicy: structuredClone(value.stateExtractionContextSelectionPolicy ?? DEFAULT_STATE_EXTRACTION_CONTEXT_SELECTION_POLICY),
-    relationshipContextSelectionPolicy: structuredClone(value.relationshipContextSelectionPolicy ?? DEFAULT_RELATIONSHIP_CONTEXT_SELECTION_POLICY),
-    maxRepairAttempts: safeInteger(value.maxRepairAttempts ?? DEFAULT_MAX_REPAIR_ATTEMPTS, 'maxRepairAttempts'),
-    maxCanonReviewChanges: safeInteger(value.maxCanonReviewChanges ?? DEFAULT_MAX_CANON_REVIEW_CHANGES, 'maxCanonReviewChanges'),
-    ...(value.modelRolePolicy === undefined ? {} : { modelRolePolicy: structuredClone(value.modelRolePolicy) }),
-});
-
 const strictState = (control: FullStoryControl, value: StoryState | unknown, stage: ProductionRuntimeError['stage'], chapter: number): StoryState => {
     try {
         return parseStoryState(value, control);
@@ -93,12 +67,45 @@ const strictState = (control: FullStoryControl, value: StoryState | unknown, sta
 const assertCursor = (
     storyControlId: string,
     state: StoryState,
-    artifact: { readonly storyControlId: string; readonly baseChapter: number; readonly baseRevision: number; readonly targetChapter: number },
+    artifact: {
+        readonly storyControlId: string;
+        readonly baseChapter: number;
+        readonly baseRevision: number;
+        readonly targetChapter: number;
+        readonly baseCanonIdentity: string;
+    },
     stage: ProductionRuntimeError['stage'],
 ): void => {
     if (artifact.storyControlId !== storyControlId || artifact.baseChapter !== state.currentChapter
         || artifact.baseRevision !== state.revision || artifact.targetChapter !== state.currentChapter + 1) {
         throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, state.currentChapter + 1);
+    }
+    if (artifact.baseCanonIdentity !== createProductionCanonIdentity(state)) {
+        throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, state.currentChapter + 1);
+    }
+};
+
+const requireProductionMemory = (
+    controlId: string,
+    state: StoryState,
+    memoryState: NarrativeMemoryState,
+    stage: ProductionRuntimeError['stage'],
+    chapter: number,
+): NarrativeMemoryState => {
+    try {
+        const parsed = parseNarrativeMemoryState(memoryState, controlId);
+        const latest = parsed.records.at(-1);
+        if (latest !== undefined && (latest.chapterNumber !== state.currentChapter
+            || latest.afterCanonIdentity !== createProductionCanonIdentity(state))) {
+            throw new ProductionRuntimeError('INVALID_PROJECT', stage, chapter);
+        }
+        return parsed;
+    } catch (error) {
+        if (error instanceof ProductionRuntimeError) throw error;
+        if (error instanceof NarrativeMemoryError && error.code === 'MEMORY_STORY_MISMATCH') {
+            throw new ProductionRuntimeError('MEMORY_STORY_MISMATCH', stage, chapter);
+        }
+        throw new ProductionRuntimeError('INVALID_PROJECT', stage, chapter);
     }
 };
 
@@ -182,7 +189,7 @@ export interface CreateProductionStoryRuntimeRequest {
 }
 
 export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPolicy }: CreateProductionStoryRuntimeRequest) => {
-    const runtimePolicy = normalizeRuntimePolicy(suppliedPolicy);
+    const runtimePolicy = normalizeProductionStoryRuntimePolicy(suppliedPolicy);
 
     const planProductionChapter = async (
         request: ProductionStageRequest,
@@ -193,10 +200,13 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         const targetChapter = request.targetChapter ?? state.currentChapter + 1;
         if (targetChapter !== state.currentChapter + 1) throw new ProductionRuntimeError('INVALID_PROJECT', 'planning', targetChapter);
         if (targetChapter > request.control.engine.plannedChapterCount) throw new ProductionRuntimeError('STORY_COMPLETE', 'planning', targetChapter);
+        const memory = requireProductionMemory(request.control.id, state, request.memoryState, 'planning', targetChapter);
+        const memoryInput = buildNarrativeMemoryInput(memory, request.control.id);
+        const memoryIdentity = createNarrativeMemoryIdentity(memory, request.control.id);
         let plannerContext;
         try {
             plannerContext = buildPlannerContext(
-                request.control, state, targetChapter, buildNarrativeMemoryInput(request.memoryState),
+                request.control, state, targetChapter, memoryInput,
                 runtimePolicy.narrativeMemorySelectionPolicy, runtimePolicy.relationshipContextSelectionPolicy,
                 runtimePolicy.plannerContextSelectionPolicy,
             );
@@ -223,7 +233,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             };
             const body = {
                 storyControlId: request.control.id, baseChapter: state.currentChapter, baseRevision: state.revision,
-                targetChapter, writerPlan: structuredClone(writerPlan), privileged: structuredClone(privileged),
+                targetChapter, baseCanonIdentity: createProductionCanonIdentity(state), memoryIdentity,
+                writerPlan: structuredClone(writerPlan), privileged: structuredClone(privileged),
             };
             return { kind: 'production-plan-artifact', artifactIdentity: createProductionPlanArtifactIdentity(body), ...body };
         } catch {
@@ -236,7 +247,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         assertCursor(control.id, state, value, stage);
         const expected = createProductionPlanArtifactIdentity({
             storyControlId: value.storyControlId, baseChapter: value.baseChapter, baseRevision: value.baseRevision,
-            targetChapter: value.targetChapter, writerPlan: value.writerPlan, privileged: value.privileged,
+            targetChapter: value.targetChapter, baseCanonIdentity: value.baseCanonIdentity,
+            memoryIdentity: value.memoryIdentity, writerPlan: value.writerPlan, privileged: value.privileged,
         });
         if (expected !== value.artifactIdentity) throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', stage, value.targetChapter);
         return value;
@@ -248,11 +260,15 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
     ): Promise<ProductionDraftArtifact> => {
         const state = strictState(request.control, request.state, 'writing', request.plan?.targetChapter ?? 0);
         const plan = requirePlan(request.control, state, request.plan, 'writing');
+        const memory = requireProductionMemory(request.control.id, state, request.memoryState, 'writing', plan.targetChapter);
+        if (createNarrativeMemoryIdentity(memory, request.control.id) !== plan.memoryIdentity) {
+            throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'writing', plan.targetChapter);
+        }
         let draft;
         try {
             draft = await generateWriterDraft({
                 control: request.control, state, plan: plan.writerPlan,
-                memoryInput: buildNarrativeMemoryInput(request.memoryState),
+                memoryInput: buildNarrativeMemoryInput(memory, request.control.id),
                 memoryPolicy: runtimePolicy.narrativeMemorySelectionPolicy,
                 contextSelectionPolicy: runtimePolicy.writerContextSelectionPolicy,
                 model: instrumentWriter(models.writer, calls),
@@ -263,7 +279,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         }
         const body = {
             storyControlId: plan.storyControlId, baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
-            targetChapter: plan.targetChapter, planArtifactIdentity: plan.artifactIdentity, draft: structuredClone(draft),
+            targetChapter: plan.targetChapter, baseCanonIdentity: plan.baseCanonIdentity,
+            planArtifactIdentity: plan.artifactIdentity, draft: structuredClone(draft),
         };
         return { kind: 'production-draft-artifact', artifactIdentity: createProductionDraftArtifactIdentity(body), ...body };
     };
@@ -275,7 +292,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         assertCursor(plan.storyControlId, state, value, 'validation');
         const expected = createProductionDraftArtifactIdentity({
             storyControlId: value.storyControlId, baseChapter: value.baseChapter, baseRevision: value.baseRevision,
-            targetChapter: value.targetChapter, planArtifactIdentity: value.planArtifactIdentity, draft: value.draft,
+            targetChapter: value.targetChapter, baseCanonIdentity: value.baseCanonIdentity,
+            planArtifactIdentity: value.planArtifactIdentity, draft: value.draft,
         });
         if (expected !== value.artifactIdentity) throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'validation', plan.targetChapter);
         return value;
@@ -288,6 +306,7 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         const state = strictState(request.control, request.state, 'validation', request.plan?.targetChapter ?? 0);
         const plan = requirePlan(request.control, state, request.plan, 'validation');
         const draft = requireDraft(state, plan, request.draft);
+        const validationCallOffset = calls.length;
         let result;
         try {
             result = await validateAndRepairWriterChapter({
@@ -303,12 +322,16 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
                 relationshipView: plan.privileged.relationshipView,
             });
         } catch (error) {
-            if (isCancelled(error)) throw new ProductionRuntimeError('CANCELLED', 'validation', plan.targetChapter, 'semanticValidator');
+            const failedValidationRole = calls.slice(validationCallOffset).findLast(call => call.status === 'failed'
+                && (call.role === 'semanticValidator' || call.role === 'repair'))?.role;
+            if (isCancelled(error)) throw new ProductionRuntimeError(
+                'CANCELLED', 'validation', plan.targetChapter, failedValidationRole ?? 'semanticValidator',
+            );
             throw new ProductionRuntimeError('MODEL_RUNTIME_FAILURE', 'validation', plan.targetChapter, 'semanticValidator');
         }
         const body = {
             storyControlId: plan.storyControlId, baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
-            targetChapter: plan.targetChapter, planArtifactIdentity: plan.artifactIdentity,
+            targetChapter: plan.targetChapter, baseCanonIdentity: plan.baseCanonIdentity, planArtifactIdentity: plan.artifactIdentity,
             draftArtifactIdentity: draft.artifactIdentity, result: structuredClone(result),
         };
         return { kind: 'production-validation-artifact', artifactIdentity: createProductionValidationArtifactIdentity(body), ...body };
@@ -324,7 +347,7 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         }
         const expected = createProductionValidationArtifactIdentity({
             storyControlId: value.storyControlId, baseChapter: value.baseChapter, baseRevision: value.baseRevision,
-            targetChapter: value.targetChapter, planArtifactIdentity: value.planArtifactIdentity,
+            targetChapter: value.targetChapter, baseCanonIdentity: value.baseCanonIdentity, planArtifactIdentity: value.planArtifactIdentity,
             draftArtifactIdentity: value.draftArtifactIdentity, result: value.result,
         });
         if (expected !== value.artifactIdentity) throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'extraction', plan.targetChapter);
@@ -365,7 +388,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
         }
         const body = {
             storyControlId: plan.storyControlId, baseChapter: plan.baseChapter, baseRevision: plan.baseRevision,
-            targetChapter: plan.targetChapter, validationArtifactIdentity: validation.artifactIdentity,
+            targetChapter: plan.targetChapter, baseCanonIdentity: plan.baseCanonIdentity,
+            validationArtifactIdentity: validation.artifactIdentity,
             result: structuredClone(result),
         };
         return { kind: 'production-extraction-artifact', artifactIdentity: createProductionExtractionArtifactIdentity(body), ...body };
@@ -390,6 +414,7 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             || createProductionExtractionArtifactIdentity({
                 storyControlId: extraction.storyControlId, baseChapter: extraction.baseChapter,
                 baseRevision: extraction.baseRevision, targetChapter: extraction.targetChapter,
+                baseCanonIdentity: extraction.baseCanonIdentity,
                 validationArtifactIdentity: extraction.validationArtifactIdentity, result: extraction.result,
             }) !== extraction.artifactIdentity) {
             throw new ProductionRuntimeError('STALE_STAGE_ARTIFACT', 'canon-review', plan.targetChapter);

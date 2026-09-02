@@ -62,4 +62,5 @@ export * from './narrativeMemory';
 export * from './storyBlueprintRuntime';
 export * from './productionRuntimeTypes';
 export * from './productionArtifactIdentity';
+export * from './productionRuntimePolicy';
 export * from './productionRuntime';
