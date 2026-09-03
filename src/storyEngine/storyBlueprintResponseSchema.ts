@@ -23,7 +23,9 @@ export const STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA = {
         blueprint: { $ref: '#/$defs/blueprint' },
     },
     $defs: {
-        nonEmptyString: { type: 'string', minLength: 1 },
+        // Gemini responseJsonSchema does not support minLength. The strict
+        // runtime parser remains responsible for rejecting empty strings.
+        nonEmptyString: { type: 'string' },
         positiveInteger: { type: 'integer', minimum: 1 },
         nonNegativeInteger: { type: 'integer', minimum: 0 },
         stringArray: { type: 'array', items: { $ref: '#/$defs/nonEmptyString' } },
@@ -100,8 +102,10 @@ export const STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA = {
                     properties: {
                         maxMajorMilestoneAdvancePerChapter: { $ref: '#/$defs/positiveInteger' },
                         maxConsecutiveProgressionChapters: { $ref: '#/$defs/positiveInteger' },
-                        requireCanonicalBasis: { type: 'boolean', enum: [true] },
-                        requireMutualAgencyForMutualMilestone: { type: 'boolean', enum: [true] },
+                        // Gemini supports enum values only for strings/numbers.
+                        // The prompt requires true and the strict parser enforces it.
+                        requireCanonicalBasis: { type: 'boolean' },
+                        requireMutualAgencyForMutualMilestone: { type: 'boolean' },
                     },
                 },
             },

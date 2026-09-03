@@ -5,6 +5,7 @@ import {
     createProductionStoryRuntime,
     createV4ProjectSeed,
     parseStoryBlueprintDocument,
+    STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
 } from '../src/storyEngine';
 import type { StoryBlueprintDocument } from '../src/storyEngine';
 import { createGeminiStoryEngineAdapters } from '../src/services/storyEngine';
@@ -102,6 +103,69 @@ const representativeDocument = (): StoryBlueprintDocument => ({
         canonRules: [{ id: 'trace-rule', text: 'Durable archive choices leave a trace.', availableFromChapter: 1, scope: 'world' }],
     },
 });
+
+const GEMINI_RESPONSE_SCHEMA_KEYWORDS = new Set([
+    '$id', '$defs', '$ref', '$anchor',
+    'type', 'format', 'title', 'description', 'enum',
+    'items', 'prefixItems', 'minItems', 'maxItems', 'minimum', 'maximum',
+    'anyOf', 'oneOf', 'properties', 'additionalProperties', 'required', 'propertyOrdering',
+]);
+
+const auditGeminiResponseSchema = (schema: unknown): readonly string[] => {
+    const issues: string[] = [];
+    const visitSchema = (value: unknown, path: string): void => {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+            issues.push(`${path}: schema node must be an object`);
+            return;
+        }
+        const node = value as Record<string, unknown>;
+        Object.keys(node).forEach((keyword) => {
+            if (!GEMINI_RESPONSE_SCHEMA_KEYWORDS.has(keyword)) issues.push(`${path}: unsupported keyword ${keyword}`);
+        });
+        if ('$ref' in node) {
+            Object.keys(node).filter(key => key !== '$ref' && !key.startsWith('$')).forEach((key) => {
+                issues.push(`${path}: $ref has ordinary sibling ${key}`);
+            });
+        }
+        if ('enum' in node) {
+            if (!Array.isArray(node.enum)) {
+                issues.push(`${path}.enum: must be an array`);
+            } else {
+                node.enum.forEach((member, index) => {
+                    if (typeof member !== 'string' && !(typeof member === 'number' && Number.isFinite(member))) {
+                        issues.push(`${path}.enum.${index}: must be a string or finite number`);
+                    }
+                });
+            }
+        }
+        (['properties', '$defs'] as const).forEach((mapKey) => {
+            const map = node[mapKey];
+            if (map === undefined) return;
+            if (typeof map !== 'object' || map === null || Array.isArray(map)) {
+                issues.push(`${path}.${mapKey}: must be an object map`);
+                return;
+            }
+            Object.entries(map as Record<string, unknown>).forEach(([dataKey, child]) => {
+                visitSchema(child, `${path}.${mapKey}.${dataKey}`);
+            });
+        });
+        (['anyOf', 'oneOf', 'prefixItems'] as const).forEach((listKey) => {
+            const list = node[listKey];
+            if (list === undefined) return;
+            if (!Array.isArray(list)) {
+                issues.push(`${path}.${listKey}: must be an array`);
+                return;
+            }
+            list.forEach((child, index) => visitSchema(child, `${path}.${listKey}.${index}`));
+        });
+        if (node.items !== undefined) visitSchema(node.items, `${path}.items`);
+        if (typeof node.additionalProperties === 'object' && node.additionalProperties !== null) {
+            visitSchema(node.additionalProperties, `${path}.additionalProperties`);
+        }
+    };
+    visitSchema(schema, 'responseJsonSchema');
+    return issues;
+};
 
 const chapterFrom = (contents: string): number => {
     const match = contents.match(/"targetChapter":(\d+)/) ?? contents.match(/"chapterNumber":(\d+)/) ?? contents.match(/chapter (\d+)/i);
@@ -716,6 +780,20 @@ describe('WORK 13 Story Studio production persistence', () => {
         ].join('\n')).plannedChapterCount).toBe(600);
     });
 
+    it('audits Gemini schema keywords while treating properties and $defs names as data keys', () => {
+        expect(auditGeminiResponseSchema({
+            type: 'object',
+            properties: { availableFromChapter: { type: 'integer' } },
+            $defs: { futureCharacter: { type: 'object', additionalProperties: false } },
+        })).toEqual([]);
+        expect(auditGeminiResponseSchema({ type: 'string', minLength: 1 }))
+            .toEqual(['responseJsonSchema: unsupported keyword minLength']);
+        expect(auditGeminiResponseSchema({ type: 'string', enum: ['valid', 1, true, null, {}, [], Number.POSITIVE_INFINITY] }))
+            .toHaveLength(5);
+        expect(auditGeminiResponseSchema({ $ref: '#/$defs/item', description: 'forbidden ordinary sibling' }))
+            .toEqual(['responseJsonSchema: $ref has ordinary sibling description']);
+    });
+
     it('setup compiler prompt marks the complete source as DATA', () => {
         const prompt = buildStorySetupCompilerPrompt('PRIVATE_SETUP_PAYLOAD');
         expect(prompt).toContain('BEGIN_AUTHOR_SETUP_DATA');
@@ -756,7 +834,19 @@ describe('WORK 13 Story Studio production persistence', () => {
             },
         });
         expect(events).toEqual(['smartExecution', 'getAiClient', 'generateContent']);
+        expect(generatedContents).toContain('BEGIN_AUTHOR_SETUP_DATA');
         expect(generatedContents).toContain('COMPLETE_PRIVATE_AUTHOR_SETUP');
+        expect(generatedContents).toContain('END_AUTHOR_SETUP_DATA');
+        expect(generatedContents).toContain('requireCanonicalBasis=true');
+        expect(generatedContents).toContain('requireMutualAgencyForMutualMilestone=true');
+        expect(generatedContents).not.toContain('DeepSeek');
+        expect(generatedSchema).toBe(STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA);
+        expect(auditGeminiResponseSchema(generatedSchema)).toEqual([]);
+        const serializedSchema = JSON.stringify(generatedSchema);
+        [
+            'minLength', 'maxLength', 'pattern', 'const', 'uniqueItems', 'allOf',
+            'not', 'if', 'then', 'else', 'dependentRequired',
+        ].forEach(keyword => expect(serializedSchema).not.toContain(`"${keyword}"`));
         expect(generatedSchema).toMatchObject({
             title: 'StoryBlueprintDocument',
             type: 'object',
@@ -775,6 +865,32 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(control.relationshipDefinitions).toHaveLength(1);
         expect(control.authorOnlySecrets).toHaveLength(1);
     });
+
+    it('keeps strict runtime rejection for an empty required model string', () => {
+        const valid = representativeDocument();
+        const invalid = { ...valid, blueprint: { ...valid.blueprint, id: '' } };
+        expect(() => parseStoryBlueprintDocument(invalid)).toThrow('must be a non-empty string');
+    });
+
+    it.each(['requireCanonicalBasis', 'requireMutualAgencyForMutualMilestone'] as const)(
+        'keeps strict runtime rejection when %s is false',
+        (safeguard) => {
+            const valid = representativeDocument();
+            const definition = valid.blueprint.relationshipDefinitions?.[0];
+            if (!definition) throw new Error('representative relationship definition missing');
+            const invalid = {
+                ...valid,
+                blueprint: {
+                    ...valid.blueprint,
+                    relationshipDefinitions: [{
+                        ...definition,
+                        progressionPolicy: { ...definition.progressionPolicy, [safeguard]: false },
+                    }],
+                },
+            };
+            expect(() => parseStoryBlueprintDocument(invalid)).toThrow('required safeguards must be true');
+        },
+    );
 
     it('Gemini setup compiler rejects malformed model JSON without trying to repair it', async () => {
         await expect(compileStorySetupWithGemini({
