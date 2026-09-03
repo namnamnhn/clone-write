@@ -1,5 +1,6 @@
 import type { GenerateContentResponse } from '@google/genai';
 import { describe, expect, it, vi } from 'vitest';
+import { runStoryStudioProductionAttempt } from '../src/hooks/pages/useStoryStudio';
 import {
     compileStoryControl,
     createProductionStoryRuntime,
@@ -271,6 +272,19 @@ const advanceToReview = async (controller: StoryStudioProjectController, product
 };
 
 describe('WORK 13 Story Studio production persistence', () => {
+    it.each(['startBatch', 'resume', 'rewriteFromSamePlan', 'replan'] as const)(
+        'clears a stale UI error before the explicit %s attempt runs',
+        async (attempt) => {
+            const events: string[] = [];
+            await runStoryStudioProductionAttempt(attempt, (value) => {
+                expect(value).toBeUndefined();
+                events.push('clear-error');
+            }, async (runningAttempt) => {
+                events.push(`run-${runningAttempt}`);
+            });
+            expect(events).toEqual(['clear-error', `run-${attempt}`]);
+        },
+    );
     it('loads empty storage without writing a default project', async () => {
         const { adapter, controller } = setup();
         expect(await controller.load()).toEqual({ status: 'empty' });

@@ -2,6 +2,8 @@ import { prepareCanonCommit } from './canonCommit';
 import { createStoryControlIdentity } from './canonicalIdentity';
 import { buildPlannerContext } from './contextBuilder';
 import { createStructuredPlanner } from './planner';
+import { ChapterPlanValidationError } from './planValidator';
+import { summarizePlanValidationIssues } from './planDiagnostics';
 import {
     PlannerModel,
 } from './plannerTypes';
@@ -24,6 +26,7 @@ import {
     ProductionStoryRuntimePolicy,
     ProductionValidationArtifact,
     StoryEngineModelBundle,
+    StoryEngineModelRuntimeError,
 } from './productionRuntimeTypes';
 import { buildValidatorRelationshipView } from './relationshipValidatorContext';
 import { RepairModel, validateAndRepairWriterChapter } from './repair';
@@ -224,8 +227,17 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             internalPlan = await createStructuredPlanner(instrumentPlanner(models.planner, calls), request.control).plan(plannerContext);
         } catch (error) {
             if (isCancelled(error)) throw new ProductionRuntimeError('CANCELLED', 'planning', targetChapter, 'planner');
-            const isValidation = error instanceof Error && error.name === 'ChapterPlanValidationError';
-            throw new ProductionRuntimeError(isValidation ? 'PLAN_VALIDATION_FAILURE' : 'PLAN_PROTOCOL_FAILURE', 'planning', targetChapter, 'planner');
+            if (error instanceof StoryEngineModelRuntimeError) {
+                throw new ProductionRuntimeError('MODEL_RUNTIME_FAILURE', 'planning', targetChapter, 'planner');
+            }
+            if (error instanceof ChapterPlanValidationError) {
+                const summary = summarizePlanValidationIssues(error.issues);
+                throw new ProductionRuntimeError(
+                    'PLAN_VALIDATION_FAILURE', 'planning', targetChapter, 'planner',
+                    summary.issueCodes, summary.issueCount, summary.issuePaths,
+                );
+            }
+            throw new ProductionRuntimeError('PLAN_PROTOCOL_FAILURE', 'planning', targetChapter, 'planner');
         }
         try {
             const writerPlan = sanitizeWriterChapterPlan(
@@ -244,7 +256,14 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
                 writerPlan: structuredClone(writerPlan), privileged: structuredClone(privileged),
             };
             return { kind: 'production-plan-artifact', artifactIdentity: createProductionPlanArtifactIdentity(body), ...body };
-        } catch {
+        } catch (error) {
+            if (error instanceof ChapterPlanValidationError) {
+                const summary = summarizePlanValidationIssues(error.issues);
+                throw new ProductionRuntimeError(
+                    'PLAN_VALIDATION_FAILURE', 'planning', targetChapter, 'planner',
+                    summary.issueCodes, summary.issueCount, summary.issuePaths,
+                );
+            }
             throw new ProductionRuntimeError('PLAN_VALIDATION_FAILURE', 'planning', targetChapter, 'planner');
         }
     };
@@ -283,6 +302,9 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             });
         } catch (error) {
             if (isCancelled(error)) throw new ProductionRuntimeError('CANCELLED', 'writing', plan.targetChapter, 'writer');
+            if (error instanceof StoryEngineModelRuntimeError) {
+                throw new ProductionRuntimeError('MODEL_RUNTIME_FAILURE', 'writing', plan.targetChapter, 'writer');
+            }
             throw new ProductionRuntimeError('WRITER_PROTOCOL_FAILURE', 'writing', plan.targetChapter, 'writer');
         }
         const body = {
@@ -483,7 +505,10 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
                 return {
                     status: 'blocked', stage: error.stage, code: error.code, chapter: error.chapter,
                     ...(error.role === undefined ? {} : { role: error.role }),
-                    ...(error.issueCodes === undefined ? {} : { issueCodes: error.issueCodes }), telemetry: telemetry(),
+                    ...(error.issueCodes === undefined ? {} : { issueCodes: error.issueCodes }),
+                    ...(error.issueCount === undefined ? {} : { issueCount: error.issueCount }),
+                    ...(error.issuePaths === undefined ? {} : { issuePaths: error.issuePaths }),
+                    telemetry: telemetry(),
                 };
             }
             return { status: 'blocked', stage, code: isCancelled(error) ? 'CANCELLED' : 'MODEL_RUNTIME_FAILURE', chapter: request.targetChapter ?? 0, telemetry: telemetry() };

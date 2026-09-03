@@ -9,6 +9,7 @@ import type { ValidatorStrategicView } from './strategicTypes';
 import type { ValidationPipelineResult } from './validationTypes';
 import type { ValidatorContextSelectionPolicy } from './validatorContext';
 import type { WriterChapterDraft, WriterContextSelectionPolicy, WriterModel } from './writerTypes';
+import type { SafePlanValidationIssuePath } from './planDiagnostics';
 
 export const STORY_ENGINE_MODEL_ROLES = ['planner', 'writer', 'semanticValidator', 'repair', 'stateExtractor'] as const;
 export type StoryEngineModelRole = typeof STORY_ENGINE_MODEL_ROLES[number];
@@ -106,6 +107,13 @@ export const PRODUCTION_RUNTIME_ERROR_CODES = [
 export type ProductionRuntimeErrorCode = typeof PRODUCTION_RUNTIME_ERROR_CODES[number];
 export type ProductionRuntimeStage = 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review';
 
+export class StoryEngineModelRuntimeError extends Error {
+    constructor(readonly role: StoryEngineModelRole) {
+        super('MODEL_RUNTIME_FAILURE');
+        this.name = 'StoryEngineModelRuntimeError';
+    }
+}
+
 export class ProductionRuntimeError extends Error {
     constructor(
         readonly code: ProductionRuntimeErrorCode,
@@ -113,6 +121,8 @@ export class ProductionRuntimeError extends Error {
         readonly chapter: number,
         readonly role?: StoryEngineModelRole,
         readonly issueCodes?: readonly string[],
+        readonly issueCount?: number,
+        readonly issuePaths?: readonly SafePlanValidationIssuePath[],
     ) {
         super(`${code} at ${stage} for chapter ${chapter}`);
         this.name = 'ProductionRuntimeError';
@@ -144,5 +154,7 @@ export type ProductionChapterRunResult =
         readonly chapter: number;
         readonly role?: StoryEngineModelRole;
         readonly issueCodes?: readonly string[];
+        readonly issueCount?: number;
+        readonly issuePaths?: readonly SafePlanValidationIssuePath[];
         readonly telemetry: ProductionRunTelemetry;
     };

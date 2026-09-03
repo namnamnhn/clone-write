@@ -18,17 +18,17 @@ export class StoryEngineModelPolicyError extends Error {
 export const DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY: StoryEngineModelRolePolicy = {
     planner: {
         preferredModelId: 'gemini-3.1-pro-preview',
-        candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash'],
+        candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
         temperature: 0.3,
     },
     writer: {
         preferredModelId: 'gemini-3.1-pro-preview',
-        candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash'],
+        candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
         temperature: 0.8,
     },
     semanticValidator: {
         preferredModelId: 'gemini-3.7-flash',
-        candidateModelIds: ['gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemini-3.6-flash'],
+        candidateModelIds: ['gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemini-3.6-flash', 'gemini-3.5-flash'],
         temperature: 0.1,
     },
     repair: {

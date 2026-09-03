@@ -3,6 +3,7 @@ import type { GenerateContentResponse } from '@google/genai';
 import type { PlannerContext } from '../src/storyEngine';
 import {
     STORY_ENGINE_MODEL_ROLES,
+    StoryEngineModelRuntimeError,
 } from '../src/storyEngine';
 import {
     DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY,
@@ -96,6 +97,35 @@ describe('WORK 12 Story Engine model policy', () => {
         ]);
         expect(Object.values(policy).flatMap(value => value.candidateModelIds).every(id => id.startsWith('gemini-'))).toBe(true);
     });
+
+    it('keeps exact Planner, Writer, and Semantic Validator order with 3.5 Flash final', () => {
+        expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.planner).toMatchObject({
+            preferredModelId: 'gemini-3.1-pro-preview',
+            candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+        });
+        expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.writer).toMatchObject({
+            preferredModelId: 'gemini-3.1-pro-preview',
+            candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+        });
+        expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.semanticValidator).toMatchObject({
+            preferredModelId: 'gemini-3.7-flash',
+            candidateModelIds: ['gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+        });
+        expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.repair.candidateModelIds)
+            .toEqual(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
+        expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.stateExtractor.candidateModelIds)
+            .toEqual(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
+        expect(JSON.stringify(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY)).not.toMatch(/flash-lite|gemma/i);
+    });
+
+    it.each(['planner', 'writer', 'semanticValidator'] as const)(
+        'filters disabled 3.5 Flash from %s without reordering earlier candidates',
+        (role) => {
+            const expected = DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role].candidateModelIds.filter(id => id !== 'gemini-3.5-flash');
+            expect(resolveStoryEngineModelRoute(role, DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role], expected).candidateModelIds)
+                .toEqual(expected);
+        },
+    );
 });
 
 describe('WORK 12 strict Gemini JSON runner', () => {
@@ -143,6 +173,60 @@ describe('WORK 12 strict Gemini JSON runner', () => {
         controller.abort();
         await expect(runGeminiStoryEngineJson({ role: 'planner', route, contents: 'prompt', signal: controller.signal }, dependenciesFor('{}')))
             .rejects.toThrow('ABORTED');
+    });
+
+    it('converts provider failures to a safe typed model-runtime boundary without retaining provider text', async () => {
+        const sentinel = '503 UNAVAILABLE SENTINEL_PROVIDER_BODY API_KEY_SENTINEL';
+        let caught: unknown;
+        try {
+            await runGeminiStoryEngineJson({ role: 'planner', route, contents: 'PRIVATE_PROMPT_SENTINEL' }, {
+                smartExecution: async () => { throw new Error(sentinel); },
+                getAiClient: () => { throw new Error('must not be called'); },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(StoryEngineModelRuntimeError);
+        expect(caught).toMatchObject({ name: 'StoryEngineModelRuntimeError', message: 'MODEL_RUNTIME_FAILURE', role: 'planner' });
+        expect(JSON.stringify(caught)).not.toContain(sentinel);
+        expect(JSON.stringify(caught)).not.toContain('PRIVATE_PROMPT_SENTINEL');
+    });
+
+    it('converts a direct generateContent failure to the same safe model-runtime boundary', async () => {
+        const sentinel = '503 DIRECT_PROVIDER_SENTINEL SECRET_RESPONSE_BODY';
+        const deps = dependenciesFor('{}');
+        await expect(runGeminiStoryEngineJson({ role: 'writer', route, contents: 'PRIVATE_WRITER_PROMPT' }, {
+            ...deps,
+            getAiClient: () => ({ models: { generateContent: async () => { throw new Error(sentinel); } } }),
+        })).rejects.toMatchObject({
+            name: 'StoryEngineModelRuntimeError', message: 'MODEL_RUNTIME_FAILURE', role: 'writer',
+        });
+        try {
+            await runGeminiStoryEngineJson({ role: 'writer', route, contents: 'PRIVATE_WRITER_PROMPT' }, {
+                ...deps,
+                getAiClient: () => ({ models: { generateContent: async () => { throw new Error(sentinel); } } }),
+            });
+        } catch (error) {
+            expect(JSON.stringify(error)).not.toContain(sentinel);
+            expect(JSON.stringify(error)).not.toContain('PRIVATE_WRITER_PROMPT');
+        }
+    });
+
+    it.each([
+        ['', 'EMPTY_RESPONSE'],
+        ['not-json', 'MALFORMED_JSON'],
+    ] as const)('preserves %s as protocol failure when execution wraps the operation error', async (output, code) => {
+        const dependencies = dependenciesFor(output);
+        await expect(runGeminiStoryEngineJson({ role: 'planner', route, contents: 'prompt' }, {
+            ...dependencies,
+            smartExecution: async (candidateModels, operation) => {
+                try {
+                    return await operation(candidateModels[0]);
+                } catch {
+                    throw new Error('smartExecution aggregate failure');
+                }
+            },
+        })).rejects.toMatchObject({ code } satisfies Partial<GeminiStoryEngineProtocolError>);
     });
 });
 

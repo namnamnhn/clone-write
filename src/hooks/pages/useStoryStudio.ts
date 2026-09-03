@@ -13,6 +13,7 @@ import {
 } from '../../storyStudio/production/storySetupImport';
 import type { PreparedStorySetupImport } from '../../storyStudio/production/storySetupImport';
 import type { StoryStudioBatchSize } from '../../storyStudio/production/storyStudioWorkflowTypes';
+import { logSafeStoryStudioRuntimeDiagnostic } from '../../storyStudio/production/storyStudioRuntimeDiagnostics';
 
 export type StoryStudioSaveStatus = 'saved' | 'saving' | 'error';
 export type StoryStudioLoadStatus = 'loading' | 'empty' | 'connected' | 'core-corrupt';
@@ -24,6 +25,17 @@ export interface UseStoryStudioProps {
     readonly addToast: (message: string, type: 'success' | 'error' | 'info') => void;
     readonly onOpenGeminiSettings: () => void;
 }
+
+export type StoryStudioExplicitAttempt = 'startBatch' | 'resume' | 'rewriteFromSamePlan' | 'replan';
+
+export const runStoryStudioProductionAttempt = async <T>(
+    attempt: StoryStudioExplicitAttempt,
+    clearError: (value: undefined) => void,
+    run: (attempt: StoryStudioExplicitAttempt) => Promise<T>,
+): Promise<T> => {
+    clearError(undefined);
+    return run(attempt);
+};
 
 const safeMessage = (error: unknown): string => {
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
@@ -118,6 +130,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
 
     const handleError = useCallback((error: unknown) => {
         logSafeStorySetupImportDiagnostic(error);
+        logSafeStoryStudioRuntimeDiagnostic(error);
         const message = safeMessage(error);
         if (mountedRef.current) {
             setErrorMessage(message);
@@ -211,22 +224,26 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
 
     const startBatch = useCallback(async () => {
         if (abortRef.current) return;
-        setSaveStatus('saving');
-        try {
-            publish(await controller.startBatch(batchSize));
-            await runPipeline();
-        } catch (error) { handleError(error); }
+        await runStoryStudioProductionAttempt('startBatch', setErrorMessage, async () => {
+            setSaveStatus('saving');
+            try {
+                publish(await controller.startBatch(batchSize));
+                await runPipeline();
+            } catch (error) { handleError(error); }
+        });
     }, [batchSize, controller, handleError, publish, runPipeline]);
 
     const resume = useCallback(async () => {
         if (abortRef.current || !controller.currentProject) return;
-        try {
-            if (controller.currentProject.batchQueue.paused) {
-                setSaveStatus('saving');
-                publish(await controller.resumeBatch());
-            }
-            await runPipeline();
-        } catch (error) { handleError(error); }
+        await runStoryStudioProductionAttempt('resume', setErrorMessage, async () => {
+            try {
+                if (controller.currentProject?.batchQueue.paused) {
+                    setSaveStatus('saving');
+                    publish(await controller.resumeBatch());
+                }
+                await runPipeline();
+            } catch (error) { handleError(error); }
+        });
     }, [controller, handleError, publish, runPipeline]);
 
     const stop = useCallback(() => {
@@ -237,19 +254,23 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     }, []);
 
     const rewriteFromSamePlan = useCallback(async () => {
-        try {
-            setSaveStatus('saving');
-            publish(await controller.rewriteFromSamePlan());
-            await runPipeline();
-        } catch (error) { handleError(error); }
+        await runStoryStudioProductionAttempt('rewriteFromSamePlan', setErrorMessage, async () => {
+            try {
+                setSaveStatus('saving');
+                publish(await controller.rewriteFromSamePlan());
+                await runPipeline();
+            } catch (error) { handleError(error); }
+        });
     }, [controller, handleError, publish, runPipeline]);
 
     const replan = useCallback(async () => {
-        try {
-            setSaveStatus('saving');
-            publish(await controller.replanCurrentChapter());
-            await runPipeline();
-        } catch (error) { handleError(error); }
+        await runStoryStudioProductionAttempt('replan', setErrorMessage, async () => {
+            try {
+                setSaveStatus('saving');
+                publish(await controller.replanCurrentChapter());
+                await runPipeline();
+            } catch (error) { handleError(error); }
+        });
     }, [controller, handleError, publish, runPipeline]);
 
     const confirmMakeCanon = useCallback(async () => {

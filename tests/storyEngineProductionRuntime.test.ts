@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     CanonicalChapterMemoryRecord,
+    ChapterPlanValidationError,
     DEFAULT_PRODUCTION_STORY_RUNTIME_POLICY,
     NarrativeMemoryError,
     ProductionPlanArtifact,
     ProductionRuntimeError,
     StoryBlueprintDocument,
+    StoryEngineModelRuntimeError,
     StoryState,
     applyStoryStateDelta,
     buildNarrativeMemoryInput,
@@ -25,9 +27,14 @@ import {
     extractState,
 } from '../src/storyEngine';
 import {
+    GeminiStoryEngineProtocolError,
     GeminiStoryEngineGenerationRuntime,
     createGeminiStoryEngineAdapters,
 } from '../src/services/storyEngine';
+import {
+    getSafeStoryStudioRuntimeDiagnostic,
+    logSafeStoryStudioRuntimeDiagnostic,
+} from '../src/storyStudio/production/storyStudioRuntimeDiagnostics';
 import { createSyntheticNarrativeMemory } from './helpers/storyEngineNarrativeMemoryFixture';
 
 const RAW_SECRET = 'RAW_RUNTIME_AUTHOR_SECRET_9F3A';
@@ -98,6 +105,7 @@ interface FakeRuntimeOptions {
     readonly writerProse?: string;
     readonly abortRole?: string;
     readonly failRole?: string;
+    readonly runtimeFailRole?: string;
 }
 
 const fakeRuntime = (
@@ -109,6 +117,7 @@ const fakeRuntime = (
         async run(request) {
             captures.push({ role: request.role, contents: request.contents });
             if (request.role === options.abortRole) throw new Error('ABORTED');
+            if (request.role === options.runtimeFailRole) throw new StoryEngineModelRuntimeError(request.role);
             if (request.role === options.failRole) throw new Error('provider failed with unsafe details that must not escape');
             const chapter = chapterFrom(request.contents);
             if (request.role === 'planner') return { value: options.malformedPlan ? {} : internalPlan(chapter, options.goal, options.reveal && chapter === 1, options.storyEvent), selectedModelId: 'gemini-test' };
@@ -457,6 +466,84 @@ describe('WORK 12 production staged runtime', () => {
         const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
         expect(result).toMatchObject({ status: 'blocked', stage: 'planning', code: 'PLAN_VALIDATION_FAILURE' });
         expect(JSON.stringify(result)).not.toContain(RAW_SECRET);
+    });
+
+    it.each([
+        ['planner', 'planning'],
+        ['writer', 'writing'],
+    ] as const)('maps typed %s infrastructure failure to MODEL_RUNTIME_FAILURE with the correct stage and role', async (role, stage) => {
+        const { seed, runtime } = harness({ runtimeFailRole: role });
+        const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
+        expect(result).toMatchObject({ status: 'blocked', code: 'MODEL_RUNTIME_FAILURE', stage, role });
+        expect(JSON.stringify(result)).not.toContain('provider failed');
+    });
+
+    it.each(['EMPTY_RESPONSE', 'MALFORMED_JSON'] as const)(
+        'keeps Planner %s as PLAN_PROTOCOL_FAILURE',
+        async (protocolCode) => {
+            const seed = createV4ProjectSeed(document());
+            const models = createGeminiStoryEngineAdapters(fakeRuntime([]));
+            const runtime = createProductionStoryRuntime({
+                models: {
+                    ...models,
+                    planner: { plan: async () => { throw new GeminiStoryEngineProtocolError(protocolCode); } },
+                },
+            });
+            const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
+            expect(result).toMatchObject({
+                status: 'blocked', code: 'PLAN_PROTOCOL_FAILURE', stage: 'planning', role: 'planner',
+            });
+        },
+    );
+
+    it('surfaces only capped closed Planner issue codes and structural path families', async () => {
+        const sentinelId = 'SENTINEL_MODEL_ID_7B2C';
+        const sentinelSecret = 'SENTINEL_AUTHOR_SECRET_91AF';
+        const seed = createV4ProjectSeed(document());
+        const models = createGeminiStoryEngineAdapters(fakeRuntime([]));
+        const issues = Array.from({ length: 14 }, (_, index) => ({
+            code: index === 0 ? 'INVALID_SHAPE' : `${sentinelId}_${index}`,
+            path: index === 0
+                ? `scenes.${sentinelId}.intelligentConflict.${sentinelSecret}`
+                : index === 1 ? `participantIds.${sentinelId}` : `${sentinelId}.${index}`,
+            message: `raw validator message ${sentinelSecret} ${sentinelId}`,
+            severity: 'error' as const,
+        }));
+        const runtime = createProductionStoryRuntime({
+            models: {
+                ...models,
+                planner: { plan: async () => { throw new ChapterPlanValidationError(issues); } },
+            },
+        });
+        let caught: unknown;
+        try {
+            await runtime.planProductionChapter({ control: seed.control, state: seed.state, memoryState: seed.memory });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(ProductionRuntimeError);
+        expect(caught).toMatchObject({
+            code: 'PLAN_VALIDATION_FAILURE', stage: 'planning', role: 'planner', issueCount: 14,
+            issueCodes: ['INVALID_SHAPE', ...Array.from({ length: 11 }, () => 'OTHER_PLAN_VALIDATION_ISSUE')],
+            issuePaths: ['scenes.intelligentConflict', 'participantIds', ...Array.from({ length: 10 }, () => 'other')],
+        });
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(caught);
+        expect(diagnostic).toMatchObject({
+            code: 'PLAN_VALIDATION_FAILURE', stage: 'planning', role: 'planner', issueCount: 14,
+        });
+        expect(diagnostic?.issueCodes).toHaveLength(12);
+        expect(diagnostic?.issuePaths).toHaveLength(12);
+        const serialized = JSON.stringify({ caught, diagnostic });
+        expect(serialized).not.toContain(sentinelId);
+        expect(serialized).not.toContain(sentinelSecret);
+        expect(serialized).not.toContain('raw validator message');
+
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        logSafeStoryStudioRuntimeDiagnostic(caught);
+        expect(consoleError).toHaveBeenCalledWith('Story Studio runtime diagnostic', diagnostic);
+        expect(JSON.stringify(consoleError.mock.calls)).not.toContain(sentinelId);
+        expect(JSON.stringify(consoleError.mock.calls)).not.toContain(sentinelSecret);
+        consoleError.mockRestore();
     });
 
     it('returns a typed extraction block for unsupported extractor output', async () => {

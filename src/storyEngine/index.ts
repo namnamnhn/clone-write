@@ -33,6 +33,7 @@ export * from './writerRelationshipValidator';
 export * from './relationshipValidatorContext';
 export * from './contextBuilder';
 export * from './planValidator';
+export * from './planDiagnostics';
 export * from './planSanitizer';
 export * from './planner';
 export * from './writerTypes';

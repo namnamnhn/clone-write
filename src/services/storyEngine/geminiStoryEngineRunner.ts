@@ -1,5 +1,6 @@
 import type { GenerateContentResponse } from '@google/genai';
 import { getAiClient, SAFETY_SETTINGS, smartExecution } from '../api/gemini';
+import { StoryEngineModelRuntimeError } from '../../storyEngine/productionRuntimeTypes';
 import type { StoryEngineModelRole, StoryEngineModelRoute } from '../../storyEngine/productionRuntimeTypes';
 
 export class GeminiStoryEngineProtocolError extends Error {
@@ -46,14 +47,17 @@ export const runGeminiStoryEngineJson = async (
     dependencies: GeminiStoryEngineRunnerDependencies = DEFAULT_GEMINI_STORY_ENGINE_RUNNER_DEPENDENCIES,
 ): Promise<GeminiStoryEngineJsonResult> => {
     if (request.signal?.aborted) throw new Error('ABORTED');
-    return dependencies.smartExecution(
+    let lastProtocolError: GeminiStoryEngineProtocolError | undefined;
+    let sawInfrastructureFailure = false;
+    try {
+        return await dependencies.smartExecution(
         [...request.route.candidateModelIds],
         async (modelId) => {
             if (request.signal?.aborted) throw new Error('ABORTED');
             // This must remain inside the selected smartExecution operation so key attribution is correct.
-            const ai = dependencies.getAiClient();
             let response: GenerateContentResponse;
             try {
+                const ai = dependencies.getAiClient();
                 response = await ai.models.generateContent({
                     model: modelId,
                     contents: request.contents,
@@ -66,20 +70,31 @@ export const runGeminiStoryEngineJson = async (
                 });
             } catch (error) {
                 if (request.signal?.aborted) throw new Error('ABORTED');
+                sawInfrastructureFailure = true;
                 throw error;
             }
             const output = response.text?.trim();
-            if (!output) throw new GeminiStoryEngineProtocolError('EMPTY_RESPONSE');
+            if (!output) {
+                lastProtocolError = new GeminiStoryEngineProtocolError('EMPTY_RESPONSE');
+                throw lastProtocolError;
+            }
             let value: unknown;
             try {
                 value = JSON.parse(output);
             } catch {
-                throw new GeminiStoryEngineProtocolError('MALFORMED_JSON');
+                lastProtocolError = new GeminiStoryEngineProtocolError('MALFORMED_JSON');
+                throw lastProtocolError;
             }
             return { value, selectedModelId: modelId };
         },
         `Story Engine V4 ${request.role}`,
         undefined,
         request.route.preferredModelId,
-    );
+        );
+    } catch (error) {
+        if (request.signal?.aborted || (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError'))) throw error;
+        if (error instanceof GeminiStoryEngineProtocolError) throw error;
+        if (!sawInfrastructureFailure && lastProtocolError) throw lastProtocolError;
+        throw new StoryEngineModelRuntimeError(request.role);
+    }
 };
