@@ -612,6 +612,64 @@ describe('WORK 12 production staged runtime', () => {
         expect(seed.memory).toEqual(beforeMemory);
     });
 
+    it('surfaces only closed StateDelta parse metadata without advancing Canon or memory', async () => {
+        const rawStory = 'RAW_STORY_PROSE_SENTINEL';
+        const rawSecret = 'RAW_AUTHOR_SECRET_PARSE_SENTINEL';
+        const rawApiKey = 'AIzaSy_RAW_PARSE_KEY_SENTINEL';
+        const rawModelId = 'RAW_MODEL_GENERATED_ID_SENTINEL';
+        const invalid = delta(1);
+        const { seed, runtime } = harness({
+            extractorOutput: {
+                ...invalid,
+                factChanges: [{
+                    ...invalid.factChanges[0], id: rawModelId, text: rawStory,
+                    provenance: {
+                        sourceChapter: 1,
+                        sourceType: `${rawApiKey}:${rawSecret}`,
+                        sourceId: rawModelId,
+                    },
+                }],
+            },
+        }, 'parse-diagnostic-story', rawSecret);
+        const beforeState = structuredClone(seed.state);
+        const beforeMemory = structuredClone(seed.memory);
+        const result = await runtime.runChapterToCanonReview({
+            control: seed.control, state: seed.state, memoryState: seed.memory,
+        });
+        expect(result).toMatchObject({
+            status: 'blocked', code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 1, issueCodes: ['INVALID_EXTRACTOR_OUTPUT'],
+            parseCode: 'INVALID_DELTA', parsePathFamily: 'factChanges',
+        });
+        if (result.status !== 'blocked') throw new Error('expected parse block');
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            result.code, result.stage, result.chapter, result.role, result.issueCodes, result.issueCount,
+            result.issuePaths, result.modelAttempts, result.parseCode, result.parsePathFamily,
+        ));
+        expect(diagnostic).toEqual({
+            code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 1, issueCodes: ['INVALID_EXTRACTOR_OUTPUT'],
+            parseCode: 'INVALID_DELTA', parsePathFamily: 'factChanges',
+        });
+        const serialized = JSON.stringify(diagnostic);
+        [rawStory, rawSecret, rawApiKey, rawModelId, 'delta.factChanges[0].provenance.sourceType']
+            .forEach(sentinel => expect(serialized).not.toContain(sentinel));
+        expect(seed.state).toEqual(beforeState);
+        expect(seed.memory).toEqual(beforeMemory);
+    });
+
+    it('sanitizes unknown parse metadata without exposing arbitrary values', () => {
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            'EXTRACTION_BLOCKED', 'extraction', 1, 'stateExtractor', ['INVALID_EXTRACTOR_OUTPUT'], 1,
+            undefined, undefined, 'RAW_UNKNOWN_PARSE_CODE' as never, 'RAW_UNKNOWN_PARSE_PATH' as never,
+        ));
+        expect(diagnostic).toEqual({
+            code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 1, issueCodes: ['INVALID_EXTRACTOR_OUTPUT'], parsePathFamily: 'other',
+        });
+        expect(JSON.stringify(diagnostic)).not.toContain('RAW_UNKNOWN');
+    });
+
     it('exposes only bounded canonical extraction codes and a closed unknown fallback', () => {
         const rawDetail = 'RAW_EXTRACTOR_DETAIL_SENTINEL';
         const rawPath = 'operations.RAW_ARBITRARY_PATH_SENTINEL.private-id';

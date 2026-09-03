@@ -2,6 +2,8 @@ import {
     MAX_SAFE_PLAN_VALIDATION_ISSUES,
     ProductionRuntimeError,
     SAFE_PLAN_VALIDATION_ISSUE_CODES,
+    sanitizeStateDeltaParseCode,
+    sanitizeStateDeltaParsePathFamily,
     sanitizeStateExtractionIssueCodes,
     sanitizeSafeModelAttemptOutcomes,
 } from '../../storyEngine';
@@ -11,6 +13,8 @@ import type {
     SafePlanValidationIssueCode,
     SafePlanValidationIssuePath,
     SafeStateExtractionIssueCode,
+    SafeStateDeltaParseCode,
+    StateDeltaParsePathFamily,
     StoryEngineModelRole,
     SafeModelAttemptOutcome,
 } from '../../storyEngine';
@@ -32,6 +36,8 @@ export interface SafeStoryStudioRuntimeDiagnostic {
     readonly issueCodes?: readonly (SafePlanValidationIssueCode | SafeStateExtractionIssueCode)[];
     readonly issuePaths?: readonly SafePlanValidationIssuePath[];
     readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
+    readonly parseCode?: SafeStateDeltaParseCode;
+    readonly parsePathFamily?: StateDeltaParsePathFamily;
 }
 
 export const getSafeStoryStudioRuntimeDiagnostic = (
@@ -55,10 +61,15 @@ export const getSafeStoryStudioRuntimeDiagnostic = (
         const issueCount = typeof error.issueCount === 'number'
             && Number.isSafeInteger(error.issueCount) && error.issueCount >= 0
             ? error.issueCount : undefined;
+        const parseCode = sanitizeStateDeltaParseCode(error.parseCode);
+        const parsePathFamily = error.parsePathFamily === undefined
+            ? undefined : sanitizeStateDeltaParsePathFamily(error.parsePathFamily);
         return {
             ...base,
             ...(issueCount === undefined ? {} : { issueCount }),
             ...(issueCodes.length === 0 ? {} : { issueCodes }),
+            ...(parseCode === undefined ? {} : { parseCode }),
+            ...(parsePathFamily === undefined ? {} : { parsePathFamily }),
         };
     }
     if (error.code !== 'PLAN_VALIDATION_FAILURE') return base;

@@ -4,7 +4,13 @@ import type { ValidatorRelationshipView } from './relationshipTypes';
 import type { RepairModel } from './repair';
 import type { SemanticValidatorModel } from './semanticValidator';
 import type { StateExtractionContextSelectionPolicy } from './stateExtractionContext';
-import type { CanonCommitProposal, StateExtractionResult, StateExtractorModel } from './stateExtractorTypes';
+import type {
+    CanonCommitProposal,
+    SafeStateDeltaParseCode,
+    StateDeltaParsePathFamily,
+    StateExtractionResult,
+    StateExtractorModel,
+} from './stateExtractorTypes';
 import type { ValidatorStrategicView } from './strategicTypes';
 import type { ValidationPipelineResult } from './validationTypes';
 import type { ValidatorContextSelectionPolicy } from './validatorContext';
@@ -133,6 +139,8 @@ export class ProductionRuntimeError extends Error {
         readonly issueCount?: number,
         readonly issuePaths?: readonly SafePlanValidationIssuePath[],
         readonly modelAttempts?: readonly SafeModelAttemptOutcome[],
+        readonly parseCode?: SafeStateDeltaParseCode,
+        readonly parsePathFamily?: StateDeltaParsePathFamily,
     ) {
         super(`${code} at ${stage} for chapter ${chapter}`);
         this.name = 'ProductionRuntimeError';
@@ -167,5 +175,7 @@ export type ProductionChapterRunResult =
         readonly issueCount?: number;
         readonly issuePaths?: readonly SafePlanValidationIssuePath[];
         readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
+        readonly parseCode?: SafeStateDeltaParseCode;
+        readonly parsePathFamily?: StateDeltaParsePathFamily;
         readonly telemetry: ProductionRunTelemetry;
     };

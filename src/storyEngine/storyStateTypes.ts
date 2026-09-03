@@ -235,12 +235,15 @@ export interface StoryStateDeltaV2 extends Omit<StoryStateDelta, 'schemaVersion'
 
 export type NormalizedStoryStateDelta = StoryStateDeltaV2;
 
-export type StoryStateTransitionIssueCode =
-    | 'INVALID_STATE' | 'INVALID_DELTA' | 'CHAPTER_SEQUENCE_VIOLATION'
-    | 'REVISION_MISMATCH' | 'UNKNOWN_CHARACTER' | 'UNKNOWN_FACT'
-    | 'DUPLICATE_ID' | 'TEMPORAL_VIOLATION' | 'KNOWLEDGE_SOURCE_INVALID'
-    | 'CONFLICTING_OPERATION' | 'RESOURCE_VALUE_INVALID'
-    | 'REFERENTIAL_INTEGRITY_FAILURE';
+export const STORY_STATE_TRANSITION_ISSUE_CODES = [
+    'INVALID_STATE', 'INVALID_DELTA', 'CHAPTER_SEQUENCE_VIOLATION',
+    'REVISION_MISMATCH', 'UNKNOWN_CHARACTER', 'UNKNOWN_FACT',
+    'DUPLICATE_ID', 'TEMPORAL_VIOLATION', 'KNOWLEDGE_SOURCE_INVALID',
+    'CONFLICTING_OPERATION', 'RESOURCE_VALUE_INVALID',
+    'REFERENTIAL_INTEGRITY_FAILURE',
+] as const;
+
+export type StoryStateTransitionIssueCode = typeof STORY_STATE_TRANSITION_ISSUE_CODES[number];
 
 export class StoryStateTransitionError extends Error {
     constructor(

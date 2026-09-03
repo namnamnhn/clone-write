@@ -6,6 +6,7 @@ import type {
     StateExtractionResult,
     StateExtractorModelRequest,
 } from './stateExtractorTypes';
+import { summarizeStateDeltaParseFailure } from './stateExtractorTypes';
 import { parseStoryState, parseStoryStateDelta } from './storyStateRuntime';
 import type { FactProvenance, StoryStateDeltaV2 } from './storyStateTypes';
 import type { FullStoryControl, StoryState } from './types';
@@ -261,8 +262,15 @@ export const extractState = async (request: ExtractStateRequest): Promise<StateE
     let delta: StoryStateDeltaV2;
     try {
         delta = parseStoryStateDelta(output);
-    } catch {
-        return { status: 'blocked', issues: [issue('INVALID_EXTRACTOR_OUTPUT', 'model.output')] };
+    } catch (error) {
+        const parseFailure = summarizeStateDeltaParseFailure(error);
+        return {
+            status: 'blocked',
+            issues: [{
+                code: 'INVALID_EXTRACTOR_OUTPUT', path: 'model.output',
+                ...parseFailure,
+            }],
+        };
     }
     const issues = validateStateExtractionContract(delta, validated.source, validated.state);
     return issues.length > 0 ? { status: 'blocked', issues } : {

@@ -440,7 +440,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             const summary = summarizeStateExtractionIssues(result.issues);
             throw new ProductionRuntimeError(
                 'EXTRACTION_BLOCKED', 'extraction', plan.targetChapter, 'stateExtractor',
-                summary.issueCodes, summary.issueCount,
+                summary.issueCodes, summary.issueCount, undefined, undefined,
+                summary.parseCode, summary.parsePathFamily,
             );
         }
         const body = {
@@ -532,6 +533,8 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
                     ...(error.issueCount === undefined ? {} : { issueCount: error.issueCount }),
                     ...(error.issuePaths === undefined ? {} : { issuePaths: error.issuePaths }),
                     ...(error.modelAttempts === undefined ? {} : { modelAttempts: error.modelAttempts }),
+                    ...(error.parseCode === undefined ? {} : { parseCode: error.parseCode }),
+                    ...(error.parsePathFamily === undefined ? {} : { parsePathFamily: error.parsePathFamily }),
                     telemetry: telemetry(),
                 };
             }

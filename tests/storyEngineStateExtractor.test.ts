@@ -13,9 +13,14 @@ import {
     makeCanon,
     MakeCanonError,
     parseStoryState,
+    parseStoryStateDelta,
     prepareCanonCommit,
     sanitizeWriterChapterPlan,
     STATE_DELTA_V2_REPRESENTABILITY_MATRIX,
+    STORY_STATE_TRANSITION_ISSUE_CODES,
+    sanitizeStateDeltaParsePathFamily,
+    StoryStateTransitionError,
+    summarizeStateDeltaParseFailure,
     type CanonCommitProposal,
     type FullStoryControl,
     type StateExtractionResult,
@@ -332,6 +337,86 @@ describe('WORK 11 untrusted V2 extractor protocol', () => {
     ])('blocks %s output without repair', async (_label, output, code) => {
         const result = await extractState({ approved: await approve(), state: baseState(), control, model: modelFor(output) });
         expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code })]) });
+    });
+
+    it.each([
+        ['fact', {
+            factChanges: [{
+                ...goldenDelta().factChanges[0],
+                provenance: { ...goldenDelta().factChanges[0].provenance, sourceType: 'RAW_INVALID_SOURCE_TYPE' },
+            }],
+        }, 'INVALID_DELTA', 'factChanges'],
+        ['epistemic', {
+            epistemicChanges: [{
+                ...goldenDelta().epistemicChanges[0],
+                source: { ...goldenDelta().epistemicChanges[0].source, type: 'RAW_INVALID_SOURCE_TYPE' },
+            }],
+        }, 'INVALID_DELTA', 'epistemicChanges'],
+        ['resource', {
+            resourceChanges: [{ ...goldenDelta().resourceChanges[0], quantityDelta: Number.POSITIVE_INFINITY }],
+        }, 'RESOURCE_VALUE_INVALID', 'resourceChanges'],
+        ['reveal', {
+            revealChanges: [{ ...goldenDelta().revealChanges[0], operation: 'RAW_INVALID_OPERATION' }],
+        }, 'INVALID_DELTA', 'revealChanges'],
+        ['foreshadow', { foreshadowChanges: [{}] }, 'INVALID_DELTA', 'foreshadowChanges'],
+        ['payoff', { payoffChanges: [{}] }, 'INVALID_DELTA', 'payoffChanges'],
+    ])('sanitizes %s parser failures into closed parse metadata', async (_label, changes, parseCode, parsePathFamily) => {
+        const output = { ...goldenDelta(), ...changes };
+        const result = await extractState({
+            approved: await approve(), state: baseState(), control, model: modelFor(output),
+        });
+        expect(result).toMatchObject({
+            status: 'blocked',
+            issues: [{ code: 'INVALID_EXTRACTOR_OUTPUT', path: 'model.output', parseCode, parsePathFamily }],
+        });
+    });
+
+    it('maps only closed structural path families and discards unknown error contents', () => {
+        expect(sanitizeStateDeltaParsePathFamily('delta.factChanges[0].provenance.sourceType')).toBe('factChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.epistemicChanges[2].source')).toBe('epistemicChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.locationChanges[0]')).toBe('locationChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.statusChanges[0]')).toBe('statusChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.activationChanges[0]')).toBe('activationChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.relationshipChanges[0]')).toBe('relationshipChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.resourceChanges[0]')).toBe('resourceChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.continuityChanges[0]')).toBe('continuityChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.revealChanges[0]')).toBe('revealChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.foreshadowChanges[0]')).toBe('foreshadowChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.payoffChanges[0]')).toBe('payoffChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta')).toBe('root');
+        expect(sanitizeStateDeltaParsePathFamily('root')).toBe('root');
+        expect(sanitizeStateDeltaParsePathFamily('delta.RAW_MODEL_ID.private')).toBe('other');
+
+        const unknown = summarizeStateDeltaParseFailure(new Error('RAW_UNKNOWN_ERROR_MESSAGE_SENTINEL'));
+        expect(unknown).toEqual({ parsePathFamily: 'other' });
+        expect(JSON.stringify(unknown)).not.toContain('RAW_UNKNOWN_ERROR_MESSAGE_SENTINEL');
+    });
+
+    it('keeps the strict parser error typed while removing its raw path from extraction metadata', () => {
+        const output = {
+            ...goldenDelta(),
+            factChanges: [{
+                ...goldenDelta().factChanges[0],
+                provenance: { ...goldenDelta().factChanges[0].provenance, sourceType: 'RAW_INVALID_SOURCE_TYPE' },
+            }],
+        };
+        let caught: unknown;
+        try {
+            parseStoryStateDelta(output);
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(StoryStateTransitionError);
+        expect(caught).toMatchObject({
+            code: 'INVALID_DELTA', path: 'delta.factChanges[0].provenance.sourceType',
+        });
+        expect(summarizeStateDeltaParseFailure(caught)).toEqual({
+            parseCode: 'INVALID_DELTA', parsePathFamily: 'factChanges',
+        });
+        STORY_STATE_TRANSITION_ISSUE_CODES.forEach(code => {
+            expect(summarizeStateDeltaParseFailure(new StoryStateTransitionError(code, 'RAW_MESSAGE', 'delta')))
+                .toEqual({ parseCode: code, parsePathFamily: 'root' });
+        });
     });
 });
 
