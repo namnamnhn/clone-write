@@ -63,6 +63,7 @@ export {
 export * from './narrativeMemory';
 export * from './storyBlueprintRuntime';
 export * from './storyBlueprintResponseSchema';
+export * from './internalChapterPlanResponseSchema';
 export * from './productionRuntimeTypes';
 export * from './productionArtifactIdentity';
 export * from './productionRuntimePolicy';

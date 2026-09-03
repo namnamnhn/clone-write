@@ -34,6 +34,7 @@ export interface RunGeminiStoryEngineJsonRequest {
     readonly role: StoryEngineModelRole;
     readonly route: StoryEngineModelRoute;
     readonly contents: string;
+    readonly responseJsonSchema?: unknown;
     readonly signal?: AbortSignal;
 }
 
@@ -64,6 +65,7 @@ export const runGeminiStoryEngineJson = async (
                     config: {
                         temperature: request.route.temperature,
                         responseMimeType: 'application/json',
+                        ...(request.responseJsonSchema === undefined ? {} : { responseJsonSchema: request.responseJsonSchema }),
                         safetySettings: SAFETY_SETTINGS,
                         ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
                     },

@@ -1,4 +1,5 @@
 import { buildPlannerPrompt } from '../../storyEngine/planner';
+import { INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA } from '../../storyEngine/internalChapterPlanResponseSchema';
 import { createProductionStoryRuntime } from '../../storyEngine/productionRuntime';
 import type {
     ProductionStoryRuntimePolicy,
@@ -24,6 +25,7 @@ export interface GeminiStoryEngineGenerationRuntime {
     run(request: {
         readonly role: StoryEngineModelRole;
         readonly contents: string;
+        readonly responseJsonSchema?: unknown;
         readonly signal?: AbortSignal;
     }): Promise<{ readonly value: unknown; readonly selectedModelId: string }>;
 }
@@ -36,11 +38,15 @@ const createAdapter = <TRequest>(
     role: StoryEngineModelRole,
     runtime: GeminiStoryEngineGenerationRuntime,
     serialize: (request: TRequest) => string,
+    responseJsonSchema?: unknown,
 ) => {
     let selectedModelId: string | undefined;
     const execute = async (request: TRequest): Promise<unknown> => {
         selectedModelId = undefined;
-        const result = await runtime.run({ role, contents: serialize(request) });
+        const result = await runtime.run({
+            role, contents: serialize(request),
+            ...(responseJsonSchema === undefined ? {} : { responseJsonSchema }),
+        });
         selectedModelId = result.selectedModelId;
         return result.value;
     };
@@ -49,7 +55,9 @@ const createAdapter = <TRequest>(
 };
 
 export const createGeminiStoryEngineAdapters = (runtime: GeminiStoryEngineGenerationRuntime): StoryEngineModelBundle => {
-    const planner = createAdapter<PlannerContext>('planner', runtime, buildPlannerPrompt);
+    const planner = createAdapter<PlannerContext>(
+        'planner', runtime, buildPlannerPrompt, INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA,
+    );
     const writer = createAdapter<WriterModelRequest>('writer', runtime, request => request.prompt);
     const semanticValidator = createAdapter<SemanticValidatorModelRequest>('semanticValidator', runtime, request => JSON.stringify({
         prompt: request.prompt,
@@ -93,8 +101,9 @@ export const createGeminiStoryEngineModelBundle = (
         options.availableModelIds,
     );
     const adapters = createGeminiStoryEngineAdapters({
-        run: ({ role, contents }) => runGeminiStoryEngineJson({
+        run: ({ role, contents, responseJsonSchema }) => runGeminiStoryEngineJson({
             role, contents, route: modelRolePolicy[role],
+            ...(responseJsonSchema === undefined ? {} : { responseJsonSchema }),
             ...(options.signal === undefined ? {} : { signal: options.signal }),
         }, options.runnerDependencies),
     });

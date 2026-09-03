@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
     buildPlannerContext,
+    buildPlannerPrompt,
     ChapterPlanValidationError,
     compileStoryControl,
     createInitialStoryState,
     createStructuredPlanner,
     InternalChapterPlan,
     NarrativeMemoryInput,
+    parseInternalChapterPlan,
     sanitizeWriterChapterPlan,
     selectNarrativeMemory,
     StoryBlueprint,
@@ -100,6 +102,54 @@ const validationCodes = (plan: InternalChapterPlan) =>
     validateInternalChapterPlan(plan, buildPlannerContext(control, stateFor(plan.chapterNumber), plan.chapterNumber)).map(issue => issue.code);
 
 describe('Story Engine V4 planner gates', () => {
+    it('states the exact nested scene contract without exposing raw Author Secret values', () => {
+        const prompt = buildPlannerPrompt(buildPlannerContext(control, stateFor(33), 33));
+        expect(prompt).toContain('Every scenes[] object must include exactly these required fields: id, order, goal, location, povCharacterId, participantIds, conflictOrObstacle, uncertainty, expectedConsequence, purposeTags, conflictImportance');
+        expect(prompt).toContain('every order is a positive integer, orders are unique and consecutive, and the first scene order is 1');
+        expect(prompt).toContain('plot, character, resource, clue, relationship, consequence, world, politics, military, commerce');
+        expect(prompt).toContain('conflictImportance must be exactly minor or major');
+        expect(prompt).toContain('A major conflict must include a complete intelligentConflict object');
+        expect(prompt).toContain('Never emit markdown, explanatory prose, comments, prefixes, suffixes, or alternative field names');
+        expect(prompt).not.toContain('Omega backup identity is classified');
+    });
+
+    it('strictly parses and validates a complete provider-shaped scene without normalization', () => {
+        const raw = { ...planFor(33, ['character-a']), strategicActions: [], relationshipActions: [] };
+        const parsed = parseInternalChapterPlan(raw);
+        expect(parsed.issues).toEqual([]);
+        expect(parsed.plan).toEqual(raw);
+        expect(validateInternalChapterPlan(parsed.plan!, buildPlannerContext(control, stateFor(33), 33))).toEqual([]);
+    });
+
+    it('still fails closed for missing scene fields, invalid order, and unsupported purpose tags', () => {
+        const base = { ...planFor(33, ['character-a']), strategicActions: [], relationshipActions: [] };
+        const missingLocation: Record<string, unknown> = { ...base.scenes[0] };
+        delete missingLocation.location;
+        const missing = parseInternalChapterPlan({ ...base, scenes: [missingLocation] });
+        expect(missing.plan).toBeUndefined();
+        expect(missing.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'INVALID_SHAPE', path: 'scenes.0.location' }),
+        ]));
+
+        const invalidOrder = parseInternalChapterPlan({ ...base, scenes: [{ ...base.scenes[0], order: 0 }] });
+        expect(invalidOrder.plan).toBeUndefined();
+        expect(invalidOrder.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'INVALID_SCENE_ORDER', path: 'scenes.0.order' }),
+        ]));
+
+        const invalidTags = parseInternalChapterPlan({ ...base, scenes: [{ ...base.scenes[0], purposeTags: ['summary'] }] });
+        expect(invalidTags.plan).toBeUndefined();
+        expect(invalidTags.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'INVALID_PURPOSE_TAGS', path: 'scenes.0.purposeTags' }),
+        ]));
+
+        const incoherentOrder = parseInternalChapterPlan({ ...base, scenes: [{ ...base.scenes[0], order: 2 }] });
+        expect(incoherentOrder.issues).toEqual([]);
+        expect(validateInternalChapterPlan(
+            incoherentOrder.plan!, buildPlannerContext(control, stateFor(33), 33),
+        ).map(issue => issue.code)).toContain('SCENE_ORDER_INVALID');
+    });
+
     it('rejects Character A at chapter 32 and accepts it at chapter 33', () => {
         const locked = planFor(32, ['character-a']);
         expect(validationCodes(locked)).toContain('POV_LOCKED');

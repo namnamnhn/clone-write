@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
 import type { PlannerContext } from '../src/storyEngine';
 import {
+    CONFLICT_IMPORTANCE,
+    INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA,
+    SCENE_PURPOSE_TAGS,
     STORY_ENGINE_MODEL_ROLES,
     StoryEngineModelRuntimeError,
 } from '../src/storyEngine';
@@ -10,6 +13,7 @@ import {
     GeminiStoryEngineProtocolError,
     StoryEngineModelPolicyError,
     createGeminiStoryEngineAdapters,
+    createGeminiStoryEngineModelBundle,
     normalizeStoryEngineModelRolePolicy,
     normalizeStoryEngineModelRoute,
     resolveStoryEngineModelRolePolicy,
@@ -20,6 +24,7 @@ import type {
     GeminiStoryEngineGenerationRuntime,
     GeminiStoryEngineRunnerDependencies,
 } from '../src/services/storyEngine';
+import { auditGeminiResponseSchema } from './helpers/geminiResponseSchemaAudit';
 
 const route = DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.planner;
 
@@ -172,9 +177,10 @@ describe('WORK 12 strict Gemini JSON runner', () => {
             .rejects.toMatchObject({ code: 'EMPTY_RESPONSE' } satisfies Partial<GeminiStoryEngineProtocolError>);
     });
 
-    it('threads JSON MIME type, temperature, safety, and cancellation through the SDK config', async () => {
+    it('threads JSON MIME type, role schema, temperature, safety, and cancellation through the SDK config', async () => {
         let captured: unknown;
         const controller = new AbortController();
+        const responseJsonSchema = { type: 'object' };
         const deps = dependenciesFor('{"ok":true}');
         const wrapped: GeminiStoryEngineRunnerDependencies = {
             ...deps,
@@ -183,8 +189,16 @@ describe('WORK 12 strict Gemini JSON runner', () => {
                 return { text: '{"ok":true}' } as GenerateContentResponse;
             } } }),
         };
-        await runGeminiStoryEngineJson({ role: 'planner', route, contents: 'prompt', signal: controller.signal }, wrapped);
-        expect(captured).toMatchObject({ contents: 'prompt', config: { responseMimeType: 'application/json', temperature: 0.3, abortSignal: controller.signal } });
+        await runGeminiStoryEngineJson({
+            role: 'planner', route, contents: 'prompt', responseJsonSchema, signal: controller.signal,
+        }, wrapped);
+        expect(captured).toMatchObject({
+            contents: 'prompt',
+            config: {
+                responseMimeType: 'application/json', responseJsonSchema,
+                temperature: 0.3, abortSignal: controller.signal,
+            },
+        });
     });
 
     it('fails closed before execution when already cancelled', async () => {
@@ -310,11 +324,35 @@ describe('WORK 12 strict Gemini JSON runner', () => {
 });
 
 describe('WORK 12 role-specific Gemini serialization', () => {
+    it('sends the dedicated schema on the Planner SDK request and on no other role request', async () => {
+        const configs: unknown[] = [];
+        const models = createGeminiStoryEngineModelBundle({
+            availableModelIds: ['gemini-3.7-flash'],
+            runnerDependencies: {
+                smartExecution: async (candidateModels, operation) => operation(candidateModels[0]),
+                getAiClient: () => ({ models: { generateContent: async (request) => {
+                    configs.push(request.config);
+                    return { text: '{}' } as GenerateContentResponse;
+                } } }),
+            },
+        });
+        await models.planner.plan({ kind: 'planner-context', targetChapter: 1 } as unknown as PlannerContext);
+        await models.writer.write({ kind: 'writer-model-request', prompt: 'WRITER' } as never);
+        await models.semanticValidator.validate({ prompt: 'VALIDATOR', context: {}, candidate: {} } as never);
+        await models.repair.repair({ prompt: 'REPAIR', context: {} } as never);
+        await models.stateExtractor.extract({ prompt: 'EXTRACT', context: {}, candidate: {} } as never);
+
+        expect(configs[0]).toMatchObject({ responseJsonSchema: INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA });
+        configs.slice(1).forEach(config => expect(config).not.toHaveProperty('responseJsonSchema'));
+    });
+
     it('keeps Writer prompt-only and preserves distinct privileged/safe envelopes', async () => {
         const captures = new Map<string, string>();
+        const schemaCaptures = new Map<string, unknown>();
         const runtime: GeminiStoryEngineGenerationRuntime = {
             async run(request) {
                 captures.set(request.role, request.contents);
+                schemaCaptures.set(request.role, request.responseJsonSchema);
                 return { value: {}, selectedModelId: 'gemini-test' };
             },
         };
@@ -332,5 +370,42 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         expect(JSON.parse(captures.get('stateExtractor')!)).toEqual({ prompt: 'EXTRACT', context: { safe: 'EXTRACTION_SAFE' }, candidate: { prose: 'chapter' } });
         expect(captures.get('repair')).not.toContain('SECRET_EVIDENCE');
         expect(captures.get('stateExtractor')).not.toContain('SECRET_EVIDENCE');
+        expect(schemaCaptures.get('planner')).toBe(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        expect([...schemaCaptures.entries()].filter(([role]) => role !== 'planner').every(([, schema]) => schema === undefined)).toBe(true);
+    });
+
+    it('keeps the Planner provider schema inside the supported Gemini subset', () => {
+        expect(auditGeminiResponseSchema(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA)).toEqual([]);
+        const serialized = JSON.stringify(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        [
+            'minLength', 'maxLength', 'pattern', 'const', 'uniqueItems', 'allOf',
+            'not', 'if', 'then', 'else', 'dependentRequired',
+        ].forEach(keyword => expect(serialized).not.toContain(`"${keyword}"`));
+    });
+
+    it('keeps Planner scene enums derived exactly from runtime constants', () => {
+        const scene = INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA.$defs.scene;
+        expect(scene.properties.purposeTags.items.enum).toEqual([...SCENE_PURPOSE_TAGS]);
+        expect(scene.properties.conflictImportance.enum).toEqual([...CONFLICT_IMPORTANCE]);
+    });
+
+    it('describes the complete parser-supported Planner object families', () => {
+        const schema = INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA;
+        expect(schema.required).toEqual(expect.arrayContaining([
+            'scenes', 'expectedResourceDeltas', 'expectedRelationshipDeltas',
+            'expectedContinuityConsequences', 'strategicActions', 'relationshipActions',
+        ]));
+        expect(schema.$defs.scene.required).toEqual([
+            'id', 'order', 'goal', 'location', 'povCharacterId', 'participantIds',
+            'conflictOrObstacle', 'uncertainty', 'expectedConsequence', 'purposeTags', 'conflictImportance',
+        ]);
+        expect(schema.$defs.intelligentConflict.required).toEqual([
+            'protagonistObjective', 'opponentObjective', 'opponentKnowledge', 'opponentBeliefs',
+            'rationalCountermove', 'uncertainty', 'expectedCostOrTradeoff',
+        ]);
+        expect(schema.$defs.strategicAction.oneOf).toEqual([
+            { $ref: '#/$defs/politicalAction' }, { $ref: '#/$defs/militaryAction' }, { $ref: '#/$defs/commerceAction' },
+        ]);
+        expect(schema.$defs.relationshipAction.required).toContain('writerVisibleContract');
     });
 });
