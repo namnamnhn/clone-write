@@ -24,7 +24,10 @@ import type {
     GeminiStoryEngineGenerationRuntime,
     GeminiStoryEngineRunnerDependencies,
 } from '../src/services/storyEngine';
-import { auditGeminiResponseSchema } from './helpers/geminiResponseSchemaAudit';
+import {
+    auditGeminiResponseSchema,
+    measureGeminiResponseSchemaComplexity,
+} from './helpers/geminiResponseSchemaAudit';
 
 const route = DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.planner;
 
@@ -389,7 +392,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         expect(scene.properties.conflictImportance.enum).toEqual([...CONFLICT_IMPORTANCE]);
     });
 
-    it('describes the complete parser-supported Planner object families', () => {
+    it('strongly describes core Planner objects but keeps deep domain actions generic', () => {
         const schema = INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA;
         expect(schema.required).toEqual(expect.arrayContaining([
             'scenes', 'expectedResourceDeltas', 'expectedRelationshipDeltas',
@@ -403,9 +406,28 @@ describe('WORK 12 role-specific Gemini serialization', () => {
             'protagonistObjective', 'opponentObjective', 'opponentKnowledge', 'opponentBeliefs',
             'rationalCountermove', 'uncertainty', 'expectedCostOrTradeoff',
         ]);
-        expect(schema.$defs.strategicAction.oneOf).toEqual([
-            { $ref: '#/$defs/politicalAction' }, { $ref: '#/$defs/militaryAction' }, { $ref: '#/$defs/commerceAction' },
-        ]);
-        expect(schema.$defs.relationshipAction.required).toContain('writerVisibleContract');
+        expect(schema.properties.strategicActions).toEqual({
+            type: 'array', items: { $ref: '#/$defs/genericDomainAction' },
+        });
+        expect(schema.properties.relationshipActions).toEqual({
+            type: 'array', items: { $ref: '#/$defs/genericDomainAction' },
+        });
+        expect(schema.$defs.genericDomainAction).toEqual({ type: 'object', additionalProperties: true });
+        expect(Object.keys(schema.$defs)).not.toEqual(expect.arrayContaining([
+            'politicalAction', 'militaryAction', 'commerceAction', 'relationshipAction',
+        ]));
+    });
+
+    it('stays under the documented internal Planner schema maintenance budget', () => {
+        const serialized = JSON.stringify(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        expect(serialized).not.toContain('"oneOf"');
+        expect(serialized).not.toContain('"anyOf"');
+        const complexity = measureGeminiResponseSchemaComplexity(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        expect(complexity).toMatchObject({ hasObjectCycle: false, hasReferenceCycle: false });
+        // Conservative internal maintenance budget, not a claimed Google API hard limit.
+        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(90);
+        expect(complexity.maxDepth).toBeLessThanOrEqual(5);
+        expect(complexity.definitionCount).toBeLessThanOrEqual(10);
+        expect(complexity.serializedBytes).toBeLessThanOrEqual(10_000);
     });
 });

@@ -109,6 +109,7 @@ describe('Story Engine V4 planner gates', () => {
         expect(prompt).toContain('plot, character, resource, clue, relationship, consequence, world, politics, military, commerce');
         expect(prompt).toContain('conflictImportance must be exactly minor or major');
         expect(prompt).toContain('A major conflict must include a complete intelligentConflict object');
+        expect(prompt).toContain('Every strategicActions and relationshipActions entry must still follow its complete documented runtime contract');
         expect(prompt).toContain('Never emit markdown, explanatory prose, comments, prefixes, suffixes, or alternative field names');
         expect(prompt).not.toContain('Omega backup identity is classified');
     });
@@ -148,6 +149,17 @@ describe('Story Engine V4 planner gates', () => {
         expect(validateInternalChapterPlan(
             incoherentOrder.plan!, buildPlannerContext(control, stateFor(33), 33),
         ).map(issue => issue.code)).toContain('SCENE_ORDER_INVALID');
+    });
+
+    it('keeps deep strategic and relationship action parsing strict behind generic provider arrays', () => {
+        const base = { ...planFor(33, ['character-a']), strategicActions: [], relationshipActions: [] };
+        const malformedStrategic = parseInternalChapterPlan({ ...base, strategicActions: [{}] });
+        expect(malformedStrategic.plan).toBeUndefined();
+        expect(malformedStrategic.issues.map(issue => issue.code)).toContain('INVALID_STRATEGIC_ACTION');
+
+        const malformedRelationship = parseInternalChapterPlan({ ...base, relationshipActions: [{}] });
+        expect(malformedRelationship.plan).toBeUndefined();
+        expect(malformedRelationship.issues.map(issue => issue.code)).toContain('INVALID_RELATIONSHIP_ACTION');
     });
 
     it('rejects Character A at chapter 32 and accepts it at chapter 33', () => {
