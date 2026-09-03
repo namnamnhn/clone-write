@@ -1120,8 +1120,13 @@ describe('WORK 13 Story Studio production persistence', () => {
         } catch (error) {
             importError = error;
         }
-        expect(getSafeStorySetupImportDiagnostic(importError)).toEqual({
+        expect(getSafeStorySetupImportDiagnostic(importError)).toMatchObject({
             code: 'SETUP_COMPILER_FAILED', stage: 'compiler', errorName: 'GeminiStorySetupCompilerError',
+            modelAttempts: [
+                { modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX', attemptCount: 1 },
+                { modelId: 'gemini-3.6-flash', outcomeKind: 'SERVER_5XX', attemptCount: 1 },
+                { modelId: 'gemini-3.5-flash', outcomeKind: 'SERVER_5XX', attemptCount: 1 },
+            ],
         });
         expect(JSON.stringify(importError)).not.toContain(setupSentinel);
         expect(JSON.stringify(importError)).not.toContain(providerSentinel);

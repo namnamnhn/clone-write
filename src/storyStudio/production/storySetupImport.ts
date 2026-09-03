@@ -5,8 +5,10 @@ import {
     StoryControlValidationError,
 } from '../../storyEngine';
 import type { FullStoryControl, StoryBlueprintDocument } from '../../storyEngine';
-import { compileStorySetupWithGemini } from '../../services/storyEngine/geminiStorySetupCompiler';
+import { compileStorySetupWithGemini, GeminiStorySetupCompilerError } from '../../services/storyEngine/geminiStorySetupCompiler';
 import type { CompileStorySetupRequest, StorySetupCompilerResult } from '../../services/storyEngine/geminiStorySetupCompiler';
+import { sanitizeSafeModelAttemptOutcomes } from '../../storyEngine/modelAttemptDiagnostics';
+import type { SafeModelAttemptOutcome } from '../../storyEngine/modelAttemptDiagnostics';
 
 export const MAX_AUTHOR_SETUP_SOURCE_BYTES = 2 * 1024 * 1024;
 
@@ -135,6 +137,7 @@ export class StorySetupImportDiagnosticError extends Error {
     readonly issueCount?: number;
     readonly issuePaths?: readonly StorySetupControlIssuePath[];
     readonly issueKinds?: readonly StorySetupControlIssueKind[];
+    readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
 
     constructor(
         readonly code: StorySetupImportDiagnosticCode,
@@ -150,6 +153,10 @@ export class StorySetupImportDiagnosticError extends Error {
             this.issuePaths = summary.issuePaths;
             this.issueKinds = summary.issueKinds;
         }
+        if (code === 'SETUP_COMPILER_FAILED' && cause instanceof GeminiStorySetupCompilerError) {
+            const modelAttempts = sanitizeSafeModelAttemptOutcomes(cause.modelAttempts);
+            if (modelAttempts.length > 0) this.modelAttempts = modelAttempts;
+        }
     }
 }
 
@@ -160,6 +167,7 @@ export interface SafeStorySetupImportDiagnostic {
     readonly issueCount?: number;
     readonly issuePaths?: readonly StorySetupControlIssuePath[];
     readonly issueKinds?: readonly StorySetupControlIssueKind[];
+    readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
 }
 
 export const getSafeStorySetupImportDiagnostic = (error: unknown): SafeStorySetupImportDiagnostic | undefined =>
@@ -169,6 +177,7 @@ export const getSafeStorySetupImportDiagnostic = (error: unknown): SafeStorySetu
             ...(error.issueCount === undefined ? {} : { issueCount: error.issueCount }),
             ...(error.issuePaths === undefined ? {} : { issuePaths: error.issuePaths }),
             ...(error.issueKinds === undefined ? {} : { issueKinds: error.issueKinds }),
+            ...(error.modelAttempts === undefined ? {} : { modelAttempts: error.modelAttempts }),
         }
         : undefined;
 

@@ -10,6 +10,8 @@ import type { ValidationPipelineResult } from './validationTypes';
 import type { ValidatorContextSelectionPolicy } from './validatorContext';
 import type { WriterChapterDraft, WriterContextSelectionPolicy, WriterModel } from './writerTypes';
 import type { SafePlanValidationIssuePath } from './planDiagnostics';
+import { sanitizeSafeModelAttemptOutcomes } from './modelAttemptDiagnostics';
+import type { SafeModelAttemptOutcome } from './modelAttemptDiagnostics';
 
 export const STORY_ENGINE_MODEL_ROLES = ['planner', 'writer', 'semanticValidator', 'repair', 'stateExtractor'] as const;
 export type StoryEngineModelRole = typeof STORY_ENGINE_MODEL_ROLES[number];
@@ -108,9 +110,16 @@ export type ProductionRuntimeErrorCode = typeof PRODUCTION_RUNTIME_ERROR_CODES[n
 export type ProductionRuntimeStage = 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review';
 
 export class StoryEngineModelRuntimeError extends Error {
-    constructor(readonly role: StoryEngineModelRole) {
+    readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
+
+    constructor(
+        readonly role: StoryEngineModelRole,
+        modelAttempts?: readonly SafeModelAttemptOutcome[],
+    ) {
         super('MODEL_RUNTIME_FAILURE');
         this.name = 'StoryEngineModelRuntimeError';
+        const safeAttempts = sanitizeSafeModelAttemptOutcomes(modelAttempts);
+        if (safeAttempts.length > 0) this.modelAttempts = safeAttempts;
     }
 }
 
@@ -123,6 +132,7 @@ export class ProductionRuntimeError extends Error {
         readonly issueCodes?: readonly string[],
         readonly issueCount?: number,
         readonly issuePaths?: readonly SafePlanValidationIssuePath[],
+        readonly modelAttempts?: readonly SafeModelAttemptOutcome[],
     ) {
         super(`${code} at ${stage} for chapter ${chapter}`);
         this.name = 'ProductionRuntimeError';
@@ -156,5 +166,6 @@ export type ProductionChapterRunResult =
         readonly issueCodes?: readonly string[];
         readonly issueCount?: number;
         readonly issuePaths?: readonly SafePlanValidationIssuePath[];
+        readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
         readonly telemetry: ProductionRunTelemetry;
     };

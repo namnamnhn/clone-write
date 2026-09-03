@@ -66,6 +66,7 @@ export * from './storyBlueprintRuntime';
 export * from './storyBlueprintResponseSchema';
 export * from './internalChapterPlanResponseSchema';
 export * from './productionRuntimeTypes';
+export * from './modelAttemptDiagnostics';
 export * from './productionArtifactIdentity';
 export * from './productionRuntimePolicy';
 export * from './productionRuntime';

@@ -3,15 +3,25 @@ import { MODEL_CONFIGS } from '../../constants';
 import { STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA } from '../../storyEngine';
 import { getAiClient, SAFETY_SETTINGS, smartExecution } from '../api/gemini';
 import { runGeminiV4RequestWithDeadline } from './geminiV4RequestDeadline';
+import { GeminiV4AttemptOutcomeCollector } from './geminiV4AttemptOutcomes';
+import { sanitizeSafeModelAttemptOutcomes } from '../../storyEngine/modelAttemptDiagnostics';
+import type { SafeModelAttemptOutcome } from '../../storyEngine/modelAttemptDiagnostics';
 
 export const STORY_SETUP_COMPILER_CANDIDATES = [
     'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
 ] as const;
 
 export class GeminiStorySetupCompilerError extends Error {
-    constructor(readonly code: 'NO_MODEL_AVAILABLE' | 'EMPTY_RESPONSE' | 'MALFORMED_JSON' | 'MODEL_RUNTIME_FAILURE' | 'CANCELLED') {
+    readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
+
+    constructor(
+        readonly code: 'NO_MODEL_AVAILABLE' | 'EMPTY_RESPONSE' | 'MALFORMED_JSON' | 'MODEL_RUNTIME_FAILURE' | 'CANCELLED',
+        modelAttempts?: readonly SafeModelAttemptOutcome[],
+    ) {
         super(code);
         this.name = 'GeminiStorySetupCompilerError';
+        const safeAttempts = sanitizeSafeModelAttemptOutcomes(modelAttempts);
+        if (safeAttempts.length > 0) this.modelAttempts = safeAttempts;
     }
 }
 
@@ -81,6 +91,7 @@ export const compileStorySetupWithGemini = async (
     const available = new Set(request.availableModelIds ?? [...configured]);
     const candidates = STORY_SETUP_COMPILER_CANDIDATES.filter(id => configured.has(id) && available.has(id));
     if (candidates.length === 0) throw new GeminiStorySetupCompilerError('NO_MODEL_AVAILABLE');
+    const attemptOutcomes = new GeminiV4AttemptOutcomeCollector();
     let lastProtocolError: GeminiStorySetupCompilerError | undefined;
     let sawInfrastructureFailure = false;
     try {
@@ -88,6 +99,7 @@ export const compileStorySetupWithGemini = async (
             [...candidates],
             async (modelId) => {
                 if (request.signal?.aborted) throw new Error('ABORTED');
+                const attemptStartedAt = Date.now();
                 // Key lookup intentionally remains inside smartExecution for correct key attribution.
                 let response: GenerateContentResponse;
                 try {
@@ -108,22 +120,26 @@ export const compileStorySetupWithGemini = async (
                         }),
                     });
                 } catch (error) {
+                    attemptOutcomes.recordFailure(modelId, attemptStartedAt, error, request.signal?.aborted);
                     if (request.signal?.aborted) throw new Error('ABORTED');
                     sawInfrastructureFailure = true;
                     throw error;
                 }
                 const output = response.text?.trim();
                 if (!output) {
-                    lastProtocolError = new GeminiStorySetupCompilerError('EMPTY_RESPONSE');
+                    attemptOutcomes.record(modelId, 'EMPTY_RESPONSE', attemptStartedAt);
+                    lastProtocolError = new GeminiStorySetupCompilerError('EMPTY_RESPONSE', attemptOutcomes.snapshot());
                     throw lastProtocolError;
                 }
                 let value: unknown;
                 try {
                     value = JSON.parse(output);
                 } catch {
-                    lastProtocolError = new GeminiStorySetupCompilerError('MALFORMED_JSON');
+                    attemptOutcomes.record(modelId, 'MALFORMED_JSON', attemptStartedAt);
+                    lastProtocolError = new GeminiStorySetupCompilerError('MALFORMED_JSON', attemptOutcomes.snapshot());
                     throw lastProtocolError;
                 }
+                attemptOutcomes.record(modelId, 'SUCCESS', attemptStartedAt);
                 return { value, selectedModelId: modelId };
             },
             'Story Studio V4 Setup Compiler',
@@ -134,6 +150,6 @@ export const compileStorySetupWithGemini = async (
         if (request.signal?.aborted) throw new GeminiStorySetupCompilerError('CANCELLED');
         if (error instanceof GeminiStorySetupCompilerError) throw error;
         if (!sawInfrastructureFailure && lastProtocolError) throw lastProtocolError;
-        throw new GeminiStorySetupCompilerError('MODEL_RUNTIME_FAILURE');
+        throw new GeminiStorySetupCompilerError('MODEL_RUNTIME_FAILURE', attemptOutcomes.snapshot());
     }
 };

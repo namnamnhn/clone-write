@@ -2,6 +2,7 @@ import {
     MAX_SAFE_PLAN_VALIDATION_ISSUES,
     ProductionRuntimeError,
     SAFE_PLAN_VALIDATION_ISSUE_CODES,
+    sanitizeSafeModelAttemptOutcomes,
 } from '../../storyEngine';
 import type {
     ProductionRuntimeErrorCode,
@@ -9,6 +10,7 @@ import type {
     SafePlanValidationIssueCode,
     SafePlanValidationIssuePath,
     StoryEngineModelRole,
+    SafeModelAttemptOutcome,
 } from '../../storyEngine';
 
 const SAFE_CODES = new Set<string>(SAFE_PLAN_VALIDATION_ISSUE_CODES);
@@ -27,6 +29,7 @@ export interface SafeStoryStudioRuntimeDiagnostic {
     readonly issueCount?: number;
     readonly issueCodes?: readonly SafePlanValidationIssueCode[];
     readonly issuePaths?: readonly SafePlanValidationIssuePath[];
+    readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
 }
 
 export const getSafeStoryStudioRuntimeDiagnostic = (
@@ -38,6 +41,13 @@ export const getSafeStoryStudioRuntimeDiagnostic = (
         stage: error.stage,
         ...(error.role === undefined ? {} : { role: error.role }),
     };
+    if (error.code === 'MODEL_RUNTIME_FAILURE') {
+        const modelAttempts = sanitizeSafeModelAttemptOutcomes(error.modelAttempts);
+        return {
+            ...base,
+            ...(modelAttempts.length === 0 ? {} : { modelAttempts }),
+        };
+    }
     if (error.code !== 'PLAN_VALIDATION_FAILURE') return base;
     const issueCodes = (error.issueCodes ?? []).slice(0, MAX_SAFE_PLAN_VALIDATION_ISSUES)
         .map(code => SAFE_CODES.has(code) ? code as SafePlanValidationIssueCode : 'OTHER_PLAN_VALIDATION_ISSUE');

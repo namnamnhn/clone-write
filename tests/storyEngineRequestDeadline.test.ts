@@ -4,6 +4,7 @@ import { quotaManager } from '../src/utils/quotaManager';
 import {
     DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY,
     GEMINI_V4_REQUEST_DEADLINE_MS,
+    GeminiV4AttemptOutcomeCollector,
     GeminiV4RequestTimeoutError,
     compileStorySetupWithGemini,
     createGeminiProductionStoryRuntime,
@@ -18,7 +19,16 @@ import type {
 } from '../src/services/storyEngine';
 import { smartExecution } from '../src/services/api/gemini';
 import type { StoryEngineModelRole } from '../src/storyEngine';
-import { createV4ProjectSeed } from '../src/storyEngine';
+import {
+    createV4ProjectSeed,
+    MODEL_ATTEMPT_OUTCOME_KINDS,
+    ProductionRuntimeError,
+    StoryEngineModelRuntimeError,
+} from '../src/storyEngine';
+import {
+    getSafeStoryStudioRuntimeDiagnostic,
+    logSafeStoryStudioRuntimeDiagnostic,
+} from '../src/storyStudio/production/storyStudioRuntimeDiagnostics';
 
 const PRIVATE_PROMPT = 'PRIVATE_STORY_PROMPT_SENTINEL';
 const PRIVATE_PROVIDER = 'PRIVATE_PROVIDER_MESSAGE_SENTINEL';
@@ -37,6 +47,22 @@ const timeoutAwareExecution: GeminiStoryEngineRunnerDependencies['smartExecution
             lastError = error;
             if (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError')) throw error;
             if (!isGeminiV4RequestTimeoutError(error)) throw error;
+        }
+    }
+    throw lastError;
+};
+
+const exhaustInfrastructureExecution: GeminiStoryEngineRunnerDependencies['smartExecution'] = async (
+    candidateModels,
+    operation,
+) => {
+    let lastError: unknown;
+    for (const modelId of candidateModels) {
+        try {
+            return await operation(modelId);
+        } catch (error) {
+            lastError = error;
+            if (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError')) throw error;
         }
     }
     throw lastError;
@@ -396,5 +422,165 @@ describe('Story Engine V4 Gemini request deadlines', () => {
         }));
         expect(attempts).toEqual(['gemini-3.6-flash']);
         expect(STORY_SETUP_COMPILER_CANDIDATES).toContain('gemini-3.5-flash');
+    });
+
+    it('surfaces an exact safe 503 -> timeout -> 429 Planner attempt summary', async () => {
+        vi.useFakeTimers();
+        const route = {
+            ...DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.planner,
+            preferredModelId: 'gemini-3.7-flash',
+            candidateModelIds: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+        };
+        const request = runGeminiStoryEngineJson({
+            role: 'planner', route, contents: `${PRIVATE_PROMPT} ${PRIVATE_SECRET}`,
+        }, {
+            smartExecution: exhaustInfrastructureExecution,
+            getAiClient: () => ({ models: { generateContent: (async ({ model }: { model: string }) => {
+                if (model === 'gemini-3.7-flash') throw {
+                    status: 503,
+                    error: { code: 503, status: 'UNAVAILABLE', message: `${PRIVATE_PROVIDER} ${PRIVATE_KEY}` },
+                };
+                if (model === 'gemini-3.6-flash') return new Promise<GenerateContentResponse>(() => undefined);
+                throw {
+                    status: 429,
+                    error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: `${PRIVATE_PROVIDER} ${PRIVATE_KEY}` },
+                };
+            }) as never } }),
+        });
+        let caught: StoryEngineModelRuntimeError | undefined;
+        const handled = request.catch(error => { caught = error as StoryEngineModelRuntimeError; });
+
+        await vi.advanceTimersByTimeAsync(180_000);
+        await handled;
+        expect(caught?.modelAttempts).toEqual([
+            {
+                modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX', httpStatus: 503,
+                apiStatus: 'UNAVAILABLE', elapsedMs: 0, attemptCount: 1,
+            },
+            {
+                modelId: 'gemini-3.6-flash', outcomeKind: 'REQUEST_TIMEOUT',
+                elapsedMs: 180_000, attemptCount: 1,
+            },
+            {
+                modelId: 'gemini-3.5-flash', outcomeKind: 'RATE_LIMIT_429', httpStatus: 429,
+                apiStatus: 'RESOURCE_EXHAUSTED', elapsedMs: 0, attemptCount: 1,
+            },
+        ]);
+
+        const productionError = new ProductionRuntimeError(
+            'MODEL_RUNTIME_FAILURE', 'planning', 1, 'planner',
+            undefined, undefined, undefined, caught?.modelAttempts,
+        );
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(productionError);
+        expect(diagnostic).toEqual({
+            code: 'MODEL_RUNTIME_FAILURE', stage: 'planning', role: 'planner',
+            modelAttempts: caught?.modelAttempts,
+        });
+        const serialized = JSON.stringify({ caught, diagnostic });
+        [PRIVATE_PROMPT, PRIVATE_PROVIDER, PRIVATE_KEY, PRIVATE_SECRET].forEach(value => {
+            expect(serialized).not.toContain(value);
+        });
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        logSafeStoryStudioRuntimeDiagnostic(productionError);
+        expect(consoleError).toHaveBeenCalledWith('Story Studio runtime diagnostic', diagnostic);
+        [PRIVATE_PROMPT, PRIVATE_PROVIDER, PRIVATE_KEY, PRIVATE_SECRET].forEach(value => {
+            expect(JSON.stringify(consoleError.mock.calls)).not.toContain(value);
+        });
+        consoleError.mockRestore();
+    });
+
+    it('keeps attempt outcomes isolated between separate V4 executions', async () => {
+        const oneModelRoute = {
+            ...DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.planner,
+            preferredModelId: 'gemini-3.7-flash',
+            candidateModelIds: ['gemini-3.7-flash'],
+        };
+        const capture = async (status: number, apiStatus: string): Promise<StoryEngineModelRuntimeError> => {
+            try {
+                await runGeminiStoryEngineJson({ role: 'planner', route: oneModelRoute, contents: PRIVATE_PROMPT }, {
+                    smartExecution: exhaustInfrastructureExecution,
+                    getAiClient: () => ({ models: { generateContent: (async () => {
+                        throw { status, error: { code: status, status: apiStatus, message: PRIVATE_PROVIDER } };
+                    }) as never } }),
+                });
+                throw new Error('expected model runtime failure');
+            } catch (error) {
+                return error as StoryEngineModelRuntimeError;
+            }
+        };
+
+        const first = await capture(503, 'UNAVAILABLE');
+        const second = await capture(403, 'PERMISSION_DENIED');
+        expect(first.modelAttempts?.map(entry => entry.outcomeKind)).toEqual(['SERVER_5XX']);
+        expect(second.modelAttempts?.map(entry => entry.outcomeKind)).toEqual(['PERMISSION_403']);
+        expect(second.modelAttempts).not.toEqual(first.modelAttempts);
+    });
+
+    it('keeps the outcome vocabulary closed, aggregates retries, and caps the list', () => {
+        expect(MODEL_ATTEMPT_OUTCOME_KINDS).toEqual([
+            'SUCCESS', 'REQUEST_TIMEOUT', 'RATE_LIMIT_429', 'SERVER_5XX', 'PERMISSION_403',
+            'INVALID_REQUEST_400', 'CANCELLED', 'EMPTY_RESPONSE', 'MALFORMED_JSON',
+            'SAFETY_BLOCK', 'UNKNOWN_PROVIDER_FAILURE',
+        ]);
+        const collector = new GeminiV4AttemptOutcomeCollector();
+        collector.record('gemini-3.7-flash', 'SERVER_5XX', Date.now() - 10, { httpStatus: 503, apiStatus: 'UNAVAILABLE' });
+        collector.record('gemini-3.7-flash', 'SERVER_5XX', Date.now() - 20, { httpStatus: 503, apiStatus: 'UNAVAILABLE' });
+        for (const modelId of ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']) {
+            for (const outcomeKind of MODEL_ATTEMPT_OUTCOME_KINDS) {
+                collector.record(modelId, outcomeKind, Date.now());
+            }
+        }
+        const snapshot = collector.snapshot();
+        expect(snapshot).toHaveLength(12);
+        expect(snapshot[0]).toMatchObject({ modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX', attemptCount: 2 });
+    });
+
+    it('re-sanitizes forged metadata at the typed V4 error and UI diagnostic boundaries', () => {
+        const runtimeError = new StoryEngineModelRuntimeError('planner', [
+            {
+                modelId: PRIVATE_SECRET,
+                outcomeKind: 'UNKNOWN_PROVIDER_FAILURE',
+                apiStatus: PRIVATE_PROVIDER,
+                elapsedMs: Number.MAX_SAFE_INTEGER,
+                attemptCount: Number.MAX_SAFE_INTEGER,
+            },
+            {
+                modelId: 'gemini-3.5-flash',
+                outcomeKind: 'UNKNOWN_PROVIDER_FAILURE',
+                apiStatus: PRIVATE_PROVIDER,
+                elapsedMs: Number.MAX_SAFE_INTEGER,
+                attemptCount: Number.MAX_SAFE_INTEGER,
+            },
+        ] as never);
+        expect(runtimeError.modelAttempts).toEqual([
+            {
+                modelId: 'gemini-3.5-flash',
+                outcomeKind: 'UNKNOWN_PROVIDER_FAILURE',
+                elapsedMs: 600_000,
+                attemptCount: 99,
+            },
+        ]);
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            'MODEL_RUNTIME_FAILURE', 'planning', 1, 'planner', undefined, undefined, undefined,
+            runtimeError.modelAttempts as never,
+        ));
+        expect(diagnostic?.modelAttempts).toEqual([{
+            modelId: 'gemini-3.5-flash',
+            outcomeKind: 'UNKNOWN_PROVIDER_FAILURE',
+            elapsedMs: 600_000,
+            attemptCount: 99,
+        }]);
+        expect(JSON.stringify(diagnostic)).not.toContain(PRIVATE_SECRET);
+        expect(JSON.stringify(diagnostic)).not.toContain(PRIVATE_PROVIDER);
+    });
+
+    it('leaves a legacy smartExecution caller unchanged without any V4 collector state', async () => {
+        const legacyResult = await smartExecution(
+            ['deepseek:legacy-safe'],
+            async modelId => ({ modelId, value: 'legacy-success' }),
+            'Legacy caller regression',
+        );
+        expect(legacyResult).toEqual({ modelId: 'deepseek:legacy-safe', value: 'legacy-success' });
+        expect(legacyResult).not.toHaveProperty('modelAttempts');
     });
 });

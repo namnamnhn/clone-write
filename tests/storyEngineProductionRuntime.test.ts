@@ -106,6 +106,7 @@ interface FakeRuntimeOptions {
     readonly abortRole?: string;
     readonly failRole?: string;
     readonly runtimeFailRole?: string;
+    readonly runtimeFailAttempts?: ConstructorParameters<typeof StoryEngineModelRuntimeError>[1];
 }
 
 const fakeRuntime = (
@@ -117,7 +118,9 @@ const fakeRuntime = (
         async run(request) {
             captures.push({ role: request.role, contents: request.contents });
             if (request.role === options.abortRole) throw new Error('ABORTED');
-            if (request.role === options.runtimeFailRole) throw new StoryEngineModelRuntimeError(request.role);
+            if (request.role === options.runtimeFailRole) {
+                throw new StoryEngineModelRuntimeError(request.role, options.runtimeFailAttempts);
+            }
             if (request.role === options.failRole) throw new Error('provider failed with unsafe details that must not escape');
             const chapter = chapterFrom(request.contents);
             if (request.role === 'planner') return { value: options.malformedPlan ? {} : internalPlan(chapter, options.goal, options.reveal && chapter === 1, options.storyEvent), selectedModelId: 'gemini-test' };
@@ -472,11 +475,17 @@ describe('WORK 12 production staged runtime', () => {
         ['planner', 'planning'],
         ['writer', 'writing'],
     ] as const)('maps typed %s infrastructure failure to MODEL_RUNTIME_FAILURE with the correct stage and role', async (role, stage) => {
-        const { seed, runtime } = harness({ runtimeFailRole: role });
+        const attempts = [{
+            modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX' as const,
+            httpStatus: 503, apiStatus: 'UNAVAILABLE' as const, elapsedMs: 1250, attemptCount: 3,
+        }];
+        const { seed, runtime } = harness({ runtimeFailRole: role, runtimeFailAttempts: attempts });
         const stateBefore = structuredClone(seed.state);
         const memoryBefore = structuredClone(seed.memory);
         const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
-        expect(result).toMatchObject({ status: 'blocked', code: 'MODEL_RUNTIME_FAILURE', stage, role });
+        expect(result).toMatchObject({
+            status: 'blocked', code: 'MODEL_RUNTIME_FAILURE', stage, role, modelAttempts: attempts,
+        });
         expect(JSON.stringify(result)).not.toContain('provider failed');
         expect(seed.state).toEqual(stateBefore);
         expect(seed.memory).toEqual(memoryBefore);
