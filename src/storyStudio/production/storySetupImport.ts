@@ -2,6 +2,7 @@ import {
     compileStoryControl,
     parseStoryBlueprintDocument,
     parseStoryBlueprintJson,
+    StoryControlValidationError,
 } from '../../storyEngine';
 import type { FullStoryControl, StoryBlueprintDocument } from '../../storyEngine';
 import { compileStorySetupWithGemini } from '../../services/storyEngine/geminiStorySetupCompiler';
@@ -24,6 +25,101 @@ export type StorySetupImportDiagnosticCode =
 
 export type StorySetupImportDiagnosticStage = 'compiler' | 'blueprint-parse' | 'control-compile' | 'review-build';
 
+export type StorySetupControlIssueKind =
+    | 'EMPTY_OR_DUPLICATE_ID'
+    | 'INVALID_CHAPTER_RANGE'
+    | 'EXCEEDS_PLANNED_CHAPTERS'
+    | 'RANGE_OVERLAP'
+    | 'COVERAGE_GAP'
+    | 'COVERAGE_INCOMPLETE'
+    | 'UNKNOWN_REFERENCE'
+    | 'INVALID_GATE_TIMING'
+    | 'RELATIONSHIP_PARTICIPANTS_INVALID'
+    | 'UNSUPPORTED_ENUM_VALUE'
+    | 'REQUIRED_SAFEGUARD_DISABLED'
+    | 'SECRET_SAFETY_VIOLATION'
+    | 'OTHER_VALIDATION_ISSUE';
+
+export type StorySetupControlIssuePath =
+    | 'kind' | 'id' | 'engine' | 'characterOrder' | 'characters' | 'arcs' | 'beats' | 'reveals'
+    | 'relationshipDefinitions' | 'relationshipEvents' | 'storyEvents'
+    | 'gates' | 'gates.characters' | 'gates.pov' | 'gates.reveals' | 'gates.relationships' | 'gates.events'
+    | 'forbiddenEvents' | 'forbiddenRelationshipEvents' | 'forbiddenReveals'
+    | 'authorOnlySecrets' | 'canonRules' | 'other';
+
+const MAX_SAFE_CONTROL_ISSUES = 12;
+
+const SAFE_CONTROL_PATH_ROOTS = new Set<StorySetupControlIssuePath>([
+    'kind', 'id', 'engine', 'characterOrder', 'characters', 'arcs', 'beats', 'reveals',
+    'relationshipDefinitions', 'relationshipEvents', 'storyEvents', 'forbiddenEvents',
+    'forbiddenRelationshipEvents', 'forbiddenReveals', 'authorOnlySecrets', 'canonRules',
+]);
+
+const SAFE_GATE_PATHS = new Set<StorySetupControlIssuePath>([
+    'gates.characters', 'gates.pov', 'gates.reveals', 'gates.relationships', 'gates.events',
+]);
+
+const safeControlIssuePath = (path: string): StorySetupControlIssuePath => {
+    const [root, branch] = path.split('.');
+    if (root === 'gates') {
+        const family = `gates.${branch ?? ''}` as StorySetupControlIssuePath;
+        return SAFE_GATE_PATHS.has(family) ? family : 'gates';
+    }
+    return SAFE_CONTROL_PATH_ROOTS.has(root as StorySetupControlIssuePath)
+        ? root as StorySetupControlIssuePath
+        : 'other';
+};
+
+const controlIssueKind = (path: string, message: string): StorySetupControlIssueKind => {
+    const family = safeControlIssuePath(path);
+    if ((path === 'id' || path.endsWith('.id'))
+        && (message === 'must not be empty' || message === 'must be non-empty and unique'
+            || message === 'must have a non-empty unique id and value')) return 'EMPTY_OR_DUPLICATE_ID';
+    if (message === 'must have a non-empty unique id and value') return 'EMPTY_OR_DUPLICATE_ID';
+    if (message === 'must have a valid inclusive chapter range' || message === 'must stay inside its arc range'
+        || message === 'must not precede availability') return 'INVALID_CHAPTER_RANGE';
+    if (message === 'exceeds planned chapter count') return 'EXCEEDS_PLANNED_CHAPTERS';
+    if (message.startsWith('overlaps arc ') || message.startsWith('overlaps beat ')) return 'RANGE_OVERLAP';
+    if (message.startsWith('must begin at coverage chapter ')) return 'COVERAGE_GAP';
+    if (message === 'must cover every planned chapter' || message.startsWith('must cover through chapter ')) {
+        return 'COVERAGE_INCOMPLETE';
+    }
+    if (message.startsWith('references unknown ')) return 'UNKNOWN_REFERENCE';
+    if (family === 'gates' || family.startsWith('gates.') || family.startsWith('forbidden')
+        || (family === 'characters' && message === 'must match effective availableFromChapter')) {
+        if (message === 'must be a positive first-allowed chapter' || message === 'must be a non-negative integer'
+            || message === 'must match effective availableFromChapter'
+            || message.startsWith('is missing a direct-appearance gate for ')) return 'INVALID_GATE_TIMING';
+    }
+    if ((family === 'relationshipDefinitions' || family === 'relationshipEvents')
+        && (message === 'must contain at least two unique characters'
+            || message === 'romantic relationships must contain exactly two participants'
+            || message === 'must contain at least two characters'
+            || message === 'must match its relationship definition')) return 'RELATIONSHIP_PARTICIPANTS_INVALID';
+    if (message === 'is unsupported' || message === 'must contain unique supported categories'
+        || message === 'must contain unique supported tags' || message === 'contains an unsupported action'
+        || message === 'non-romantic relationships must start at none'
+        || message === 'requires a canon-declared romantic relationship') return 'UNSUPPORTED_ENUM_VALUE';
+    if (message === 'required safeguards must remain enabled') return 'REQUIRED_SAFEGUARD_DISABLED';
+    if (message === 'writer-facing text contains protected author material') return 'SECRET_SAFETY_VIOLATION';
+    return 'OTHER_VALIDATION_ISSUE';
+};
+
+interface SafeStoryControlIssueSummary {
+    readonly issueCount: number;
+    readonly issuePaths: readonly StorySetupControlIssuePath[];
+    readonly issueKinds: readonly StorySetupControlIssueKind[];
+}
+
+const safeStoryControlIssueSummary = (error: StoryControlValidationError): SafeStoryControlIssueSummary => {
+    const visible = error.issues.slice(0, MAX_SAFE_CONTROL_ISSUES);
+    return {
+        issueCount: error.issues.length,
+        issuePaths: visible.map(issue => safeControlIssuePath(issue.path)),
+        issueKinds: visible.map(issue => controlIssueKind(issue.path, issue.message)),
+    };
+};
+
 const SAFE_DIAGNOSTIC_ERROR_NAMES = new Set([
     'Error', 'GeminiStorySetupCompilerError', 'StoryBlueprintParseError',
     'StoryControlCompileError', 'StoryControlValidationError',
@@ -36,6 +132,9 @@ const safeDiagnosticErrorName = (error: unknown): string => {
 
 export class StorySetupImportDiagnosticError extends Error {
     readonly errorName: string;
+    readonly issueCount?: number;
+    readonly issuePaths?: readonly StorySetupControlIssuePath[];
+    readonly issueKinds?: readonly StorySetupControlIssueKind[];
 
     constructor(
         readonly code: StorySetupImportDiagnosticCode,
@@ -45,6 +144,12 @@ export class StorySetupImportDiagnosticError extends Error {
         super(code);
         this.name = 'StorySetupImportDiagnosticError';
         this.errorName = safeDiagnosticErrorName(cause);
+        if (code === 'SETUP_CONTROL_COMPILE_FAILED' && cause instanceof StoryControlValidationError) {
+            const summary = safeStoryControlIssueSummary(cause);
+            this.issueCount = summary.issueCount;
+            this.issuePaths = summary.issuePaths;
+            this.issueKinds = summary.issueKinds;
+        }
     }
 }
 
@@ -52,11 +157,19 @@ export interface SafeStorySetupImportDiagnostic {
     readonly code: StorySetupImportDiagnosticCode;
     readonly stage: StorySetupImportDiagnosticStage;
     readonly errorName: string;
+    readonly issueCount?: number;
+    readonly issuePaths?: readonly StorySetupControlIssuePath[];
+    readonly issueKinds?: readonly StorySetupControlIssueKind[];
 }
 
 export const getSafeStorySetupImportDiagnostic = (error: unknown): SafeStorySetupImportDiagnostic | undefined =>
     error instanceof StorySetupImportDiagnosticError
-        ? { code: error.code, stage: error.stage, errorName: error.errorName }
+        ? {
+            code: error.code, stage: error.stage, errorName: error.errorName,
+            ...(error.issueCount === undefined ? {} : { issueCount: error.issueCount }),
+            ...(error.issuePaths === undefined ? {} : { issuePaths: error.issuePaths }),
+            ...(error.issueKinds === undefined ? {} : { issueKinds: error.issueKinds }),
+        }
         : undefined;
 
 export const logSafeStorySetupImportDiagnostic = (error: unknown): void => {

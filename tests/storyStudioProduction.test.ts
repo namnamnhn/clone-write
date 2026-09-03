@@ -5,6 +5,7 @@ import {
     createProductionStoryRuntime,
     createV4ProjectSeed,
     parseStoryBlueprintDocument,
+    StoryControlValidationError,
     STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
 } from '../src/storyEngine';
 import type { StoryBlueprintDocument } from '../src/storyEngine';
@@ -797,6 +798,65 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(logged).not.toContain('AUTHOR SECRET');
         expect(logged).not.toContain('PRIVATE_VALUE');
         expect(logged).not.toContain('PRIVATE_MODEL_DEFINED_ERROR_NAME');
+        consoleError.mockRestore();
+    });
+
+    it('reports capped closed StoryControl issue metadata without retaining paths, IDs, messages, or secrets', async () => {
+        const sentinelId = 'SENTINEL_MODEL_ID_7EC4';
+        const sentinelSecret = 'SENTINEL_AUTHOR_SECRET_9AD1';
+        const issues = [
+            { path: `beats.${sentinelId}.arcId`, message: `references unknown arc ${sentinelId}` },
+            { path: 'arcs.1', message: `overlaps arc ${sentinelId}` },
+            { path: `relationshipDefinitions.${sentinelId}.participantIds`, message: 'must contain at least two unique characters' },
+            { path: 'canonRules.0.text', message: 'writer-facing text contains protected author material' },
+            { path: 'relationshipDefinitions.0.progressionPolicy', message: 'required safeguards must remain enabled' },
+            { path: 'gates.reveals.0.allowedFromChapter', message: 'must be a positive first-allowed chapter' },
+            { path: 'arcs.0.endChapter', message: 'exceeds planned chapter count' },
+            { path: 'arcs.0', message: 'must have a valid inclusive chapter range' },
+            { path: 'arcs.1', message: 'must begin at coverage chapter 7' },
+            { path: 'arcs', message: 'must cover through chapter 600' },
+            { path: 'relationshipDefinitions.0.categories', message: 'must contain unique supported categories' },
+            { path: `private.${sentinelSecret}`, message: `unrecognized validator text ${sentinelSecret}` },
+            { path: 'authorOnlySecrets.0', message: 'must have a non-empty unique id and value' },
+            { path: `characters.${sentinelId}.name`, message: `must not expose ${sentinelSecret}` },
+        ];
+        const cause = new StoryControlValidationError(issues);
+        let caught: unknown;
+        try {
+            await prepareAuthorTextStorySetupImport('AUTHOR SECRET: PRIVATE_SOURCE_VALUE', 'private.md', {
+                compiler: async () => ({ value: representativeDocument(), selectedModelId: 'gemini-test' }),
+                compileControl: () => { throw cause; },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        const diagnostic = getSafeStorySetupImportDiagnostic(caught);
+        expect(diagnostic).toEqual({
+            code: 'SETUP_CONTROL_COMPILE_FAILED', stage: 'control-compile', errorName: 'StoryControlValidationError',
+            issueCount: 14,
+            issuePaths: [
+                'beats', 'arcs', 'relationshipDefinitions', 'canonRules', 'relationshipDefinitions',
+                'gates.reveals', 'arcs', 'arcs', 'arcs', 'arcs', 'relationshipDefinitions', 'other',
+            ],
+            issueKinds: [
+                'UNKNOWN_REFERENCE', 'RANGE_OVERLAP', 'RELATIONSHIP_PARTICIPANTS_INVALID',
+                'SECRET_SAFETY_VIOLATION', 'REQUIRED_SAFEGUARD_DISABLED', 'INVALID_GATE_TIMING',
+                'EXCEEDS_PLANNED_CHAPTERS', 'INVALID_CHAPTER_RANGE', 'COVERAGE_GAP',
+                'COVERAGE_INCOMPLETE', 'UNSUPPORTED_ENUM_VALUE', 'OTHER_VALIDATION_ISSUE',
+            ],
+        });
+        expect(diagnostic?.issuePaths).toHaveLength(12);
+        expect(diagnostic?.issueKinds).toHaveLength(12);
+
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        logSafeStorySetupImportDiagnostic(caught);
+        expect(consoleError).toHaveBeenCalledWith('Story Studio setup import diagnostic', diagnostic);
+        const serialized = JSON.stringify({ caught, diagnostic, logged: consoleError.mock.calls });
+        expect(serialized).not.toContain('PRIVATE_SOURCE_VALUE');
+        expect(serialized).not.toContain(sentinelId);
+        expect(serialized).not.toContain(sentinelSecret);
+        expect(serialized).not.toContain('references unknown');
+        expect(serialized).not.toContain('unrecognized validator text');
         consoleError.mockRestore();
     });
 
