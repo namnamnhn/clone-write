@@ -1,3 +1,5 @@
+import type { FullStoryControl } from './types';
+
 /**
  * Canonical JSON serialization for deterministic content identities.
  * Object property order is ignored; array order remains significant.
@@ -105,8 +107,12 @@ export const canonicalContentIdentity = (namespace: string, value: unknown): str
 export const canonicalValuesEqual = (left: unknown, right: unknown): boolean =>
     canonicalSerialize(left) === canonicalSerialize(right);
 
+export const createStoryControlIdentity = (control: FullStoryControl): string =>
+    canonicalContentIdentity('story-control-v1', control);
+
 export const createCanonicalizationSourceIdentity = (value: {
     readonly storyControlId: string;
+    readonly storyControlIdentity: string;
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly chapterPlan: unknown;
@@ -116,6 +122,7 @@ export const createCanonicalizationSourceIdentity = (value: {
 export const createCanonProposalIdentity = (value: {
     readonly sourceIdentity: string;
     readonly storyControlId: string;
+    readonly storyControlIdentity: string;
     readonly baseChapter: number;
     readonly baseRevision: number;
     readonly targetChapter: number;

@@ -114,7 +114,8 @@ export const validateWriterChapter = async (request: ValidateWriterChapterReques
             prompt: buildSemanticValidatorPrompt(context),
         });
         issues.push(...parseSemanticValidationResult(output, context));
-    } catch {
+    } catch (error) {
+        if (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError')) throw error;
         issues.push(createValidationIssue('VALIDATOR_PROTOCOL_FAILURE', 'critical', 'infrastructure'));
     }
     return {

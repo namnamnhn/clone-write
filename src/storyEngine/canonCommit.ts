@@ -17,7 +17,7 @@ import {
     validateStateExtractionContract,
 } from './stateExtractor';
 import type { StoryState } from './types';
-import { canonicalValuesEqual, createCanonProposalIdentity } from './canonicalIdentity';
+import { canonicalValuesEqual, createCanonProposalIdentity, createStoryControlIdentity } from './canonicalIdentity';
 
 export const DEFAULT_MAX_CANON_REVIEW_CHANGES = 128;
 
@@ -120,13 +120,16 @@ export const prepareCanonCommit = (request: PrepareCanonCommitRequest): PrepareC
         return blocked([{ code: 'CANON_PREVIEW_REJECTED', path: 'review' }]);
     }
     const sourceIdentity = validated.source.canonicalizationSourceIdentity;
+    const storyControlIdentity = createStoryControlIdentity(request.control);
     const proposalIdentity = createCanonProposalIdentity({
         sourceIdentity, storyControlId: request.control.id,
+        storyControlIdentity,
         baseChapter: validated.source.baseChapter, baseRevision: validated.source.baseRevision,
         targetChapter: validated.source.chapterPlan.chapterNumber, delta,
     });
     return {
         kind: 'canon-commit-proposal', status: 'ready-for-review', storyControlId: request.control.id,
+        storyControlIdentity,
         baseChapter: validated.source.baseChapter, baseRevision: validated.source.baseRevision,
         targetChapter: validated.source.chapterPlan.chapterNumber,
         sourceIdentity, proposalIdentity,
@@ -143,10 +146,12 @@ export const createMakeCanonConfirmation = (proposal: CanonCommitProposal): Make
 const requireProposal = (value: unknown): CanonCommitProposal => {
     if (!isRecord(value) || value.kind !== 'canon-commit-proposal' || value.status !== 'ready-for-review'
         || typeof value.storyControlId !== 'string' || !Number.isSafeInteger(value.baseChapter)
+        || typeof value.storyControlIdentity !== 'string'
         || !Number.isSafeInteger(value.baseRevision) || !Number.isSafeInteger(value.targetChapter)
         || typeof value.sourceIdentity !== 'string' || typeof value.proposalIdentity !== 'string'
         || !isRecord(value.source) || value.source.kind !== 'validated-chapter-source'
         || typeof value.source.storyControlId !== 'string' || !Number.isSafeInteger(value.source.baseChapter)
+        || typeof value.source.storyControlIdentity !== 'string'
         || !Number.isSafeInteger(value.source.baseRevision) || !isRecord(value.source.chapterPlan)
         || typeof value.source.canonicalizationSourceIdentity !== 'string'
         || value.source.chapterPlan.kind !== 'writer-chapter-plan'
@@ -191,7 +196,10 @@ export const makeCanon = (request: MakeCanonRequest): StoryState => {
         throw new MakeCanonError('INVALID_PROPOSAL', 'original approved source is invalid or has changed');
     }
     const proposal = requireProposal(request.proposal);
-    if (proposal.storyControlId !== request.control.id || proposal.source.storyControlId !== request.control.id) {
+    const storyControlIdentity = createStoryControlIdentity(request.control);
+    if (proposal.storyControlId !== request.control.id || proposal.source.storyControlId !== request.control.id
+        || proposal.storyControlIdentity !== storyControlIdentity
+        || proposal.source.storyControlIdentity !== storyControlIdentity) {
         throw new MakeCanonError('WRONG_STORY', 'proposal belongs to another StoryControl');
     }
     if (current.currentChapter !== proposal.baseChapter || current.revision !== proposal.baseRevision) {
@@ -206,6 +214,7 @@ export const makeCanon = (request: MakeCanonRequest): StoryState => {
             || proposal.sourceIdentity !== validated.source.canonicalizationSourceIdentity
             || proposal.source.canonicalizationSourceIdentity !== validated.source.canonicalizationSourceIdentity
             || proposal.source.storyControlId !== validated.source.storyControlId
+            || proposal.source.storyControlIdentity !== validated.source.storyControlIdentity
             || !canonicalValuesEqual(proposal.source.chapterPlan, validated.source.chapterPlan)
             || proposal.delta.schemaVersion !== 2) throw new Error('proposal cursor mismatch');
         delta = parseStoryStateDelta(proposal.delta);
@@ -214,6 +223,7 @@ export const makeCanon = (request: MakeCanonRequest): StoryState => {
         }
         const recomputedIdentity = createCanonProposalIdentity({
             sourceIdentity: proposal.sourceIdentity, storyControlId: proposal.storyControlId,
+            storyControlIdentity: proposal.storyControlIdentity,
             baseChapter: proposal.baseChapter, baseRevision: proposal.baseRevision,
             targetChapter: proposal.targetChapter, delta,
         });
