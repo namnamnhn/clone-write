@@ -3,7 +3,7 @@ import {
     parseStoryBlueprintDocument,
     parseStoryBlueprintJson,
 } from '../../storyEngine';
-import type { StoryBlueprintDocument } from '../../storyEngine';
+import type { FullStoryControl, StoryBlueprintDocument } from '../../storyEngine';
 import { compileStorySetupWithGemini } from '../../services/storyEngine/geminiStorySetupCompiler';
 import type { CompileStorySetupRequest, StorySetupCompilerResult } from '../../services/storyEngine/geminiStorySetupCompiler';
 
@@ -15,6 +15,54 @@ export class StorySetupImportError extends Error {
         this.name = 'StorySetupImportError';
     }
 }
+
+export type StorySetupImportDiagnosticCode =
+    | 'SETUP_COMPILER_FAILED'
+    | 'SETUP_BLUEPRINT_PARSE_FAILED'
+    | 'SETUP_CONTROL_COMPILE_FAILED'
+    | 'SETUP_REVIEW_BUILD_FAILED';
+
+export type StorySetupImportDiagnosticStage = 'compiler' | 'blueprint-parse' | 'control-compile' | 'review-build';
+
+const SAFE_DIAGNOSTIC_ERROR_NAMES = new Set([
+    'Error', 'GeminiStorySetupCompilerError', 'StoryBlueprintParseError',
+    'StoryControlCompileError', 'StoryControlValidationError',
+]);
+
+const safeDiagnosticErrorName = (error: unknown): string => {
+    if (typeof error !== 'object' || error === null || !('name' in error) || typeof error.name !== 'string') return 'Error';
+    return SAFE_DIAGNOSTIC_ERROR_NAMES.has(error.name) ? error.name : 'Error';
+};
+
+export class StorySetupImportDiagnosticError extends Error {
+    readonly errorName: string;
+
+    constructor(
+        readonly code: StorySetupImportDiagnosticCode,
+        readonly stage: StorySetupImportDiagnosticStage,
+        cause: unknown,
+    ) {
+        super(code);
+        this.name = 'StorySetupImportDiagnosticError';
+        this.errorName = safeDiagnosticErrorName(cause);
+    }
+}
+
+export interface SafeStorySetupImportDiagnostic {
+    readonly code: StorySetupImportDiagnosticCode;
+    readonly stage: StorySetupImportDiagnosticStage;
+    readonly errorName: string;
+}
+
+export const getSafeStorySetupImportDiagnostic = (error: unknown): SafeStorySetupImportDiagnostic | undefined =>
+    error instanceof StorySetupImportDiagnosticError
+        ? { code: error.code, stage: error.stage, errorName: error.errorName }
+        : undefined;
+
+export const logSafeStorySetupImportDiagnostic = (error: unknown): void => {
+    const diagnostic = getSafeStorySetupImportDiagnostic(error);
+    if (diagnostic) console.error('Story Studio setup import diagnostic', diagnostic);
+};
 
 export type StorySetupImportIssueCode =
     | 'PLANNED_CHAPTER_COUNT_MISMATCH'
@@ -139,12 +187,11 @@ export const auditAuthorSetupSource = (source: string): AuthorSetupAudit => {
 };
 
 const buildReview = (
-    document: StoryBlueprintDocument,
+    control: FullStoryControl,
     displayName: string,
     audit?: AuthorSetupAudit,
     compilerModelId?: string,
 ): StorySetupImportReview => {
-    const control = compileStoryControl(document.blueprint);
     const criticalIssues: StorySetupImportIssue[] = [];
     if (audit?.plannedChapterCount !== undefined && audit.plannedChapterCount !== control.engine.plannedChapterCount) {
         criticalIssues.push({ code: 'PLANNED_CHAPTER_COUNT_MISMATCH', detail: `Setup khai báo ${audit.plannedChapterCount} chương nhưng bản biên dịch có ${control.engine.plannedChapterCount}.` });
@@ -182,31 +229,90 @@ const buildReview = (
 
 export const prepareJsonStorySetupImport = (source: string, filename: string): PreparedStorySetupImport => {
     const setupDocument = parseStoryBlueprintJson(source);
+    const control = compileStoryControl(setupDocument.blueprint);
     return {
         kind: 'prepared-story-setup-import', mode: 'json', setupDocument,
-        review: buildReview(setupDocument, fallbackName(filename)),
+        review: buildReview(control, fallbackName(filename)),
     };
 };
 
 export type StorySetupCompiler = (request: CompileStorySetupRequest) => Promise<StorySetupCompilerResult>;
 
+interface StorySetupImportDiagnosticDependencies {
+    readonly parseBlueprint?: typeof parseStoryBlueprintDocument;
+    readonly compileControl?: typeof compileStoryControl;
+    readonly buildImportReview?: (
+        control: FullStoryControl,
+        displayName: string,
+        audit: AuthorSetupAudit,
+        compilerModelId: string,
+    ) => StorySetupImportReview;
+}
+
+const PASSTHROUGH_COMPILER_CODES = new Set([
+    'CANCELLED', 'NO_MODEL_AVAILABLE', 'EMPTY_RESPONSE', 'MALFORMED_JSON',
+]);
+
+const isKnownCompilerError = (error: unknown): boolean =>
+    typeof error === 'object' && error !== null && 'code' in error
+    && typeof error.code === 'string' && PASSTHROUGH_COMPILER_CODES.has(error.code);
+
+const diagnosticError = (
+    code: StorySetupImportDiagnosticCode,
+    stage: StorySetupImportDiagnosticStage,
+    error: unknown,
+): StorySetupImportDiagnosticError => error instanceof StorySetupImportDiagnosticError
+    ? error
+    : new StorySetupImportDiagnosticError(code, stage, error);
+
 export const prepareAuthorTextStorySetupImport = async (
     source: string,
     filename: string,
-    options: { readonly availableModelIds?: readonly string[]; readonly signal?: AbortSignal; readonly compiler?: StorySetupCompiler } = {},
+    options: {
+        readonly availableModelIds?: readonly string[];
+        readonly signal?: AbortSignal;
+        readonly compiler?: StorySetupCompiler;
+    } & StorySetupImportDiagnosticDependencies = {},
 ): Promise<PreparedStorySetupImport> => {
     const bytes = new TextEncoder().encode(source).byteLength;
     if (!source.trim() || bytes > MAX_AUTHOR_SETUP_SOURCE_BYTES) throw new StorySetupImportError('SETUP_SOURCE_SIZE_INVALID');
     const audit = auditAuthorSetupSource(source);
     const compiler = options.compiler ?? compileStorySetupWithGemini;
-    const compiled = await compiler({
-        source,
-        ...(options.availableModelIds === undefined ? {} : { availableModelIds: options.availableModelIds }),
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
-    const setupDocument = parseStoryBlueprintDocument(compiled.value);
+    let compiled: StorySetupCompilerResult;
+    try {
+        compiled = await compiler({
+            source,
+            ...(options.availableModelIds === undefined ? {} : { availableModelIds: options.availableModelIds }),
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+    } catch (error) {
+        // Retain the existing safe/actionable compiler codes. Unknown provider
+        // failures receive the closed diagnostic code without retaining cause.
+        if (isKnownCompilerError(error)) throw error;
+        throw diagnosticError('SETUP_COMPILER_FAILED', 'compiler', error);
+    }
+    let setupDocument: StoryBlueprintDocument;
+    try {
+        setupDocument = (options.parseBlueprint ?? parseStoryBlueprintDocument)(compiled.value);
+    } catch (error) {
+        throw diagnosticError('SETUP_BLUEPRINT_PARSE_FAILED', 'blueprint-parse', error);
+    }
+    let control: FullStoryControl;
+    try {
+        control = (options.compileControl ?? compileStoryControl)(setupDocument.blueprint);
+    } catch (error) {
+        throw diagnosticError('SETUP_CONTROL_COMPILE_FAILED', 'control-compile', error);
+    }
+    let review: StorySetupImportReview;
+    try {
+        review = (options.buildImportReview ?? buildReview)(
+            control, sourceDisplayName(source, filename), audit, compiled.selectedModelId,
+        );
+    } catch (error) {
+        throw diagnosticError('SETUP_REVIEW_BUILD_FAILED', 'review-build', error);
+    }
     return {
         kind: 'prepared-story-setup-import', mode: 'author-text', setupDocument,
-        review: buildReview(setupDocument, sourceDisplayName(source, filename), audit, compiled.selectedModelId),
+        review,
     };
 };

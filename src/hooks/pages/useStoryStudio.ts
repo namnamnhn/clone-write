@@ -8,6 +8,7 @@ import { buildConnectedStoryStudioSession } from '../../storyStudio/production/s
 import {
     prepareAuthorTextStorySetupImport,
     prepareJsonStorySetupImport,
+    logSafeStorySetupImportDiagnostic,
     StorySetupImportError,
 } from '../../storyStudio/production/storySetupImport';
 import type { PreparedStorySetupImport } from '../../storyStudio/production/storySetupImport';
@@ -48,6 +49,10 @@ const safeMessage = (error: unknown): string => {
         EMPTY_RESPONSE: 'Gemini không trả về bản biên dịch setup.',
         SETUP_SOURCE_SIZE_INVALID: 'Tệp setup trống hoặc vượt giới hạn an toàn 2 MiB.',
         UNSUPPORTED_SETUP_FILE: 'Story Studio chỉ nhận tệp V4 JSON, TXT hoặc MD.',
+        SETUP_COMPILER_FAILED: 'Gemini chưa biên dịch được setup TXT/MD. Dự án hiện tại vẫn được giữ nguyên.',
+        SETUP_BLUEPRINT_PARSE_FAILED: 'Kết quả Gemini không đúng cấu trúc Blueprint V4 nghiêm ngặt. Dự án chưa được tạo.',
+        SETUP_CONTROL_COMPILE_FAILED: 'Blueprint đã đọc được nhưng không vượt qua kiểm tra StoryControl. Dự án chưa được tạo.',
+        SETUP_REVIEW_BUILD_FAILED: 'StoryControl hợp lệ nhưng không thể tạo bản review setup an toàn. Dự án chưa được tạo.',
     };
     return messages[code] ?? 'Không thể hoàn tất thao tác. Canon hiện tại vẫn an toàn.';
 };
@@ -112,6 +117,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     }, []);
 
     const handleError = useCallback((error: unknown) => {
+        logSafeStorySetupImportDiagnostic(error);
         const message = safeMessage(error);
         if (mountedRef.current) {
             setErrorMessage(message);

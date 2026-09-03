@@ -1,5 +1,5 @@
 import type { GenerateContentResponse } from '@google/genai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     compileStoryControl,
     createProductionStoryRuntime,
@@ -28,9 +28,13 @@ import { buildConnectedStoryStudioSession, getCanonicalChapterHistoryEntry } fro
 import {
     auditAuthorSetupSource,
     countAuthorSecretDeclarations,
+    getSafeStorySetupImportDiagnostic,
+    logSafeStorySetupImportDiagnostic,
     prepareAuthorTextStorySetupImport,
     prepareJsonStorySetupImport,
+    StorySetupImportDiagnosticError,
 } from '../src/storyStudio/production/storySetupImport';
+import type { StorySetupImportDiagnosticCode } from '../src/storyStudio/production/storySetupImport';
 import {
     buildStorySetupCompilerPrompt,
     compileStorySetupWithGemini,
@@ -738,6 +742,61 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(prepared.review.authorSecretCount).toBe(1);
         expect(JSON.stringify(prepared)).not.toContain('AUTHOR SECRET: hidden');
         expect(JSON.stringify(prepared.review)).not.toContain(RAW_SECRET);
+    });
+
+    it.each([
+        {
+            code: 'SETUP_COMPILER_FAILED', stage: 'compiler',
+            overrides: { compiler: async () => { throw new Error('RAW_COMPILER_RESPONSE AUTHOR SECRET'); } },
+        },
+        {
+            code: 'SETUP_BLUEPRINT_PARSE_FAILED', stage: 'blueprint-parse',
+            overrides: { parseBlueprint: () => { throw new Error('RAW_BLUEPRINT_RESPONSE AUTHOR SECRET'); } },
+        },
+        {
+            code: 'SETUP_CONTROL_COMPILE_FAILED', stage: 'control-compile',
+            overrides: { compileControl: () => { throw new Error('RAW_CONTROL_RESPONSE AUTHOR SECRET'); } },
+        },
+        {
+            code: 'SETUP_REVIEW_BUILD_FAILED', stage: 'review-build',
+            overrides: { buildImportReview: () => { throw new Error('RAW_REVIEW_RESPONSE AUTHOR SECRET'); } },
+        },
+    ] as const)('maps the $stage boundary to safe diagnostic $code', async ({ code, stage, overrides }) => {
+        let caught: unknown;
+        try {
+            await prepareAuthorTextStorySetupImport('AUTHOR SECRET: PRIVATE_SOURCE_VALUE', 'private.md', {
+                compiler: async () => ({ value: representativeDocument(), selectedModelId: 'gemini-test' }),
+                ...overrides,
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toMatchObject({ code, stage, errorName: 'Error', message: code });
+        const diagnostic = getSafeStorySetupImportDiagnostic(caught);
+        expect(diagnostic).toEqual({ code: code as StorySetupImportDiagnosticCode, stage, errorName: 'Error' });
+        const surfaced = JSON.stringify({ error: caught, diagnostic });
+        expect(surfaced).not.toContain('PRIVATE_SOURCE_VALUE');
+        expect(surfaced).not.toContain('RAW_');
+        expect(surfaced).not.toContain('AUTHOR SECRET');
+    });
+
+    it('logs only allowlisted setup diagnostic metadata', () => {
+        const unsafe = new Error('RAW_GEMINI_RESPONSE AUTHOR SECRET: PRIVATE_VALUE');
+        unsafe.name = 'PRIVATE_MODEL_DEFINED_ERROR_NAME';
+        const diagnostic = new StorySetupImportDiagnosticError(
+            'SETUP_BLUEPRINT_PARSE_FAILED', 'blueprint-parse', unsafe,
+        );
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        logSafeStorySetupImportDiagnostic(diagnostic);
+        expect(consoleError).toHaveBeenCalledWith('Story Studio setup import diagnostic', {
+            code: 'SETUP_BLUEPRINT_PARSE_FAILED', stage: 'blueprint-parse', errorName: 'Error',
+        });
+        const logged = JSON.stringify(consoleError.mock.calls);
+        expect(logged).not.toContain('RAW_GEMINI_RESPONSE');
+        expect(logged).not.toContain('AUTHOR SECRET');
+        expect(logged).not.toContain('PRIVATE_VALUE');
+        expect(logged).not.toContain('PRIVATE_MODEL_DEFINED_ERROR_NAME');
+        consoleError.mockRestore();
     });
 
     it('coverage audit blocks planned chapter, arc range, and Author Secret loss', async () => {
