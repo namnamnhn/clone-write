@@ -33,14 +33,6 @@ export const ChapterWorkflowPanel: React.FC<{ stages: readonly StoryStudioWorkfl
                 );
             })}
         </ol>
-        <div className="mt-4 flex flex-col gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-700 dark:bg-slate-950/50">
-            <div>
-                <div className="text-sm font-bold text-slate-700 dark:text-slate-200">Make Canon</div>
-                <div className="text-xs text-slate-500 dark:text-slate-400">Chưa khả dụng — State Extractor / Make Canon chưa được triển khai.</div>
-            </div>
-            <button type="button" disabled title="State Extractor / Make Canon chưa được triển khai" className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-bold text-slate-400 dark:bg-slate-800 dark:text-slate-500">
-                Make Canon
-            </button>
-        </div>
+        <p className="mt-4 text-xs leading-relaxed text-slate-500 dark:text-slate-400">Make Canon chỉ khả dụng sau khi Validator, State Extractor và Review Canon hoàn tất. Hệ thống không tự động đưa bản nháp vào Canon.</p>
     </section>
 );

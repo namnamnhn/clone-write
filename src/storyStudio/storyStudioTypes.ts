@@ -29,6 +29,8 @@ export interface StoryStudioSession {
     readonly validatorStrategicView?: ValidatorStrategicView;
     readonly validatorRelationshipView?: ValidatorRelationshipView;
     readonly approvalStatus?: StoryStudioApprovalStatus;
+    /** True only when a persisted Canon proposal is ready for explicit human review. */
+    readonly canonReviewReady?: boolean;
 }
 
 export type StoryStudioPrivilege =

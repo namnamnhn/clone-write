@@ -26,7 +26,7 @@ export const StoryStudioHeader: React.FC<{ project: StoryStudioProjectView; onEx
                     </div>
                     <h1 className="truncate text-2xl font-black tracking-tight sm:text-3xl">{project.title}</h1>
                     <p className="mt-2 max-w-2xl text-sm leading-relaxed text-indigo-100">
-                        Không gian quan sát Canon, kế hoạch, bản nháp và kiểm định — không tự động thay đổi trạng thái truyện.
+                        Không gian sản xuất Canon, kế hoạch, bản nháp và kiểm định — mọi lần Make Canon đều cần xác nhận rõ ràng.
                     </p>
                 </div>
                 {project.isDemo && (

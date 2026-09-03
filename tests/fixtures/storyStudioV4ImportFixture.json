@@ -1,0 +1,33 @@
+{
+  "kind": "story-blueprint-document",
+  "formatVersion": 1,
+  "blueprint": {
+    "id": "story-studio-browser-smoke",
+    "engine": { "plannedChapterCount": 3 },
+    "characters": [
+      { "id": "hero", "name": "Minh An", "availableFromChapter": 1 },
+      { "id": "guide", "name": "Linh Vũ", "availableFromChapter": 3 }
+    ],
+    "arcs": [
+      { "id": "arc-opening", "title": "Cánh cửa thư viện", "startChapter": 1, "endChapter": 2 },
+      { "id": "arc-reveal", "title": "Sự thật của bản đồ", "startChapter": 3, "endChapter": 3 }
+    ],
+    "reveals": [
+      { "id": "map-truth", "writerText": "Nguồn gốc công khai của bản đồ đã có thể được tiết lộ." }
+    ],
+    "gates": {
+      "pov": [
+        { "id": "hero-pov", "characterId": "hero", "allowedFromChapter": 1 }
+      ],
+      "reveals": [
+        { "id": "map-truth-gate", "revealId": "map-truth", "allowedFromChapter": 3 }
+      ]
+    },
+    "authorOnlySecrets": [
+      { "id": "map-secret", "value": "BROWSER_SMOKE_PRIVATE_SECRET_DO_NOT_RENDER", "revealId": "map-truth" }
+    ],
+    "canonRules": [
+      { "id": "archive-rule", "text": "Mọi lựa chọn trong thư viện đều để lại dấu vết.", "availableFromChapter": 1, "scope": "world" }
+    ]
+  }
+}
