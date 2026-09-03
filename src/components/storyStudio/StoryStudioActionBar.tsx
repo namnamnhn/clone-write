@@ -27,8 +27,9 @@ export const StoryStudioActionBar: React.FC<{
 }> = ({ project, batchSize, saveStatus, operation, disabled, onBatchSize, onStart, onResume, onStop, onRewrite, onReplan, onImport, onOpenSettings, onDelete }) => {
     const workflow = project.workflow;
     const storyComplete = project.state.currentChapter >= project.control.engine.plannedChapterCount;
+    const approvedRecoveryStage = workflow.stage === 'validated' || workflow.stage === 'extracted';
     const canStart = workflow.stage === 'idle' && project.batchQueue.remaining === 0 && !storyComplete;
-    const canResume = !canStart && workflow.stage !== 'ready-for-canon-review' && workflow.stage !== 'rejected' && !storyComplete;
+    const canResume = !canStart && !approvedRecoveryStage && workflow.stage !== 'ready-for-canon-review' && workflow.stage !== 'rejected' && !storyComplete;
     return (
         <section className="sticky top-0 z-30 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -39,9 +40,14 @@ export const StoryStudioActionBar: React.FC<{
                             <option value={1}>1 chương</option><option value={2}>2 chương</option><option value={3}>3 chương</option>
                         </select>
                     </div>
-                    {operation ? <button type="button" onClick={onStop} disabled={operation === 'stopping'} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"><Pause className="h-4 w-4" /> {operation === 'stopping' ? 'Đang dừng…' : 'Dừng'}</button> : <>
+                    {operation ? <button type="button" onClick={onStop} disabled={operation === 'stopping'} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"><Pause className="h-4 w-4" /> {operation === 'stopping' ? 'Đang dừng an toàn…' : 'Dừng'}</button> : <>
                         {canStart && <button type="button" onClick={onStart} disabled={disabled} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-40"><Play className="h-4 w-4" /> Bắt đầu viết</button>}
                         {canResume && <button type="button" onClick={onResume} disabled={disabled} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-40"><Play className="h-4 w-4" /> Tiếp tục từ bước đã lưu</button>}
+                        {approvedRecoveryStage && <>
+                            <button type="button" onClick={onResume} disabled={disabled} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-40"><Play className="h-4 w-4" /> Thử lại bước hiện tại</button>
+                            <button type="button" onClick={onRewrite} disabled={disabled} className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-black text-white"><RotateCcw className="h-4 w-4" /> Viết lại từ cùng kế hoạch</button>
+                            <button type="button" onClick={onReplan} disabled={disabled} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold dark:border-slate-700">Lập kế hoạch lại chương</button>
+                        </>}
                         {workflow.stage === 'rejected' && <>
                             <button type="button" onClick={onRewrite} disabled={disabled} className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-black text-white"><RotateCcw className="h-4 w-4" /> Viết lại từ cùng kế hoạch</button>
                             <button type="button" onClick={onReplan} disabled={disabled} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold dark:border-slate-700">Lập kế hoạch lại chương</button>

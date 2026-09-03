@@ -155,14 +155,22 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     const importFile = useCallback(async (file: File) => {
         if (abortRef.current || operation) return;
         setErrorMessage(undefined);
+        let compilerAbortController: AbortController | undefined;
         try {
             const source = await file.text();
             let prepared: PreparedStorySetupImport;
             if (/\.json$/i.test(file.name)) {
                 prepared = prepareJsonStorySetupImport(source, file.name);
             } else if (/\.(?:txt|md)$/i.test(file.name)) {
+                compilerAbortController = new AbortController();
+                abortRef.current = compilerAbortController;
+                stopRequestedRef.current = false;
                 setOperation('compiling-setup');
-                prepared = await prepareAuthorTextStorySetupImport(source, file.name, { availableModelIds: enabledModels });
+                prepared = await prepareAuthorTextStorySetupImport(source, file.name, {
+                    availableModelIds: enabledModels,
+                    signal: compilerAbortController.signal,
+                });
+                if (compilerAbortController.signal.aborted) return;
             } else {
                 throw new StorySetupImportError('UNSUPPORTED_SETUP_FILE');
             }
@@ -171,6 +179,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         } catch (error) {
             handleError(error);
         } finally {
+            if (compilerAbortController && abortRef.current === compilerAbortController) abortRef.current = null;
             setOperation(undefined);
         }
     }, [enabledModels, handleError, operation]);

@@ -61,6 +61,7 @@ export {
 } from './canonCommit';
 export * from './narrativeMemory';
 export * from './storyBlueprintRuntime';
+export * from './storyBlueprintResponseSchema';
 export * from './productionRuntimeTypes';
 export * from './productionArtifactIdentity';
 export * from './productionRuntimePolicy';

@@ -67,34 +67,74 @@ const sourceDisplayName = (source: string, filename: string): string => {
     return first.replace(/^#{1,6}\s*/, '').replace(/^\[[^\]]+\]\s*/, '').trim() || fallbackName(filename);
 };
 
-const parseSettingsCount = (source: string): number | undefined => {
-    for (const line of source.split(/\r?\n/)) {
-        if (!/STORY_ENGINE_SETTINGS/i.test(line)) continue;
-        const start = line.indexOf('{');
-        if (start < 0) continue;
+const countFromMachineSettings = (value: unknown): number | undefined => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    const count = record.plannedChapterCount ?? record.totalPlannedChapters
+        ?? record.totalChapters ?? record.totalChapterCount;
+    return typeof count === 'number' && Number.isSafeInteger(count) && count > 0 ? count : undefined;
+};
+
+const parseMachineSettingsCount = (source: string): number | undefined => {
+    const lines = source.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+        const marker = lines[index].match(/\[STORY_ENGINE_SETTINGS(?:_V\d+)?\]/i);
+        if (!marker) continue;
+        const sameLine = lines[index].slice((marker.index ?? 0) + marker[0].length).trim();
+        const nextLine = lines.slice(index + 1).find(line => line.trim().length > 0)?.trim() ?? '';
+        const candidate = sameLine.startsWith('{') ? sameLine : nextLine.startsWith('{') ? nextLine : '';
+        if (!candidate) continue;
         try {
-            const value: unknown = JSON.parse(line.slice(start));
-            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-                const record = value as Record<string, unknown>;
-                const count = record.plannedChapterCount ?? record.totalChapters ?? record.totalChapterCount;
-                if (typeof count === 'number' && Number.isSafeInteger(count) && count > 0) return count;
-            }
-        } catch { /* Strict import later reports a safe mismatch; raw source is never logged. */ }
+            const count = countFromMachineSettings(JSON.parse(candidate) as unknown);
+            if (count !== undefined) return count;
+        } catch { /* Raw setup is intentionally neither logged nor included in the safe error. */ }
     }
-    const match = source.match(/(?:planned\s*chapter\s*count|total\s*chapters?|tổng\s*số\s*chương|số\s*chương\s*dự\s*kiến)\s*[:=]\s*(\d+)/i);
-    return match ? Number(match[1]) : undefined;
+    return undefined;
+};
+
+const foldVietnamese = (value: string): string => value.normalize('NFD').replace(/\p{M}/gu, '').replace(/đ/gi, 'd');
+
+const parseTextualSettingsCount = (source: string): number | undefined => {
+    const folded = foldVietnamese(source);
+    const match = folded.match(
+        /(?:planned\s*chapter\s*count|total\s*planned\s*chapters?|total\s*chapters?|tong\s*so\s*chuong|so\s*chuong\s*du\s*kien)\s*[:=]\s*(\d+)|(?:tong\s*chieu\s*dai\s*muc\s*tieu\s*[:=]?|tong\s*truyen\s*du\s*kien(?:\s*khoang)?\s*[:=]?)\s*(\d+)\s*chuong/i,
+    );
+    const raw = match?.[1] ?? match?.[2];
+    if (!raw) return undefined;
+    const count = Number(raw);
+    return Number.isSafeInteger(count) && count > 0 ? count : undefined;
+};
+
+const parseSettingsCount = (source: string): number | undefined =>
+    parseMachineSettingsCount(source) ?? parseTextualSettingsCount(source);
+
+export const countAuthorSecretDeclarations = (source: string): number => source.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => {
+        const withoutMarkdownPrefix = line.replace(/^(?:[-*+]\s+|#{1,6}\s+)/, '');
+        return /^\[\s*AUTHOR[\s_-]+SECRET\s*\]\s*(?::.*)?$/i.test(withoutMarkdownPrefix)
+            || /^AUTHOR[\s_-]+SECRET\s*(?::|[–—])\s*\S.*$/i.test(withoutMarkdownPrefix);
+    }).length;
+
+const countSpoilerMarkers = (source: string): number => {
+    const folded = foldVietnamese(source);
+    return [...folded.matchAll(
+        /(?:\b(?:khong\s+)?truoc\s+(?:ch\.?|chuong)\s*\d+\b|\b(?:spoiler|reveal|gate)\b[^\r\n]{0,100}?(?:chapter|chuong|ch\.?)\s*\d+\b)/giu,
+    )].length;
 };
 
 export const auditAuthorSetupSource = (source: string): AuthorSetupAudit => {
-    const arcRanges = [...source.matchAll(/(?:\bARC\b|\bHỒI\b)[^\r\n]{0,160}?[\[(](\d+)\s*[–—-]\s*(\d+)[\])]/giu)]
+    const folded = foldVietnamese(source);
+    const plannedChapterCount = parseSettingsCount(source);
+    const arcRanges = [...folded.matchAll(/(?:\bARC\b|\bHOI\b)[^\r\n]{0,160}?[\[(]\s*(\d+)\s*[–—-]\s*(\d+)\s*[\])]/giu)]
         .map(match => ({ startChapter: Number(match[1]), endChapter: Number(match[2]) }))
         .filter(range => Number.isSafeInteger(range.startChapter) && range.startChapter > 0 && range.endChapter >= range.startChapter);
     const uniqueRanges = [...new Map(arcRanges.map(range => [`${range.startChapter}:${range.endChapter}`, range])).values()];
     return {
-        ...(parseSettingsCount(source) === undefined ? {} : { plannedChapterCount: parseSettingsCount(source) }),
+        ...(plannedChapterCount === undefined ? {} : { plannedChapterCount }),
         arcRanges: uniqueRanges,
-        authorSecretCount: [...source.matchAll(/AUTHOR[\s_-]*SECRET/gi)].length,
-        spoilerMarkerCount: [...source.matchAll(/(?:SPOILER|REVEAL|GATE)[^\r\n]{0,80}?(?:CHAPTER|CHƯƠNG)\s*\d+/giu)].length,
+        authorSecretCount: countAuthorSecretDeclarations(source),
+        spoilerMarkerCount: countSpoilerMarkers(source),
     };
 };
 

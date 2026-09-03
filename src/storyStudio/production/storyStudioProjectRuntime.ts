@@ -270,15 +270,16 @@ const parseValidationResult = (
     value: unknown,
     project: Pick<StoryStudioRuntimeProject, 'control' | 'state'>,
     plan: ProductionPlanArtifact,
-    draftArtifact: ProductionDraftArtifact,
 ): ValidationPipelineResult => {
     const input = exactObject(value, 'workflow.validation.result', ['status', 'draft', 'candidate', 'report', 'repairAttempts', 'source']);
     const report = parseValidationReport(input.report, plan.targetChapter);
     const repairAttempts = integer(input.repairAttempts);
     if (input.status === 'approved-not-canon') {
         if (input.candidate !== undefined) throw new StoryStudioProjectError('WORKFLOW_INVALID');
+        // The approved draft may be the final finite-Repair output rather than the
+        // original Writer artifact. The enclosing validation artifact still
+        // binds that original parent through draftArtifactIdentity.
         const draft = parseWriterChapterDraft(input.draft, plan.targetChapter);
-        if (!canonicalValuesEqual(draft, draftArtifact.draft)) throw new StoryStudioProjectError('WORKFLOW_INVALID');
         const sourceInput = exactObject(input.source, 'workflow.validation.result.source', [
             'kind', 'storyControlId', 'storyControlIdentity', 'baseChapter', 'baseRevision', 'chapterPlan', 'canonicalizationSourceIdentity',
         ]);
@@ -346,7 +347,7 @@ const parseValidation = (
     if (planArtifactIdentity !== plan.artifactIdentity || draftArtifactIdentity !== draft.artifactIdentity) {
         throw new StoryStudioProjectError('WORKFLOW_INVALID');
     }
-    const result = parseValidationResult(input.result, project, plan, draft);
+    const result = parseValidationResult(input.result, project, plan);
     const body = { ...cursor, planArtifactIdentity, draftArtifactIdentity, result };
     const artifactIdentity = text(input.artifactIdentity);
     if (artifactIdentity !== createProductionValidationArtifactIdentity(body)) throw new StoryStudioProjectError('WORKFLOW_INVALID');

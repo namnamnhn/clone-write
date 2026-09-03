@@ -239,7 +239,8 @@ export class StoryStudioProjectController {
         const metadata: CanonicalChapterMetadata = {
             ...metadataBody, metadataIdentity: createCanonicalChapterMetadataIdentity(metadataBody),
         };
-        const remaining = Math.max(0, current.batchQueue.remaining - 1) as 0 | 1 | 2 | 3;
+        const storyComplete = afterState.currentChapter >= current.control.engine.plannedChapterCount;
+        const remaining = (storyComplete ? 0 : Math.max(0, current.batchQueue.remaining - 1)) as 0 | 1 | 2 | 3;
         const batchQueue = { ...current.batchQueue, remaining };
         const next = rebuildRuntimeProject(current, {
             state: afterState, memory: afterMemory, chapterMetadata: [...current.chapterMetadata, metadata],
@@ -249,8 +250,7 @@ export class StoryStudioProjectController {
         await this.persistAndPublish(next);
         return {
             project: next,
-            shouldContinueBatch: remaining > 0 && !batchQueue.paused
-                && afterState.currentChapter < current.control.engine.plannedChapterCount,
+            shouldContinueBatch: !storyComplete && remaining > 0 && !batchQueue.paused,
         };
     }
 

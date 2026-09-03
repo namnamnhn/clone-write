@@ -4,10 +4,24 @@ import type { StoryStudioRuntimeProject } from './storyStudioProjectTypes';
 export const buildConnectedStoryStudioSession = (project: StoryStudioRuntimeProject): StoryStudioSession => {
     const workflow = project.workflow;
     const plan = workflow.stage === 'idle' ? undefined : workflow.plan;
-    const draft = workflow.stage === 'drafted' || workflow.stage === 'validated' || workflow.stage === 'rejected'
+    const originalDraft = workflow.stage === 'drafted' || workflow.stage === 'validated' || workflow.stage === 'rejected'
         || workflow.stage === 'extracted' || workflow.stage === 'ready-for-canon-review' ? workflow.draft : undefined;
     const validation = workflow.stage === 'validated' || workflow.stage === 'rejected'
         || workflow.stage === 'extracted' || workflow.stage === 'ready-for-canon-review' ? workflow.validation : undefined;
+    const approvedDraft = validation?.result.status === 'approved-not-canon' ? validation.result.draft : undefined;
+    const rejectedResult = validation?.result.status === 'rejected' ? validation.result : undefined;
+    const rejectedDraft = rejectedResult && 'draft' in rejectedResult && rejectedResult.draft
+        ? rejectedResult.draft
+        : rejectedResult && 'candidate' in rejectedResult && rejectedResult.candidate
+            ? {
+                kind: 'writer-chapter-draft' as const,
+                validationStatus: 'unvalidated' as const,
+                chapterNumber: rejectedResult.candidate.chapterNumber,
+                ...(rejectedResult.candidate.title === undefined ? {} : { title: rejectedResult.candidate.title }),
+                prose: rejectedResult.candidate.prose,
+            }
+            : undefined;
+    const displayDraft = approvedDraft ?? rejectedDraft ?? originalDraft?.draft;
     return {
         mode: 'connected', projectTitle: project.displayName, control: project.control, state: project.state,
         ...(plan === undefined ? {} : {
@@ -16,10 +30,11 @@ export const buildConnectedStoryStudioSession = (project: StoryStudioRuntimeProj
             validatorStrategicView: plan.privileged.strategicView,
             validatorRelationshipView: plan.privileged.relationshipView,
         }),
-        ...(draft === undefined ? {} : { writerDraft: draft.draft }),
+        ...(displayDraft === undefined ? {} : { writerDraft: displayDraft }),
         ...(validation === undefined ? {} : {
             validationReport: validation.result.report,
             approvalStatus: validation.result.status === 'approved-not-canon' ? 'approved-not-canon' as const : 'rejected' as const,
+            repairAttempts: validation.result.repairAttempts,
         }),
         canonReviewReady: workflow.stage === 'ready-for-canon-review',
     };

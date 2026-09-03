@@ -1,0 +1,31 @@
+THIÊN LỘ GIẢ LẬP — SYNTHETIC AUTHOR SETUP
+
+[STORY_ENGINE_SETTINGS_V3]
+{"schemaVersion":3,"fileKind":"AUTHOR_SETUP","totalPlannedChapters":600,"defaultBatchSize":2}
+
+QUY TẮC RIÊNG TƯ
+Writer không được nhận AUTHOR SECRET; AUTHOR SECRET chỉ được giữ ở StoryControl/Validator cho tới khi cổng hợp lệ mở.
+
+NHÂN VẬT
+- Minh An: nhân vật POV từ chương 1.
+- Linh Vũ: nhân vật tương lai, không xuất hiện trực tiếp trước chương 33.
+
+ARC 1.1 — CỬA THƯ VIỆN (1–6)
+Minh An bước vào kho lưu trữ và để lại dấu vết đầu tiên.
+
+ARC 1.2 — LỜI HỨA BỊ KHÓA (7–32)
+Quan hệ chỉ tiến triển dựa trên bằng chứng Canon và lựa chọn hai phía.
+
+ARC 2.1 — NGƯỜI DẪN ĐƯỜNG (33–600)
+Linh Vũ chỉ trở thành nhân vật hoạt động khi cổng chương cho phép.
+
+CỔNG SPOILER CỨNG
+- Trước Ch.33: không cho Linh Vũ xuất hiện trực tiếp.
+- Trước Chương 47: không công khai nguồn gốc bản đồ.
+- Không trước Chương 561: không xác nhận danh tính chủ mưu.
+- Cổng xuất hiện: Không xuất hiện trực tiếp trước Chương 47 nếu chưa có sự kiện Canon tương ứng.
+
+- AUTHOR SECRET: Chủ mưu thật là một danh tính riêng chỉ tác giả biết.
+
+CANON RULE
+Mọi lựa chọn bền vững trong thư viện đều để lại dấu vết.
