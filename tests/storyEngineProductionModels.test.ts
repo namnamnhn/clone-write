@@ -42,6 +42,12 @@ const dependenciesFor = (output: string, events: string[] = []): GeminiStoryEngi
 });
 
 describe('WORK 12 Story Engine model policy', () => {
+    it('defines exactly the five production runtime roles, with setup compilation kept separate', () => {
+        expect(STORY_ENGINE_MODEL_ROLES).toEqual([
+            'planner', 'writer', 'semanticValidator', 'repair', 'stateExtractor',
+        ]);
+    });
+
     it('normalizes the complete role policy without adding fields', () => {
         const normalized = normalizeStoryEngineModelRolePolicy(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY);
         expect(Object.keys(normalized)).toEqual(STORY_ENGINE_MODEL_ROLES);
@@ -124,6 +130,19 @@ describe('WORK 12 Story Engine model policy', () => {
             const expected = DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role].candidateModelIds.filter(id => id !== 'gemini-3.5-flash');
             expect(resolveStoryEngineModelRoute(role, DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role], expected).candidateModelIds)
                 .toEqual(expected);
+        },
+    );
+
+    it.each(STORY_ENGINE_MODEL_ROLES)(
+        'never returns disabled 3.5 Flash in the resolved %s route',
+        (role) => {
+            const configuredWithoutFinalFallback = DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role].candidateModelIds
+                .filter(id => id !== 'gemini-3.5-flash');
+            expect(resolveStoryEngineModelRoute(
+                role,
+                DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role],
+                configuredWithoutFinalFallback,
+            ).candidateModelIds).not.toContain('gemini-3.5-flash');
         },
     );
 });
@@ -228,6 +247,66 @@ describe('WORK 12 strict Gemini JSON runner', () => {
             },
         })).rejects.toMatchObject({ code } satisfies Partial<GeminiStoryEngineProtocolError>);
     });
+
+    it.each(STORY_ENGINE_MODEL_ROLES)(
+        'continues %s from transient 3.7 failure to the next enabled fallback',
+        async (role) => {
+            const attempts: string[] = [];
+            const resolved = resolveStoryEngineModelRoute(role, DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role], [
+                'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
+            ]);
+            const result = await runGeminiStoryEngineJson({ role, route: resolved, contents: 'prompt' }, {
+                smartExecution: async (candidateModels, operation) => {
+                    let lastError: unknown;
+                    for (const modelId of candidateModels) {
+                        try {
+                            return await operation(modelId);
+                        } catch (error) {
+                            lastError = error;
+                        }
+                    }
+                    throw lastError;
+                },
+                getAiClient: () => ({ models: { generateContent: async ({ model }) => {
+                    attempts.push(model);
+                    if (model === 'gemini-3.7-flash') throw new Error('503 UNAVAILABLE');
+                    return { text: '{}' } as GenerateContentResponse;
+                } } }),
+            });
+            expect(attempts).toEqual(['gemini-3.7-flash', 'gemini-3.6-flash']);
+            expect(result.selectedModelId).toBe('gemini-3.6-flash');
+        },
+    );
+
+    it.each(STORY_ENGINE_MODEL_ROLES)(
+        'continues %s through 3.7 and 3.6 failures to final 3.5 Flash',
+        async (role) => {
+            const attempts: string[] = [];
+            const resolved = resolveStoryEngineModelRoute(role, DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY[role], [
+                'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
+            ]);
+            const result = await runGeminiStoryEngineJson({ role, route: resolved, contents: 'prompt' }, {
+                smartExecution: async (candidateModels, operation) => {
+                    let lastError: unknown;
+                    for (const modelId of candidateModels) {
+                        try {
+                            return await operation(modelId);
+                        } catch (error) {
+                            lastError = error;
+                        }
+                    }
+                    throw lastError;
+                },
+                getAiClient: () => ({ models: { generateContent: async ({ model }) => {
+                    attempts.push(model);
+                    if (model !== 'gemini-3.5-flash') throw new Error('503 UNAVAILABLE');
+                    return { text: '{}' } as GenerateContentResponse;
+                } } }),
+            });
+            expect(attempts).toEqual(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
+            expect(result.selectedModelId).toBe('gemini-3.5-flash');
+        },
+    );
 });
 
 describe('WORK 12 role-specific Gemini serialization', () => {

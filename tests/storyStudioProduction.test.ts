@@ -1096,6 +1096,135 @@ describe('WORK 13 Story Studio production persistence', () => {
         })).rejects.toMatchObject({ code: 'MALFORMED_JSON' });
     });
 
+    it('preserves setup protocol classification when smartExecution wraps malformed output', async () => {
+        await expect(compileStorySetupWithGemini({
+            source: 'PRIVATE_AUTHOR_SETUP_SENTINEL',
+            availableModelIds: ['gemini-3.7-flash'],
+        }, {
+            smartExecution: async <T>(candidateModels: string[], operation: (modelId: string) => Promise<T>): Promise<T> => {
+                try {
+                    return await operation(candidateModels[0]);
+                } catch {
+                    throw new Error('aggregate failure with PRIVATE_AUTHOR_SETUP_SENTINEL');
+                }
+            },
+            getAiClient: () => ({
+                models: { generateContent: async () => ({ text: 'not-json' }) as GenerateContentResponse },
+            }),
+        })).rejects.toMatchObject({ name: 'GeminiStorySetupCompilerError', code: 'MALFORMED_JSON' });
+    });
+
+    it('falls through every earlier setup candidate to 3.5 Flash after transient provider failures', async () => {
+        const attempts: string[] = [];
+        const result = await compileStorySetupWithGemini({
+            source: 'AUTHOR SETUP',
+            availableModelIds: [...STORY_SETUP_COMPILER_CANDIDATES],
+        }, {
+            smartExecution: async <T>(candidateModels: string[], operation: (modelId: string) => Promise<T>): Promise<T> => {
+                let lastError: unknown;
+                for (const modelId of candidateModels) {
+                    try {
+                        return await operation(modelId);
+                    } catch (error) {
+                        lastError = error;
+                    }
+                }
+                throw lastError;
+            },
+            getAiClient: () => ({
+                models: { generateContent: async ({ model }) => {
+                    attempts.push(model);
+                    if (model !== 'gemini-3.5-flash') throw new Error('503 UNAVAILABLE');
+                    return { text: JSON.stringify(document()) } as GenerateContentResponse;
+                } },
+            }),
+        });
+        expect(attempts).toEqual([...STORY_SETUP_COMPILER_CANDIDATES]);
+        expect(result.selectedModelId).toBe('gemini-3.5-flash');
+    });
+
+    it('closes all-provider setup failure into safe metadata without retaining setup or provider text', async () => {
+        const setupSentinel = 'PRIVATE_AUTHOR_SETUP_SENTINEL';
+        const providerSentinel = '503 PROVIDER_BODY API_KEY_SENTINEL';
+        let caught: unknown;
+        try {
+            await compileStorySetupWithGemini({
+                source: setupSentinel,
+                availableModelIds: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+            }, {
+                smartExecution: async <T>(candidateModels: string[], operation: (modelId: string) => Promise<T>): Promise<T> => {
+                    for (const modelId of candidateModels) {
+                        try {
+                            return await operation(modelId);
+                        } catch {
+                            // Continue exactly as bounded provider fallback would.
+                        }
+                    }
+                    throw new Error(providerSentinel);
+                },
+                getAiClient: () => ({
+                    models: { generateContent: async () => { throw new Error(providerSentinel); } },
+                }),
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toMatchObject({ name: 'GeminiStorySetupCompilerError', code: 'MODEL_RUNTIME_FAILURE' });
+        expect(JSON.stringify(caught)).not.toContain(setupSentinel);
+        expect(JSON.stringify(caught)).not.toContain(providerSentinel);
+        expect(JSON.stringify(caught)).not.toContain('API_KEY_SENTINEL');
+
+        let importError: unknown;
+        try {
+            await prepareAuthorTextStorySetupImport(setupSentinel, 'private.txt', {
+                compiler: async () => { throw caught; },
+            });
+        } catch (error) {
+            importError = error;
+        }
+        expect(getSafeStorySetupImportDiagnostic(importError)).toEqual({
+            code: 'SETUP_COMPILER_FAILED', stage: 'compiler', errorName: 'GeminiStorySetupCompilerError',
+        });
+        expect(JSON.stringify(importError)).not.toContain(setupSentinel);
+        expect(JSON.stringify(importError)).not.toContain(providerSentinel);
+    });
+
+    it('stops setup fallback immediately on provider abort and surfaces safe cancellation', async () => {
+        const abortController = new AbortController();
+        const attempts: string[] = [];
+        let caught: unknown;
+        try {
+            await compileStorySetupWithGemini({
+                source: 'PRIVATE_CANCELLED_SETUP',
+                signal: abortController.signal,
+                availableModelIds: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+            }, {
+                smartExecution: async <T>(candidateModels: string[], operation: (modelId: string) => Promise<T>): Promise<T> => {
+                    for (const modelId of candidateModels) {
+                        try {
+                            return await operation(modelId);
+                        } catch (error) {
+                            if (error instanceof Error && error.message === 'ABORTED') throw error;
+                        }
+                    }
+                    throw new Error('unexpected fallback exhaustion');
+                },
+                getAiClient: () => ({
+                    models: { generateContent: async ({ model }) => {
+                        attempts.push(model);
+                        abortController.abort();
+                        throw new Error('provider abort with PRIVATE_CANCELLED_SETUP');
+                    } },
+                }),
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toMatchObject({ name: 'GeminiStorySetupCompilerError', code: 'CANCELLED' });
+        expect(attempts).toEqual(['gemini-3.7-flash']);
+        expect(JSON.stringify(caught)).not.toContain('PRIVATE_CANCELLED_SETUP');
+    });
+
     it('aborts an active TXT setup compilation without publishing an import or replacing the current project', async () => {
         const { adapter, controller } = setup();
         await controller.load();

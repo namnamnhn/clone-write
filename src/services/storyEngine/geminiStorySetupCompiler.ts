@@ -8,7 +8,7 @@ export const STORY_SETUP_COMPILER_CANDIDATES = [
 ] as const;
 
 export class GeminiStorySetupCompilerError extends Error {
-    constructor(readonly code: 'NO_MODEL_AVAILABLE' | 'EMPTY_RESPONSE' | 'MALFORMED_JSON' | 'CANCELLED') {
+    constructor(readonly code: 'NO_MODEL_AVAILABLE' | 'EMPTY_RESPONSE' | 'MALFORMED_JSON' | 'MODEL_RUNTIME_FAILURE' | 'CANCELLED') {
         super(code);
         this.name = 'GeminiStorySetupCompilerError';
     }
@@ -80,41 +80,55 @@ export const compileStorySetupWithGemini = async (
     const available = new Set(request.availableModelIds ?? [...configured]);
     const candidates = STORY_SETUP_COMPILER_CANDIDATES.filter(id => configured.has(id) && available.has(id));
     if (candidates.length === 0) throw new GeminiStorySetupCompilerError('NO_MODEL_AVAILABLE');
-    return dependencies.smartExecution(
-        [...candidates],
-        async (modelId) => {
-            if (request.signal?.aborted) throw new GeminiStorySetupCompilerError('CANCELLED');
-            // Key lookup intentionally remains inside smartExecution for correct key attribution.
-            const ai = dependencies.getAiClient();
-            let response: GenerateContentResponse;
-            try {
-                response = await ai.models.generateContent({
-                    model: modelId,
-                    contents: buildStorySetupCompilerPrompt(request.source),
-                    config: {
-                        temperature: 0.1,
-                        responseMimeType: 'application/json',
-                        responseJsonSchema: STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
-                        safetySettings: SAFETY_SETTINGS,
-                        ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
-                    },
-                });
-            } catch (error) {
-                if (request.signal?.aborted) throw new GeminiStorySetupCompilerError('CANCELLED');
-                throw error;
-            }
-            const output = response.text?.trim();
-            if (!output) throw new GeminiStorySetupCompilerError('EMPTY_RESPONSE');
-            let value: unknown;
-            try {
-                value = JSON.parse(output);
-            } catch {
-                throw new GeminiStorySetupCompilerError('MALFORMED_JSON');
-            }
-            return { value, selectedModelId: modelId };
-        },
-        'Story Studio V4 Setup Compiler',
-        undefined,
-        candidates[0],
-    );
+    let lastProtocolError: GeminiStorySetupCompilerError | undefined;
+    let sawInfrastructureFailure = false;
+    try {
+        return await dependencies.smartExecution(
+            [...candidates],
+            async (modelId) => {
+                if (request.signal?.aborted) throw new Error('ABORTED');
+                // Key lookup intentionally remains inside smartExecution for correct key attribution.
+                let response: GenerateContentResponse;
+                try {
+                    const ai = dependencies.getAiClient();
+                    response = await ai.models.generateContent({
+                        model: modelId,
+                        contents: buildStorySetupCompilerPrompt(request.source),
+                        config: {
+                            temperature: 0.1,
+                            responseMimeType: 'application/json',
+                            responseJsonSchema: STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
+                            safetySettings: SAFETY_SETTINGS,
+                            ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
+                        },
+                    });
+                } catch (error) {
+                    if (request.signal?.aborted) throw new Error('ABORTED');
+                    sawInfrastructureFailure = true;
+                    throw error;
+                }
+                const output = response.text?.trim();
+                if (!output) {
+                    lastProtocolError = new GeminiStorySetupCompilerError('EMPTY_RESPONSE');
+                    throw lastProtocolError;
+                }
+                let value: unknown;
+                try {
+                    value = JSON.parse(output);
+                } catch {
+                    lastProtocolError = new GeminiStorySetupCompilerError('MALFORMED_JSON');
+                    throw lastProtocolError;
+                }
+                return { value, selectedModelId: modelId };
+            },
+            'Story Studio V4 Setup Compiler',
+            undefined,
+            candidates[0],
+        );
+    } catch (error) {
+        if (request.signal?.aborted) throw new GeminiStorySetupCompilerError('CANCELLED');
+        if (error instanceof GeminiStorySetupCompilerError) throw error;
+        if (!sawInfrastructureFailure && lastProtocolError) throw lastProtocolError;
+        throw new GeminiStorySetupCompilerError('MODEL_RUNTIME_FAILURE');
+    }
 };
