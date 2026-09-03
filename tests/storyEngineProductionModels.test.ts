@@ -31,6 +31,20 @@ import {
 
 const route = DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.planner;
 
+const plannerPromptContext = (): PlannerContext => ({
+    kind: 'planner-context',
+    targetChapter: 1,
+    currentArc: { id: 'arc-1' },
+    availableCharacters: [],
+    povEligibility: [],
+    characterKnowledge: [],
+    relationships: [],
+    allowedRevealIds: [],
+    allowedStoryEventIds: [],
+    allowedRelationshipEventIds: [],
+    relationshipContext: { relationships: [] },
+} as unknown as PlannerContext);
+
 const dependenciesFor = (output: string, events: string[] = []): GeminiStoryEngineRunnerDependencies => ({
     async smartExecution(candidateModels, operation, _task, _log, preferred) {
         events.push(`execute:${candidateModels.join(',')}:${preferred}`);
@@ -339,7 +353,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
                 } } }),
             },
         });
-        await models.planner.plan({ kind: 'planner-context', targetChapter: 1 } as unknown as PlannerContext);
+        await models.planner.plan(plannerPromptContext());
         await models.writer.write({ kind: 'writer-model-request', prompt: 'WRITER' } as never);
         await models.semanticValidator.validate({ prompt: 'VALIDATOR', context: {}, candidate: {} } as never);
         await models.repair.repair({ prompt: 'REPAIR', context: {} } as never);
@@ -360,7 +374,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
             },
         };
         const adapters = createGeminiStoryEngineAdapters(runtime);
-        await adapters.planner.plan({ kind: 'planner-context', targetChapter: 1 } as unknown as PlannerContext);
+        await adapters.planner.plan(plannerPromptContext());
         await adapters.writer.write({ kind: 'writer-model-request', prompt: 'WRITER_ONLY', context: { hidden: 'not serialized separately' } } as never);
         await adapters.semanticValidator.validate({ prompt: 'VALIDATE', context: { privileged: 'SECRET_EVIDENCE' }, candidate: { prose: 'chapter' } } as never);
         await adapters.repair.repair({ prompt: 'REPAIR', context: { safe: 'ISSUE_SAFE' } } as never);

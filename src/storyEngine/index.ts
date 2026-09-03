@@ -35,6 +35,7 @@ export * from './contextBuilder';
 export * from './planValidator';
 export * from './planDiagnostics';
 export * from './planSanitizer';
+export * from './plannerValidationAffordances';
 export * from './planner';
 export * from './writerTypes';
 export * from './writerContext';
