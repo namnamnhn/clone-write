@@ -9,6 +9,21 @@ import { compileStorySetupWithGemini, GeminiStorySetupCompilerError } from '../.
 import type { CompileStorySetupRequest, StorySetupCompilerResult } from '../../services/storyEngine/geminiStorySetupCompiler';
 import { sanitizeSafeModelAttemptOutcomes } from '../../storyEngine/modelAttemptDiagnostics';
 import type { SafeModelAttemptOutcome } from '../../storyEngine/modelAttemptDiagnostics';
+import {
+    auditRecognizedV3TimingFidelity,
+    eligiblePovCountAtChapter,
+    extractRecognizedV3CharacterTimings,
+    findNoEligiblePovRanges,
+} from './storySetupTimingAudit';
+import type { RecognizedV3CharacterTiming, SetupTimingAuditIssueCode } from './storySetupTimingAudit';
+
+export {
+    auditRecognizedV3TimingFidelity,
+    eligiblePovCountAtChapter,
+    extractRecognizedV3CharacterTimings,
+    findNoEligiblePovRanges,
+} from './storySetupTimingAudit';
+export type { RecognizedV3CharacterTiming, SetupTimingAuditIssueCode } from './storySetupTimingAudit';
 
 export const MAX_AUTHOR_SETUP_SOURCE_BYTES = 2 * 1024 * 1024;
 
@@ -189,11 +204,16 @@ export const logSafeStorySetupImportDiagnostic = (error: unknown): void => {
 export type StorySetupImportIssueCode =
     | 'PLANNED_CHAPTER_COUNT_MISMATCH'
     | 'ARC_RANGE_MISSING'
-    | 'AUTHOR_SECRET_COUNT_UNDERRUN';
+    | 'AUTHOR_SECRET_COUNT_UNDERRUN'
+    | SetupTimingAuditIssueCode
+    | 'NO_ELIGIBLE_POV_RANGE';
 
 export interface StorySetupImportIssue {
     readonly code: StorySetupImportIssueCode;
     readonly detail: string;
+    readonly category?: 'source-character-timing' | 'pov-viability';
+    readonly count?: number;
+    readonly chapterRange?: { readonly startChapter: number; readonly endChapter: number };
 }
 
 export interface StorySetupImportReview {
@@ -205,6 +225,9 @@ export interface StorySetupImportReview {
     readonly arcs: readonly { readonly id: string; readonly title: string; readonly startChapter: number; readonly endChapter: number }[];
     readonly revealCount: number;
     readonly gateCount: number;
+    readonly povGateCount: number;
+    readonly eligiblePovAtChapterOneCount: number;
+    readonly noEligiblePovRangeCount: number;
     readonly relationshipDefinitionCount: number;
     readonly authorSecretCount: number;
     readonly canonRuleCount: number;
@@ -226,6 +249,7 @@ export interface AuthorSetupAudit {
     readonly arcRanges: readonly { readonly startChapter: number; readonly endChapter: number }[];
     readonly authorSecretCount: number;
     readonly spoilerMarkerCount: number;
+    readonly recognizedV3CharacterTimings: readonly RecognizedV3CharacterTiming[];
 }
 
 const fallbackName = (filename: string): string => filename.replace(/\.(?:json|txt|md)$/i, '').trim() || 'Dự án Story Engine V4';
@@ -305,14 +329,27 @@ export const auditAuthorSetupSource = (source: string): AuthorSetupAudit => {
         arcRanges: uniqueRanges,
         authorSecretCount: countAuthorSecretDeclarations(source),
         spoilerMarkerCount: countSpoilerMarkers(source),
+        recognizedV3CharacterTimings: extractRecognizedV3CharacterTimings(source, MAX_AUTHOR_SETUP_SOURCE_BYTES),
     };
 };
+
+const timingIssueDetail = (code: SetupTimingAuditIssueCode, count: number): string => ({
+    SOURCE_CHARACTER_TIMING_MISMATCH: `Có ${count} sai lệch thời điểm khả dụng/xuất hiện nhân vật so với dữ liệu V3.`,
+    SOURCE_CHARACTER_GATE_MISSING: `Thiếu ${count} cổng xuất hiện trực tiếp đã được khai báo trong dữ liệu V3.`,
+    SOURCE_POV_GATE_MISSING: `Thiếu ${count} cổng POV đã được khai báo trong dữ liệu V3.`,
+    SOURCE_POV_TIMING_MISMATCH: `Có ${count} sai lệch thời điểm mở POV so với dữ liệu V3.`,
+    SOURCE_CHARACTER_MAPPING_AMBIGUOUS: `Không thể ánh xạ duy nhất ${count} nhân vật V3 sang Blueprint đã biên dịch.`,
+}[code]);
+
+const formatChapterRange = (startChapter: number, endChapter: number): string =>
+    startChapter === endChapter ? `${startChapter}` : `${startChapter}–${endChapter}`;
 
 const buildReview = (
     control: FullStoryControl,
     displayName: string,
     audit?: AuthorSetupAudit,
     compilerModelId?: string,
+    setupDocument?: StoryBlueprintDocument,
 ): StorySetupImportReview => {
     const criticalIssues: StorySetupImportIssue[] = [];
     if (audit?.plannedChapterCount !== undefined && audit.plannedChapterCount !== control.engine.plannedChapterCount) {
@@ -329,6 +366,21 @@ const buildReview = (
             detail: `Setup có ${audit.authorSecretCount} mục Author Secret nhưng bản biên dịch chỉ giữ ${control.authorOnlySecrets.length}.`,
         });
     }
+    if (audit && setupDocument) {
+        const timingIssues = auditRecognizedV3TimingFidelity(
+            audit.recognizedV3CharacterTimings, setupDocument.blueprint, control,
+        );
+        const counts = new Map<SetupTimingAuditIssueCode, number>();
+        timingIssues.forEach(issue => counts.set(issue.code, (counts.get(issue.code) ?? 0) + 1));
+        counts.forEach((count, code) => criticalIssues.push({
+            code, category: 'source-character-timing', count, detail: timingIssueDetail(code, count),
+        }));
+    }
+    const noEligiblePovRanges = findNoEligiblePovRanges(control);
+    noEligiblePovRanges.forEach(range => criticalIssues.push({
+        code: 'NO_ELIGIBLE_POV_RANGE', category: 'pov-viability', count: 1, chapterRange: range,
+        detail: `Không có POV hợp lệ trong dải chương ${formatChapterRange(range.startChapter, range.endChapter)}.`,
+    }));
     const warnings = audit === undefined ? [] : [
         'Nội dung spoiler và hướng dẫn phong cách tự do cần được tác giả kiểm tra lại trong cấu trúc đã biên dịch.',
         'Việc chuyển TXT/MD sang Blueprint có AI hỗ trợ; parser V4 và bước review mới là ranh giới an toàn.',
@@ -340,6 +392,9 @@ const buildReview = (
         arcs: control.arcs.map(arc => ({ id: arc.id, title: arc.title, startChapter: arc.startChapter, endChapter: arc.endChapter })),
         revealCount: control.reveals.length,
         gateCount: Object.values(control.gates).reduce((total, values) => total + values.length, 0),
+        povGateCount: control.gates.pov.length,
+        eligiblePovAtChapterOneCount: eligiblePovCountAtChapter(control, 1),
+        noEligiblePovRangeCount: noEligiblePovRanges.length,
         relationshipDefinitionCount: control.relationshipDefinitions.length,
         authorSecretCount: control.authorOnlySecrets.length,
         canonRuleCount: control.canonRules.length,
@@ -354,7 +409,7 @@ export const prepareJsonStorySetupImport = (source: string, filename: string): P
     const control = compileStoryControl(setupDocument.blueprint);
     return {
         kind: 'prepared-story-setup-import', mode: 'json', setupDocument,
-        review: buildReview(control, fallbackName(filename)),
+        review: buildReview(control, fallbackName(filename), undefined, undefined, setupDocument),
     };
 };
 
@@ -368,6 +423,7 @@ interface StorySetupImportDiagnosticDependencies {
         displayName: string,
         audit: AuthorSetupAudit,
         compilerModelId: string,
+        setupDocument: StoryBlueprintDocument,
     ) => StorySetupImportReview;
 }
 
@@ -428,7 +484,7 @@ export const prepareAuthorTextStorySetupImport = async (
     let review: StorySetupImportReview;
     try {
         review = (options.buildImportReview ?? buildReview)(
-            control, sourceDisplayName(source, filename), audit, compiled.selectedModelId,
+            control, sourceDisplayName(source, filename), audit, compiled.selectedModelId, setupDocument,
         );
     } catch (error) {
         throw diagnosticError('SETUP_REVIEW_BUILD_FAILED', 'review-build', error);

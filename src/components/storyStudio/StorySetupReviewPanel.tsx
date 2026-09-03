@@ -34,6 +34,9 @@ export const StorySetupReviewPanel: React.FC<{
                 <Metric label="Arc" value={review.arcs.length} />
                 <Metric label="Reveal" value={review.revealCount} />
                 <Metric label="Gate" value={review.gateCount} />
+                <Metric label="Cổng POV" value={review.povGateCount} />
+                <Metric label="POV hợp lệ Ch.1" value={review.eligiblePovAtChapterOneCount} />
+                <Metric label="Dải thiếu POV" value={review.noEligiblePovRangeCount} />
                 <Metric label="Quan hệ" value={review.relationshipDefinitionCount} />
                 <Metric label="Author Secret" value={review.authorSecretCount} />
                 <Metric label="Luật Canon" value={review.canonRuleCount} />

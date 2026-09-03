@@ -1,0 +1,6 @@
+SYNTHETIC V3 CHARACTER TIMING SETUP
+
+[STORY_ENGINE_SETTINGS_V3]
+{"schemaVersion":3,"fileKind":"AUTHOR_SETUP","totalPlannedChapters":20,"characterRegistry":[{"name":"Lục Tử Khiêm","unlockChapter":1,"directAppearanceChapter":1,"povUnlockChapter":1},{"name":"Tiền Đa Đa","unlockChapter":1,"directAppearanceChapter":1,"povUnlockChapter":1},{"name":"Ngưu Nhị","unlockChapter":1,"directAppearanceChapter":1,"povUnlockChapter":1},{"name":"Tạ Thanh Phong","unlockChapter":1,"directAppearanceChapter":1,"povUnlockChapter":1},{"name":"Lý Vân Hi","unlockChapter":1,"directAppearanceChapter":1,"povUnlockChapter":1},{"name":"Nhân Vật Tương Lai","unlockChapter":8,"directAppearanceChapter":10,"povUnlockChapter":12},{"name":"POV Mở Trước Xuất Hiện","unlockChapter":1,"directAppearanceChapter":10,"povUnlockChapter":5}]}
+
+AUTHOR SECRET: PRIVATE_V3_TIMING_SECRET_SENTINEL

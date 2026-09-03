@@ -5,6 +5,8 @@ import {
     compileStoryControl,
     createProductionStoryRuntime,
     createV4ProjectSeed,
+    isCharacterDirectAppearanceAllowed,
+    isPovAllowed,
     parseStoryBlueprintDocument,
     StoryControlValidationError,
     STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
@@ -29,7 +31,11 @@ import {
 import { buildConnectedStoryStudioSession, getCanonicalChapterHistoryEntry } from '../src/storyStudio/production/storyStudioSession';
 import {
     auditAuthorSetupSource,
+    auditRecognizedV3TimingFidelity,
     countAuthorSecretDeclarations,
+    eligiblePovCountAtChapter,
+    extractRecognizedV3CharacterTimings,
+    findNoEligiblePovRanges,
     getSafeStorySetupImportDiagnostic,
     logSafeStorySetupImportDiagnostic,
     prepareAuthorTextStorySetupImport,
@@ -44,6 +50,7 @@ import {
 } from '../src/services/storyEngine/geminiStorySetupCompiler';
 import authorSetupFixture from './fixtures/storyStudioAuthorSetupFixture.txt?raw';
 import actualFormatSetupFixture from './fixtures/storyStudioActualFormatSetupFixture.txt?raw';
+import v3TimingSetupFixture from './fixtures/storyStudioV3TimingSetupFixture.txt?raw';
 import { auditGeminiResponseSchema } from './helpers/geminiResponseSchemaAudit';
 
 const RAW_SECRET = 'SENTINEL_STORY_STUDIO_SECRET_7EC4';
@@ -111,6 +118,37 @@ const representativeDocument = (): StoryBlueprintDocument => ({
         canonRules: [{ id: 'trace-rule', text: 'Durable archive choices leave a trace.', availableFromChapter: 1, scope: 'world' }],
     },
 });
+
+const v3TimingDocument = (): StoryBlueprintDocument => {
+    const characters = [
+        { id: 'luc-tu-khiem', name: 'Lục Tử Khiêm', unlock: 1, direct: 1, pov: 1 },
+        { id: 'tien-da-da', name: 'Tiền Đa Đa', unlock: 1, direct: 1, pov: 1 },
+        { id: 'nguu-nhi', name: 'Ngưu Nhị', unlock: 1, direct: 1, pov: 1 },
+        { id: 'ta-thanh-phong', name: 'Tạ Thanh Phong', unlock: 1, direct: 1, pov: 1 },
+        { id: 'ly-van-hi', name: 'Lý Vân Hi', unlock: 1, direct: 1, pov: 1 },
+        { id: 'future', name: 'Nhân Vật Tương Lai', unlock: 8, direct: 10, pov: 12 },
+        { id: 'early-pov', name: 'POV Mở Trước Xuất Hiện', unlock: 1, direct: 10, pov: 5 },
+    ];
+    return {
+        kind: 'story-blueprint-document', formatVersion: 1,
+        blueprint: {
+            id: 'synthetic-v3-timing', engine: { plannedChapterCount: 20 },
+            characters: characters.map(character => ({
+                id: character.id, name: character.name, availableFromChapter: character.unlock,
+            })),
+            arcs: [{ id: 'arc', title: 'Arc', startChapter: 1, endChapter: 20 }],
+            gates: {
+                characters: characters.map(character => ({
+                    id: `${character.id}-direct`, characterId: character.id, allowedFromChapter: character.direct,
+                })),
+                pov: characters.map(character => ({
+                    id: `${character.id}-pov`, characterId: character.id, allowedFromChapter: character.pov,
+                })),
+            },
+            authorOnlySecrets: [{ id: 'private-v3', value: 'PRIVATE_V3_TIMING_SECRET_SENTINEL' }],
+        },
+    };
+};
 
 const chapterFrom = (contents: string): number => {
     const match = contents.match(/"targetChapter":(\d+)/) ?? contents.match(/"chapterNumber":(\d+)/) ?? contents.match(/chapter (\d+)/i);
@@ -849,6 +887,162 @@ describe('WORK 13 Story Studio production persistence', () => {
         });
         expect(prepared.review.criticalIssues).toEqual([]);
         expect(prepared.review.authorSecretCount).toBe(1);
+    });
+
+    it('maps all three structured V3 character timing fields explicitly in the compiler prompt', () => {
+        const prompt = buildStorySetupCompilerPrompt(v3TimingSetupFixture);
+        expect(prompt).toContain('preserve unlockChapter as the character baseline availability timing');
+        expect(prompt).toContain('gates.characters');
+        expect(prompt).toContain('directAppearanceChapter');
+        expect(prompt).toContain('gates.pov');
+        expect(prompt).toContain('povUnlockChapter');
+        expect(prompt).toContain('MUST NOT be collapsed or treated as interchangeable');
+        expect(prompt).toContain('Never omit a POV gate merely because the character is already available');
+        expect(prompt).toContain('never invent POV timing when the source provides none');
+        expect(prompt).toContain('If povUnlockChapter is earlier than directAppearanceChapter, preserve both source timings independently');
+    });
+
+    it('strictly extracts only bounded V3 character timing metadata', () => {
+        const timings = extractRecognizedV3CharacterTimings(v3TimingSetupFixture, 2 * 1024 * 1024);
+        expect(timings).toHaveLength(7);
+        expect(timings.slice(0, 5)).toEqual(expect.arrayContaining([
+            expect.objectContaining({ unlockChapter: 1, directAppearanceChapter: 1, povUnlockChapter: 1 }),
+        ]));
+        expect(timings).toContainEqual({
+            name: 'Nhân Vật Tương Lai', unlockChapter: 8, directAppearanceChapter: 10, povUnlockChapter: 12,
+        });
+        expect(timings).toContainEqual({
+            name: 'POV Mở Trước Xuất Hiện', unlockChapter: 1, directAppearanceChapter: 10, povUnlockChapter: 5,
+        });
+        timings.forEach(timing => expect(Object.keys(timing).sort()).toEqual([
+            'directAppearanceChapter', 'name', 'povUnlockChapter', 'unlockChapter',
+        ]));
+        expect(extractRecognizedV3CharacterTimings(
+            '{"schemaVersion":3,"fileKind":"AUTHOR_SETUP","characterRegistry":[invalid]}', 2 * 1024 * 1024,
+        )).toEqual([]);
+        expect(extractRecognizedV3CharacterTimings(v3TimingSetupFixture, 10)).toEqual([]);
+    });
+
+    it('passes exact V3 timing fidelity and preserves early POV/direct timing independently', async () => {
+        const setupDocument = v3TimingDocument();
+        const control = compileStoryControl(setupDocument.blueprint);
+        const timings = auditAuthorSetupSource(v3TimingSetupFixture).recognizedV3CharacterTimings;
+        expect(auditRecognizedV3TimingFidelity(timings, setupDocument.blueprint, control)).toEqual([]);
+        expect(isPovAllowed(control, 'early-pov', 9)).toBe(false);
+        expect(isCharacterDirectAppearanceAllowed(control, 'early-pov', 9)).toBe(false);
+        expect(isPovAllowed(control, 'early-pov', 10)).toBe(true);
+
+        const prepared = await prepareAuthorTextStorySetupImport(v3TimingSetupFixture, 'v3.txt', {
+            compiler: async () => ({ value: setupDocument, selectedModelId: 'gemini-test' }),
+        });
+        expect(prepared.review.criticalIssues).toEqual([]);
+        expect(prepared.review).toMatchObject({
+            povGateCount: 7, eligiblePovAtChapterOneCount: 5, noEligiblePovRangeCount: 0,
+        });
+    });
+
+    it.each([
+        ['missing POV gate', (document: StoryBlueprintDocument) => ({
+            ...document,
+            blueprint: {
+                ...document.blueprint,
+                gates: { ...document.blueprint.gates, pov: document.blueprint.gates!.pov!.slice(1) },
+            },
+        }), 'SOURCE_POV_GATE_MISSING'],
+        ['shifted POV timing', (document: StoryBlueprintDocument) => ({
+            ...document,
+            blueprint: {
+                ...document.blueprint,
+                gates: {
+                    ...document.blueprint.gates,
+                    pov: document.blueprint.gates!.pov!.map((gate, index) => index === 0
+                        ? { ...gate, allowedFromChapter: 2 } : gate),
+                },
+            },
+        }), 'SOURCE_POV_TIMING_MISMATCH'],
+        ['missing direct-appearance gate', (document: StoryBlueprintDocument) => ({
+            ...document,
+            blueprint: {
+                ...document.blueprint,
+                gates: { ...document.blueprint.gates, characters: document.blueprint.gates!.characters!.slice(1) },
+            },
+        }), 'SOURCE_CHARACTER_GATE_MISSING'],
+    ] as const)('blocks V3 fidelity when %s', async (_label, mutate, expectedCode) => {
+        const setupDocument = mutate(v3TimingDocument());
+        const prepared = await prepareAuthorTextStorySetupImport(v3TimingSetupFixture, 'v3.txt', {
+            compiler: async () => ({ value: setupDocument, selectedModelId: 'gemini-test' }),
+        });
+        expect(prepared.review.criticalIssues.map(issue => issue.code)).toContain(expectedCode);
+        expect(prepared.review.criticalIssues.find(issue => issue.code === expectedCode)).toMatchObject({
+            category: 'source-character-timing', count: 1,
+        });
+    });
+
+    it('fails closed when normalized V3 character mapping is ambiguous', async () => {
+        const base = v3TimingDocument();
+        const duplicate = { id: 'luc-duplicate', name: 'Lục Tử Khiêm', availableFromChapter: 1 };
+        const setupDocument: StoryBlueprintDocument = {
+            ...base,
+            blueprint: {
+                ...base.blueprint,
+                characters: [...base.blueprint.characters, duplicate],
+                gates: {
+                    ...base.blueprint.gates,
+                    characters: [...base.blueprint.gates!.characters!, {
+                        id: 'luc-duplicate-direct', characterId: duplicate.id, allowedFromChapter: 1,
+                    }],
+                    pov: [...base.blueprint.gates!.pov!, {
+                        id: 'luc-duplicate-pov', characterId: duplicate.id, allowedFromChapter: 1,
+                    }],
+                },
+            },
+        };
+        const prepared = await prepareAuthorTextStorySetupImport(v3TimingSetupFixture, 'v3.txt', {
+            compiler: async () => ({ value: setupDocument, selectedModelId: 'gemini-test' }),
+        });
+        expect(prepared.review.criticalIssues).toContainEqual(expect.objectContaining({
+            code: 'SOURCE_CHARACTER_MAPPING_AMBIGUOUS', category: 'source-character-timing', count: 1,
+        }));
+        expect(JSON.stringify(prepared.review.criticalIssues)).not.toContain('Lục Tử Khiêm');
+    });
+
+    it('blocks setup review and summarizes contiguous chapters with no eligible POV', () => {
+        const base = v3TimingDocument();
+        const oneFuturePov: StoryBlueprintDocument = {
+            ...base,
+            blueprint: {
+                ...base.blueprint,
+                characters: [{ id: 'future-pov', name: 'Future POV', availableFromChapter: 1 }],
+                gates: {
+                    characters: [{ id: 'future-direct', characterId: 'future-pov', allowedFromChapter: 1 }],
+                    pov: [{ id: 'future-pov-gate', characterId: 'future-pov', allowedFromChapter: 13 }],
+                },
+            },
+        };
+        const control = compileStoryControl(oneFuturePov.blueprint);
+        expect(findNoEligiblePovRanges(control)).toEqual([{ startChapter: 1, endChapter: 12 }]);
+        const prepared = prepareJsonStorySetupImport(JSON.stringify(oneFuturePov), 'future.json');
+        expect(prepared.review.criticalIssues).toContainEqual({
+            code: 'NO_ELIGIBLE_POV_RANGE', category: 'pov-viability', count: 1,
+            chapterRange: { startChapter: 1, endChapter: 12 },
+            detail: 'Không có POV hợp lệ trong dải chương 1–12.',
+        });
+        expect(prepared.review).toMatchObject({
+            eligiblePovAtChapterOneCount: 0, noEligiblePovRangeCount: 1,
+        });
+    });
+
+    it('passes global POV viability for every planned chapter and redacts source/private sentinels', async () => {
+        const source = `${v3TimingSetupFixture}\nAIzaSy_PRIVATE_KEY_SENTINEL\nRAW_STORY_TEXT_SENTINEL`;
+        const prepared = await prepareAuthorTextStorySetupImport(source, 'v3.txt', {
+            compiler: async () => ({ value: v3TimingDocument(), selectedModelId: 'gemini-test' }),
+        });
+        expect(findNoEligiblePovRanges(compileStoryControl(prepared.setupDocument.blueprint))).toEqual([]);
+        expect(eligiblePovCountAtChapter(compileStoryControl(prepared.setupDocument.blueprint), 1)).toBe(5);
+        const serializedIssues = JSON.stringify(prepared.review.criticalIssues);
+        expect(serializedIssues).not.toContain('PRIVATE_V3_TIMING_SECRET_SENTINEL');
+        expect(serializedIssues).not.toContain('AIzaSy_PRIVATE_KEY_SENTINEL');
+        expect(serializedIssues).not.toContain('RAW_STORY_TEXT_SENTINEL');
     });
 
     it('uses deterministic textual chapter fallbacks but gives machine settings precedence', () => {
