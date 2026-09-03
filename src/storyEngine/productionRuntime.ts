@@ -40,7 +40,7 @@ import {
     parseNarrativeMemoryState,
 } from './narrativeMemory';
 import { extractState } from './stateExtractor';
-import { StateExtractorModel } from './stateExtractorTypes';
+import { StateExtractorModel, summarizeStateExtractionIssues } from './stateExtractorTypes';
 import { parseStoryState } from './storyStateRuntime';
 import { buildValidatorStrategicView } from './strategicContext';
 import { FullStoryControl, StoryState } from './types';
@@ -437,10 +437,11 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             throw new ProductionRuntimeError('MODEL_RUNTIME_FAILURE', 'extraction', plan.targetChapter, 'stateExtractor');
         }
         if (result.status === 'blocked') {
-            if (calls.at(-1)?.role === 'stateExtractor' && calls.at(-1)?.status === 'failed') {
-                throw new ProductionRuntimeError('EXTRACTION_BLOCKED', 'extraction', plan.targetChapter, 'stateExtractor', issueCodes(result.issues));
-            }
-            throw new ProductionRuntimeError('EXTRACTION_BLOCKED', 'extraction', plan.targetChapter, 'stateExtractor', issueCodes(result.issues));
+            const summary = summarizeStateExtractionIssues(result.issues);
+            throw new ProductionRuntimeError(
+                'EXTRACTION_BLOCKED', 'extraction', plan.targetChapter, 'stateExtractor',
+                summary.issueCodes, summary.issueCount,
+            );
         }
         const body = {
             storyControlId: plan.storyControlId, storyControlIdentity: plan.storyControlIdentity,
@@ -483,7 +484,11 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             maxTotalChanges: runtimePolicy.maxCanonReviewChanges,
         });
         if (proposal.status === 'blocked') {
-            throw new ProductionRuntimeError('CANON_REVIEW_BLOCKED', 'canon-review', plan.targetChapter, undefined, issueCodes(proposal.issues));
+            const summary = summarizeStateExtractionIssues(proposal.issues);
+            throw new ProductionRuntimeError(
+                'CANON_REVIEW_BLOCKED', 'canon-review', plan.targetChapter, undefined,
+                summary.issueCodes, summary.issueCount,
+            );
         }
         return proposal;
     };

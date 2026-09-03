@@ -2,6 +2,7 @@ import {
     MAX_SAFE_PLAN_VALIDATION_ISSUES,
     ProductionRuntimeError,
     SAFE_PLAN_VALIDATION_ISSUE_CODES,
+    sanitizeStateExtractionIssueCodes,
     sanitizeSafeModelAttemptOutcomes,
 } from '../../storyEngine';
 import type {
@@ -9,6 +10,7 @@ import type {
     ProductionRuntimeStage,
     SafePlanValidationIssueCode,
     SafePlanValidationIssuePath,
+    SafeStateExtractionIssueCode,
     StoryEngineModelRole,
     SafeModelAttemptOutcome,
 } from '../../storyEngine';
@@ -27,7 +29,7 @@ export interface SafeStoryStudioRuntimeDiagnostic {
     readonly stage: ProductionRuntimeStage;
     readonly role?: StoryEngineModelRole;
     readonly issueCount?: number;
-    readonly issueCodes?: readonly SafePlanValidationIssueCode[];
+    readonly issueCodes?: readonly (SafePlanValidationIssueCode | SafeStateExtractionIssueCode)[];
     readonly issuePaths?: readonly SafePlanValidationIssuePath[];
     readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
 }
@@ -46,6 +48,17 @@ export const getSafeStoryStudioRuntimeDiagnostic = (
         return {
             ...base,
             ...(modelAttempts.length === 0 ? {} : { modelAttempts }),
+        };
+    }
+    if (error.code === 'EXTRACTION_BLOCKED' || error.code === 'CANON_REVIEW_BLOCKED') {
+        const issueCodes = sanitizeStateExtractionIssueCodes(error.issueCodes ?? []);
+        const issueCount = typeof error.issueCount === 'number'
+            && Number.isSafeInteger(error.issueCount) && error.issueCount >= 0
+            ? error.issueCount : undefined;
+        return {
+            ...base,
+            ...(issueCount === undefined ? {} : { issueCount }),
+            ...(issueCodes.length === 0 ? {} : { issueCodes }),
         };
     }
     if (error.code !== 'PLAN_VALIDATION_FAILURE') return base;

@@ -30,6 +30,27 @@ export const STATE_EXTRACTION_ISSUE_CODES = [
 
 export type StateExtractionIssueCode = typeof STATE_EXTRACTION_ISSUE_CODES[number];
 
+export const OTHER_EXTRACTION_ISSUE = 'OTHER_EXTRACTION_ISSUE' as const;
+export const MAX_SAFE_STATE_EXTRACTION_ISSUES = 12;
+export type SafeStateExtractionIssueCode = StateExtractionIssueCode | typeof OTHER_EXTRACTION_ISSUE;
+
+const STATE_EXTRACTION_ISSUE_CODE_SET = new Set<string>(STATE_EXTRACTION_ISSUE_CODES);
+
+export const sanitizeStateExtractionIssueCodes = (
+    values: readonly string[],
+): readonly SafeStateExtractionIssueCode[] => [...new Set(values.map(value =>
+    STATE_EXTRACTION_ISSUE_CODE_SET.has(value)
+        ? value as StateExtractionIssueCode
+        : OTHER_EXTRACTION_ISSUE,
+))].slice(0, MAX_SAFE_STATE_EXTRACTION_ISSUES);
+
+export const summarizeStateExtractionIssues = (
+    issues: readonly { readonly code: string }[],
+): { readonly issueCount: number; readonly issueCodes: readonly SafeStateExtractionIssueCode[] } => ({
+    issueCount: issues.length,
+    issueCodes: sanitizeStateExtractionIssueCodes(issues.map(issue => issue.code)),
+});
+
 export interface StateExtractionIssue {
     readonly code: StateExtractionIssueCode;
     readonly path: string;
