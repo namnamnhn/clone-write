@@ -37,7 +37,7 @@ export const runStoryStudioProductionAttempt = async <T>(
     return run(attempt);
 };
 
-const safeMessage = (error: unknown): string => {
+export const getStoryStudioSafeMessage = (error: unknown): string => {
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
     const messages: Readonly<Record<string, string>> = {
         NO_MODEL_AVAILABLE: 'Không có model Gemini văn bản đang bật. Hãy mở Cài đặt Gemini và bật một model phù hợp.',
@@ -48,6 +48,7 @@ const safeMessage = (error: unknown): string => {
         STALE_STAGE_ARTIFACT: 'Phiên chương đang làm đã cũ so với Canon. Hãy lập kế hoạch lại.',
         PLAN_PROTOCOL_FAILURE: 'Planner trả về dữ liệu không đúng giao thức.',
         PLAN_VALIDATION_FAILURE: 'Kế hoạch không vượt qua kiểm tra an toàn.',
+        NO_ALLOWED_POV: 'Chương hiện tại không có nhân vật POV hợp lệ. Canon và dự án vẫn được giữ nguyên.',
         WRITER_PROTOCOL_FAILURE: 'Writer không tạo được bản nháp hợp lệ.',
         VALIDATOR_INFRASTRUCTURE_FAILURE: 'Validator gặp lỗi hạ tầng. Canon chưa thay đổi.',
         MODEL_RUNTIME_FAILURE: 'Gemini gặp lỗi khi xử lý. Canon chưa thay đổi.',
@@ -107,7 +108,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             }
             if (result.status === 'core-corrupt') {
                 setLoadStatus('core-corrupt');
-                setErrorMessage(safeMessage(result.error));
+                setErrorMessage(getStoryStudioSafeMessage(result.error));
                 return;
             }
             setProject(result.project);
@@ -131,7 +132,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     const handleError = useCallback((error: unknown) => {
         logSafeStorySetupImportDiagnostic(error);
         logSafeStoryStudioRuntimeDiagnostic(error);
-        const message = safeMessage(error);
+        const message = getStoryStudioSafeMessage(error);
         if (mountedRef.current) {
             setErrorMessage(message);
             setSaveStatus((typeof error === 'object' && error !== null && 'code' in error && error.code === 'SAVE_FAILED') ? 'error' : 'saved');

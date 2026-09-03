@@ -5,6 +5,7 @@ import { createStructuredPlanner } from './planner';
 import { ChapterPlanValidationError } from './planValidator';
 import { summarizePlanValidationIssues } from './planDiagnostics';
 import {
+    PlannerContextError,
     PlannerModel,
 } from './plannerTypes';
 import { sanitizeWriterChapterPlan } from './planSanitizer';
@@ -227,6 +228,9 @@ export const createProductionStoryRuntime = ({ models, runtimePolicy: suppliedPo
             internalPlan = await createStructuredPlanner(instrumentPlanner(models.planner, calls), request.control).plan(plannerContext);
         } catch (error) {
             if (isCancelled(error)) throw new ProductionRuntimeError('CANCELLED', 'planning', targetChapter, 'planner');
+            if (error instanceof PlannerContextError) {
+                throw new ProductionRuntimeError(error.code, 'planning', targetChapter, 'planner');
+            }
             if (error instanceof StoryEngineModelRuntimeError) {
                 throw new ProductionRuntimeError(
                     'MODEL_RUNTIME_FAILURE', 'planning', targetChapter, 'planner',

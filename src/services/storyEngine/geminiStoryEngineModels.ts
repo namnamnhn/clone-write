@@ -1,5 +1,6 @@
 import { buildPlannerPrompt } from '../../storyEngine/planner';
-import { INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA } from '../../storyEngine/internalChapterPlanResponseSchema';
+import { buildPlannerValidationAffordances } from '../../storyEngine/plannerValidationAffordances';
+import { buildInternalChapterPlanResponseJsonSchema } from '../../storyEngine/internalChapterPlanResponseSchema';
 import { createProductionStoryRuntime } from '../../storyEngine/productionRuntime';
 import type {
     ProductionStoryRuntimePolicy,
@@ -38,14 +39,30 @@ const createAdapter = <TRequest>(
     role: StoryEngineModelRole,
     runtime: GeminiStoryEngineGenerationRuntime,
     serialize: (request: TRequest) => string,
-    responseJsonSchema?: unknown,
 ) => {
     let selectedModelId: string | undefined;
     const execute = async (request: TRequest): Promise<unknown> => {
         selectedModelId = undefined;
         const result = await runtime.run({
             role, contents: serialize(request),
-            ...(responseJsonSchema === undefined ? {} : { responseJsonSchema }),
+        });
+        selectedModelId = result.selectedModelId;
+        return result.value;
+    };
+    const telemetry: TelemetryCapableAdapter = { getLastSelectedModelId: () => selectedModelId };
+    return { execute, telemetry };
+};
+
+const createPlannerAdapter = (runtime: GeminiStoryEngineGenerationRuntime) => {
+    let selectedModelId: string | undefined;
+    const execute = async (context: PlannerContext): Promise<unknown> => {
+        selectedModelId = undefined;
+        const validationAffordances = buildPlannerValidationAffordances(context);
+        const responseJsonSchema = buildInternalChapterPlanResponseJsonSchema(validationAffordances.allowedPovIds);
+        const result = await runtime.run({
+            role: 'planner',
+            contents: buildPlannerPrompt(context, validationAffordances),
+            responseJsonSchema,
         });
         selectedModelId = result.selectedModelId;
         return result.value;
@@ -55,9 +72,7 @@ const createAdapter = <TRequest>(
 };
 
 export const createGeminiStoryEngineAdapters = (runtime: GeminiStoryEngineGenerationRuntime): StoryEngineModelBundle => {
-    const planner = createAdapter<PlannerContext>(
-        'planner', runtime, buildPlannerPrompt, INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA,
-    );
+    const planner = createPlannerAdapter(runtime);
     const writer = createAdapter<WriterModelRequest>('writer', runtime, request => request.prompt);
     const semanticValidator = createAdapter<SemanticValidatorModelRequest>('semanticValidator', runtime, request => JSON.stringify({
         prompt: request.prompt,

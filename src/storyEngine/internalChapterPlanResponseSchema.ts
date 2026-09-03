@@ -1,4 +1,4 @@
-import { CONFLICT_IMPORTANCE, SCENE_PURPOSE_TAGS } from './plannerTypes';
+import { CONFLICT_IMPORTANCE, PlannerContextError, SCENE_PURPOSE_TAGS } from './plannerTypes';
 
 const ref = (name: string) => ({ $ref: `#/$defs/${name}` });
 
@@ -10,7 +10,7 @@ const ref = (name: string) => ({ $ref: `#/$defs/${name}` });
  * deep domain contracts remain enforced by the strict runtime parsers and
  * validators after generation.
  */
-export const INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA = {
+export const INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA_BASE = {
     $id: 'internal-chapter-plan-v4',
     title: 'InternalChapterPlan',
     description: 'Compact Story Engine V4 internal chapter plan. JSON only; never chapter prose.',
@@ -129,3 +129,31 @@ export const INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA = {
         genericDomainAction: { type: 'object', additionalProperties: true },
     },
 } as const;
+
+/**
+ * Adds only target-chapter POV choices to the compact static provider template.
+ * The strict parser and semantic validator remain authoritative after generation.
+ */
+export const buildInternalChapterPlanResponseJsonSchema = (
+    allowedPovIds: readonly string[],
+) => {
+    if (allowedPovIds.length === 0) throw new PlannerContextError('NO_ALLOWED_POV');
+    const povEnum = [...allowedPovIds];
+    return {
+        ...INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA_BASE,
+        properties: {
+            ...INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA_BASE.properties,
+            povCharacterId: { type: 'string', enum: [...povEnum] },
+        },
+        $defs: {
+            ...INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA_BASE.$defs,
+            scene: {
+                ...INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA_BASE.$defs.scene,
+                properties: {
+                    ...INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA_BASE.$defs.scene.properties,
+                    povCharacterId: { type: 'string', enum: [...povEnum] },
+                },
+            },
+        },
+    } as const;
+};

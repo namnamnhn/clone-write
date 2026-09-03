@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
 import type { PlannerContext } from '../src/storyEngine';
 import {
+    buildInternalChapterPlanResponseJsonSchema,
+    buildPlannerValidationAffordances,
     CONFLICT_IMPORTANCE,
-    INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA,
+    createV4ProjectSeed,
+    PlannerContextError,
     SCENE_PURPOSE_TAGS,
     STORY_ENGINE_MODEL_ROLES,
     StoryEngineModelRuntimeError,
@@ -14,6 +17,7 @@ import {
     StoryEngineModelPolicyError,
     createGeminiStoryEngineAdapters,
     createGeminiStoryEngineModelBundle,
+    createGeminiProductionStoryRuntime,
     normalizeStoryEngineModelRolePolicy,
     normalizeStoryEngineModelRoute,
     resolveStoryEngineModelRolePolicy,
@@ -24,6 +28,7 @@ import type {
     GeminiStoryEngineGenerationRuntime,
     GeminiStoryEngineRunnerDependencies,
 } from '../src/services/storyEngine';
+import { getSafeStoryStudioRuntimeDiagnostic } from '../src/storyStudio/production/storyStudioRuntimeDiagnostics';
 import {
     auditGeminiResponseSchema,
     measureGeminiResponseSchemaComplexity,
@@ -35,8 +40,8 @@ const plannerPromptContext = (): PlannerContext => ({
     kind: 'planner-context',
     targetChapter: 1,
     currentArc: { id: 'arc-1' },
-    availableCharacters: [],
-    povEligibility: [],
+    availableCharacters: [{ id: 'pov-allowed' }, { id: 'pov-locked' }],
+    povEligibility: [{ id: 'pov-allowed', allowed: true }, { id: 'pov-locked', allowed: false }],
     characterKnowledge: [],
     relationships: [],
     allowedRevealIds: [],
@@ -44,6 +49,9 @@ const plannerPromptContext = (): PlannerContext => ({
     allowedRelationshipEventIds: [],
     relationshipContext: { relationships: [] },
 } as unknown as PlannerContext);
+
+const plannerSchema = (context: PlannerContext = plannerPromptContext()) =>
+    buildInternalChapterPlanResponseJsonSchema(buildPlannerValidationAffordances(context).allowedPovIds);
 
 const dependenciesFor = (output: string, events: string[] = []): GeminiStoryEngineRunnerDependencies => ({
     async smartExecution(candidateModels, operation, _task, _log, preferred) {
@@ -345,6 +353,98 @@ describe('WORK 12 strict Gemini JSON runner', () => {
 });
 
 describe('WORK 12 role-specific Gemini serialization', () => {
+    it('uses the exact target-allowed POV enum at both root and scene levels', () => {
+        const context = plannerPromptContext();
+        const allowedPovIds = buildPlannerValidationAffordances(context).allowedPovIds;
+        const schema = buildInternalChapterPlanResponseJsonSchema(allowedPovIds);
+
+        expect(schema.properties.povCharacterId).toEqual({ type: 'string', enum: ['pov-allowed'] });
+        expect(schema.$defs.scene.properties.povCharacterId).toEqual({ type: 'string', enum: ['pov-allowed'] });
+        expect(schema.properties.povCharacterId.enum).toEqual(allowedPovIds);
+        expect(schema.$defs.scene.properties.povCharacterId.enum).toEqual(allowedPovIds);
+        expect(JSON.stringify([
+            schema.properties.povCharacterId.enum,
+            schema.$defs.scene.properties.povCharacterId.enum,
+        ])).not.toContain('pov-locked');
+    });
+
+    it('builds prompt affordances and the provider schema from one per-context allow-list', async () => {
+        let captured: Parameters<GeminiStoryEngineGenerationRuntime['run']>[0] | undefined;
+        const runtime: GeminiStoryEngineGenerationRuntime = {
+            async run(request) {
+                captured = request;
+                return { value: {}, selectedModelId: 'gemini-test' };
+            },
+        };
+        await createGeminiStoryEngineAdapters(runtime).planner.plan(plannerPromptContext());
+
+        const promptMatch = captured?.contents.match(/VALIDATION_AFFORDANCES:\n([^]*?)\n\nCONTEXT:/);
+        expect(promptMatch).toBeTruthy();
+        const affordances = JSON.parse(promptMatch![1]) as { readonly allowedPovIds: readonly string[] };
+        const schema = captured?.responseJsonSchema as ReturnType<typeof buildInternalChapterPlanResponseJsonSchema>;
+        expect(schema.properties.povCharacterId.enum).toEqual(affordances.allowedPovIds);
+        expect(schema.$defs.scene.properties.povCharacterId.enum).toEqual(affordances.allowedPovIds);
+    });
+
+    it('fails closed before the provider adapter when no POV is eligible', async () => {
+        const run = vi.fn<GeminiStoryEngineGenerationRuntime['run']>();
+        const context: PlannerContext = {
+            ...plannerPromptContext(),
+            povEligibility: [{ id: 'pov-allowed', allowed: false }, { id: 'pov-locked', allowed: false }],
+        };
+        await expect(createGeminiStoryEngineAdapters({ run }).planner.plan(context))
+            .rejects.toEqual(expect.objectContaining({ name: 'PlannerContextError', code: 'NO_ALLOWED_POV' }));
+        expect(() => buildInternalChapterPlanResponseJsonSchema([])).toThrow(PlannerContextError);
+        expect(run).not.toHaveBeenCalled();
+    });
+
+    it('returns NO_ALLOWED_POV without a provider call or Canon mutation', async () => {
+        const privateStory = 'PRIVATE_LOCKED_POV_STORY_SENTINEL';
+        const privateSecret = 'PRIVATE_LOCKED_POV_SECRET_SENTINEL';
+        let providerCalls = 0;
+        const seed = createV4ProjectSeed({
+            kind: 'story-blueprint-document',
+            formatVersion: 1,
+            blueprint: {
+                id: 'no-pov-story',
+                engine: { plannedChapterCount: 2 },
+                characters: [{ id: 'hero', name: privateStory, availableFromChapter: 1 }],
+                arcs: [{ id: 'arc', title: 'Arc', startChapter: 1, endChapter: 2 }],
+                gates: { pov: [{ id: 'hero-pov', characterId: 'hero', allowedFromChapter: 2 }] },
+                authorOnlySecrets: [{ id: 'secret', value: privateSecret }],
+            },
+        });
+        const stateBefore = structuredClone(seed.state);
+        const memoryBefore = structuredClone(seed.memory);
+        const runtime = createGeminiProductionStoryRuntime({
+            availableModelIds: ['gemini-3.7-flash'],
+            runnerDependencies: {
+                smartExecution: async (candidates, operation) => operation(candidates[0]),
+                getAiClient: () => ({ models: { generateContent: async () => {
+                    providerCalls += 1;
+                    return { text: '{}' } as GenerateContentResponse;
+                } } }),
+            },
+        });
+
+        let caught: unknown;
+        try {
+            await runtime.planProductionChapter({ control: seed.control, state: seed.state, memoryState: seed.memory });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toMatchObject({ code: 'NO_ALLOWED_POV', stage: 'planning', role: 'planner' });
+        expect(getSafeStoryStudioRuntimeDiagnostic(caught)).toEqual({
+            code: 'NO_ALLOWED_POV', stage: 'planning', role: 'planner',
+        });
+        expect(providerCalls).toBe(0);
+        expect(seed.state).toEqual(stateBefore);
+        expect(seed.memory).toEqual(memoryBefore);
+        const serialized = JSON.stringify({ caught, diagnostic: getSafeStoryStudioRuntimeDiagnostic(caught) });
+        expect(serialized).not.toContain(privateStory);
+        expect(serialized).not.toContain(privateSecret);
+    });
+
     it('sends the dedicated schema on the Planner SDK request and on no other role request', async () => {
         const configs: unknown[] = [];
         const models = createGeminiStoryEngineModelBundle({
@@ -363,7 +463,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         await models.repair.repair({ prompt: 'REPAIR', context: {} } as never);
         await models.stateExtractor.extract({ prompt: 'EXTRACT', context: {}, candidate: {} } as never);
 
-        expect(configs[0]).toMatchObject({ responseJsonSchema: INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA });
+        expect(configs[0]).toMatchObject({ responseJsonSchema: plannerSchema() });
         configs.slice(1).forEach(config => expect(config).not.toHaveProperty('responseJsonSchema'));
     });
 
@@ -391,13 +491,14 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         expect(JSON.parse(captures.get('stateExtractor')!)).toEqual({ prompt: 'EXTRACT', context: { safe: 'EXTRACTION_SAFE' }, candidate: { prose: 'chapter' } });
         expect(captures.get('repair')).not.toContain('SECRET_EVIDENCE');
         expect(captures.get('stateExtractor')).not.toContain('SECRET_EVIDENCE');
-        expect(schemaCaptures.get('planner')).toBe(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        expect(schemaCaptures.get('planner')).toEqual(plannerSchema());
         expect([...schemaCaptures.entries()].filter(([role]) => role !== 'planner').every(([, schema]) => schema === undefined)).toBe(true);
     });
 
     it('keeps the Planner provider schema inside the supported Gemini subset', () => {
-        expect(auditGeminiResponseSchema(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA)).toEqual([]);
-        const serialized = JSON.stringify(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        const schema = plannerSchema();
+        expect(auditGeminiResponseSchema(schema)).toEqual([]);
+        const serialized = JSON.stringify(schema);
         [
             'minLength', 'maxLength', 'pattern', 'const', 'uniqueItems', 'allOf',
             'not', 'if', 'then', 'else', 'dependentRequired',
@@ -405,13 +506,13 @@ describe('WORK 12 role-specific Gemini serialization', () => {
     });
 
     it('keeps Planner scene enums derived exactly from runtime constants', () => {
-        const scene = INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA.$defs.scene;
+        const scene = plannerSchema().$defs.scene;
         expect(scene.properties.purposeTags.items.enum).toEqual([...SCENE_PURPOSE_TAGS]);
         expect(scene.properties.conflictImportance.enum).toEqual([...CONFLICT_IMPORTANCE]);
     });
 
     it('strongly describes core Planner objects but keeps deep domain actions generic', () => {
-        const schema = INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA;
+        const schema = plannerSchema();
         expect(schema.required).toEqual(expect.arrayContaining([
             'scenes', 'expectedResourceDeltas', 'expectedRelationshipDeltas',
             'expectedContinuityConsequences', 'strategicActions', 'relationshipActions',
@@ -437,10 +538,12 @@ describe('WORK 12 role-specific Gemini serialization', () => {
     });
 
     it('stays under the documented internal Planner schema maintenance budget', () => {
-        const serialized = JSON.stringify(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        const realisticPovIds = Array.from({ length: 64 }, (_, index) => `character-${index + 1}`);
+        const schema = buildInternalChapterPlanResponseJsonSchema(realisticPovIds);
+        const serialized = JSON.stringify(schema);
         expect(serialized).not.toContain('"oneOf"');
         expect(serialized).not.toContain('"anyOf"');
-        const complexity = measureGeminiResponseSchemaComplexity(INTERNAL_CHAPTER_PLAN_RESPONSE_JSON_SCHEMA);
+        const complexity = measureGeminiResponseSchemaComplexity(schema);
         expect(complexity).toMatchObject({ hasObjectCycle: false, hasReferenceCycle: false });
         // Conservative internal maintenance budget, not a claimed Google API hard limit.
         expect(complexity.schemaNodeCount).toBeLessThanOrEqual(90);

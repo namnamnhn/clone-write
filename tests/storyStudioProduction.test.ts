@@ -1,6 +1,6 @@
 import type { GenerateContentResponse } from '@google/genai';
 import { describe, expect, it, vi } from 'vitest';
-import { runStoryStudioProductionAttempt } from '../src/hooks/pages/useStoryStudio';
+import { getStoryStudioSafeMessage, runStoryStudioProductionAttempt } from '../src/hooks/pages/useStoryStudio';
 import {
     compileStoryControl,
     createProductionStoryRuntime,
@@ -210,6 +210,15 @@ const advanceToReview = async (controller: StoryStudioProjectController, product
 };
 
 describe('WORK 13 Story Studio production persistence', () => {
+    it('shows a safe Vietnamese NO_ALLOWED_POV message without identifiers or hidden data', () => {
+        const message = getStoryStudioSafeMessage({
+            code: 'NO_ALLOWED_POV', characterId: 'LOCKED_CHARACTER_SENTINEL', secret: 'AUTHOR_SECRET_SENTINEL',
+        });
+        expect(message).toBe('Chương hiện tại không có nhân vật POV hợp lệ. Canon và dự án vẫn được giữ nguyên.');
+        expect(message).not.toContain('LOCKED_CHARACTER_SENTINEL');
+        expect(message).not.toContain('AUTHOR_SECRET_SENTINEL');
+    });
+
     it.each(['startBatch', 'resume', 'rewriteFromSamePlan', 'replan'] as const)(
         'clears a stale UI error before the explicit %s attempt runs',
         async (attempt) => {
