@@ -65,6 +65,7 @@ export * from './narrativeMemory';
 export * from './storyBlueprintRuntime';
 export * from './storyBlueprintResponseSchema';
 export * from './internalChapterPlanResponseSchema';
+export * from './storyStateDeltaResponseSchema';
 export * from './productionRuntimeTypes';
 export * from './modelAttemptDiagnostics';
 export * from './productionArtifactIdentity';

@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
-import type { PlannerContext } from '../src/storyEngine';
+import type { PlannerContext, StateExtractorModelRequest } from '../src/storyEngine';
 import {
     buildInternalChapterPlanResponseJsonSchema,
     buildPlannerValidationAffordances,
+    buildStoryStateDeltaResponseJsonSchema,
     CONFLICT_IMPORTANCE,
     createV4ProjectSeed,
     PlannerContextError,
     SCENE_PURPOSE_TAGS,
+    STORY_STATE_DELTA_V2_OPERATION_FIELDS,
     STORY_ENGINE_MODEL_ROLES,
     StoryEngineModelRuntimeError,
 } from '../src/storyEngine';
@@ -52,6 +54,18 @@ const plannerPromptContext = (): PlannerContext => ({
 
 const plannerSchema = (context: PlannerContext = plannerPromptContext()) =>
     buildInternalChapterPlanResponseJsonSchema(buildPlannerValidationAffordances(context).allowedPovIds);
+
+const extractorRequest = (
+    chapterNumber = 1,
+    baseRevision = 0,
+    contextTargetChapter = chapterNumber,
+): StateExtractorModelRequest => ({
+    kind: 'state-extractor-model-request',
+    chapterNumber,
+    prompt: 'EXTRACT',
+    context: { targetChapter: contextTargetChapter, baseRevision },
+    candidate: { prose: 'chapter' },
+} as unknown as StateExtractorModelRequest);
 
 const dependenciesFor = (output: string, events: string[] = []): GeminiStoryEngineRunnerDependencies => ({
     async smartExecution(candidateModels, operation, _task, _log, preferred) {
@@ -445,7 +459,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         expect(serialized).not.toContain(privateSecret);
     });
 
-    it('sends the dedicated schema on the Planner SDK request and on no other role request', async () => {
+    it('sends each dedicated schema only on its matching SDK request', async () => {
         const configs: unknown[] = [];
         const models = createGeminiStoryEngineModelBundle({
             availableModelIds: ['gemini-3.7-flash'],
@@ -461,10 +475,11 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         await models.writer.write({ kind: 'writer-model-request', prompt: 'WRITER' } as never);
         await models.semanticValidator.validate({ prompt: 'VALIDATOR', context: {}, candidate: {} } as never);
         await models.repair.repair({ prompt: 'REPAIR', context: {} } as never);
-        await models.stateExtractor.extract({ prompt: 'EXTRACT', context: {}, candidate: {} } as never);
+        await models.stateExtractor.extract(extractorRequest());
 
         expect(configs[0]).toMatchObject({ responseJsonSchema: plannerSchema() });
-        configs.slice(1).forEach(config => expect(config).not.toHaveProperty('responseJsonSchema'));
+        configs.slice(1, 4).forEach(config => expect(config).not.toHaveProperty('responseJsonSchema'));
+        expect(configs[4]).toMatchObject({ responseJsonSchema: buildStoryStateDeltaResponseJsonSchema(1, 0) });
     });
 
     it('keeps Writer prompt-only and preserves distinct privileged/safe envelopes', async () => {
@@ -482,17 +497,92 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         await adapters.writer.write({ kind: 'writer-model-request', prompt: 'WRITER_ONLY', context: { hidden: 'not serialized separately' } } as never);
         await adapters.semanticValidator.validate({ prompt: 'VALIDATE', context: { privileged: 'SECRET_EVIDENCE' }, candidate: { prose: 'chapter' } } as never);
         await adapters.repair.repair({ prompt: 'REPAIR', context: { safe: 'ISSUE_SAFE' } } as never);
-        await adapters.stateExtractor.extract({ prompt: 'EXTRACT', context: { safe: 'EXTRACTION_SAFE' }, candidate: { prose: 'chapter' } } as never);
+        await adapters.stateExtractor.extract({
+            ...extractorRequest(),
+            context: { ...extractorRequest().context, safe: 'EXTRACTION_SAFE' },
+        } as StateExtractorModelRequest);
 
         expect(captures.get('planner')).toContain('CONTEXT:');
         expect(captures.get('writer')).toBe('WRITER_ONLY');
         expect(JSON.parse(captures.get('semanticValidator')!)).toEqual({ prompt: 'VALIDATE', context: { privileged: 'SECRET_EVIDENCE' }, candidate: { prose: 'chapter' } });
         expect(JSON.parse(captures.get('repair')!)).toEqual({ prompt: 'REPAIR', context: { safe: 'ISSUE_SAFE' } });
-        expect(JSON.parse(captures.get('stateExtractor')!)).toEqual({ prompt: 'EXTRACT', context: { safe: 'EXTRACTION_SAFE' }, candidate: { prose: 'chapter' } });
+        expect(JSON.parse(captures.get('stateExtractor')!)).toEqual({
+            prompt: 'EXTRACT',
+            context: { targetChapter: 1, baseRevision: 0, safe: 'EXTRACTION_SAFE' },
+            candidate: { prose: 'chapter' },
+        });
         expect(captures.get('repair')).not.toContain('SECRET_EVIDENCE');
         expect(captures.get('stateExtractor')).not.toContain('SECRET_EVIDENCE');
         expect(schemaCaptures.get('planner')).toEqual(plannerSchema());
-        expect([...schemaCaptures.entries()].filter(([role]) => role !== 'planner').every(([, schema]) => schema === undefined)).toBe(true);
+        expect(schemaCaptures.get('stateExtractor')).toEqual(buildStoryStateDeltaResponseJsonSchema(1, 0));
+        expect(['writer', 'semanticValidator', 'repair'].every(role => schemaCaptures.get(role) === undefined)).toBe(true);
+    });
+
+    it.each([
+        [1, 0],
+        [37, 36],
+    ])('builds the exact compact StateDelta cursor schema for C%s/rev%s', (chapterNumber, expectedRevision) => {
+        const schema = buildStoryStateDeltaResponseJsonSchema(chapterNumber, expectedRevision);
+        expect(schema.properties.kind).toEqual({ type: 'string', enum: ['story-state-delta'] });
+        expect(schema.properties.schemaVersion).toEqual({ type: 'integer', enum: [2] });
+        expect(schema.properties.chapterNumber).toEqual({ type: 'integer', enum: [chapterNumber] });
+        expect(schema.properties.expectedRevision).toEqual({ type: 'integer', enum: [expectedRevision] });
+        expect(schema.required).toEqual([
+            'kind', 'schemaVersion', 'chapterNumber', 'expectedRevision',
+            ...STORY_STATE_DELTA_V2_OPERATION_FIELDS,
+        ]);
+        STORY_STATE_DELTA_V2_OPERATION_FIELDS.forEach(field => {
+            expect(schema.properties[field]).toEqual({
+                type: 'array', items: { type: 'object', additionalProperties: true },
+            });
+        });
+    });
+
+    it('passes the per-request StateDelta cursor schema through the specialized extractor adapter', async () => {
+        let captured: Parameters<GeminiStoryEngineGenerationRuntime['run']>[0] | undefined;
+        const runtime: GeminiStoryEngineGenerationRuntime = {
+            async run(request) {
+                captured = request;
+                return { value: {}, selectedModelId: 'gemini-state-extractor' };
+            },
+        };
+        const adapter = createGeminiStoryEngineAdapters(runtime).stateExtractor;
+        await adapter.extract(extractorRequest(37, 36));
+        expect(captured).toMatchObject({
+            role: 'stateExtractor', responseJsonSchema: buildStoryStateDeltaResponseJsonSchema(37, 36),
+        });
+        expect((adapter as typeof adapter & { getLastSelectedModelId(): string | undefined })
+            .getLastSelectedModelId()).toBe('gemini-state-extractor');
+    });
+
+    it.each([
+        ['mismatched target chapter', extractorRequest(2, 1, 3)],
+        ['non-positive chapter', extractorRequest(0, 0, 0)],
+        ['negative base revision', extractorRequest(1, -1)],
+    ])('fails closed before runtime.run for an invalid extractor cursor: %s', async (_label, request) => {
+        const run = vi.fn<GeminiStoryEngineGenerationRuntime['run']>();
+        await expect(createGeminiStoryEngineAdapters({ run }).stateExtractor.extract(request))
+            .rejects.toEqual(expect.objectContaining({
+                name: 'StoryEngineModelRuntimeError', role: 'stateExtractor',
+            }));
+        expect(run).not.toHaveBeenCalled();
+    });
+
+    it('keeps the StateDelta envelope schema provider-compatible and well below its maintenance budget', () => {
+        const schema = buildStoryStateDeltaResponseJsonSchema(37, 36);
+        expect(auditGeminiResponseSchema(schema)).toEqual([]);
+        const serialized = JSON.stringify(schema);
+        ['oneOf', 'anyOf', 'allOf', 'const', 'pattern', 'minLength'].forEach(keyword => {
+            expect(serialized).not.toContain(`"${keyword}"`);
+        });
+        const complexity = measureGeminiResponseSchemaComplexity(schema);
+        expect(complexity).toMatchObject({
+            hasObjectCycle: false, hasReferenceCycle: false, definitionCount: 0,
+        });
+        // Conservative internal maintenance budget, not a claimed Google API hard limit.
+        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(30);
+        expect(complexity.maxDepth).toBeLessThanOrEqual(3);
+        expect(complexity.serializedBytes).toBeLessThanOrEqual(3_000);
     });
 
     it('keeps the Planner provider schema inside the supported Gemini subset', () => {
