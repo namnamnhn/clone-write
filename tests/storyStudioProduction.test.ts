@@ -38,6 +38,7 @@ import type { StorySetupImportDiagnosticCode } from '../src/storyStudio/producti
 import {
     buildStorySetupCompilerPrompt,
     compileStorySetupWithGemini,
+    STORY_SETUP_COMPILER_CANDIDATES,
 } from '../src/services/storyEngine/geminiStorySetupCompiler';
 import authorSetupFixture from './fixtures/storyStudioAuthorSetupFixture.txt?raw';
 import actualFormatSetupFixture from './fixtures/storyStudioActualFormatSetupFixture.txt?raw';
@@ -868,11 +869,13 @@ describe('WORK 13 Story Studio production persistence', () => {
         let generatedSchema: unknown;
         const result = await compileStorySetupWithGemini({
             source: 'COMPLETE_PRIVATE_AUTHOR_SETUP',
-            availableModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash'],
+            availableModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
         }, {
             smartExecution: async <T>(candidateModels: string[], operation: (modelId: string) => Promise<T>, _taskName?: string, _onLog?: undefined, preferredModelId?: string): Promise<T> => {
                 events.push('smartExecution');
-                expect(candidateModels).toEqual(['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash']);
+                expect(candidateModels).toEqual([
+                    'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
+                ]);
                 expect(preferredModelId).toBe('gemini-3.1-pro-preview');
                 return operation(candidateModels[0]);
             },
@@ -923,6 +926,41 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(control.characters.guide.availableFromChapter).toBe(33);
         expect(control.relationshipDefinitions).toHaveLength(1);
         expect(control.authorOnlySecrets).toHaveLength(1);
+    });
+
+    it('filters disabled 3.5 Flash while preserving all earlier setup compiler candidates', async () => {
+        await compileStorySetupWithGemini({
+            source: 'AUTHOR SETUP',
+            availableModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash'],
+        }, {
+            smartExecution: async <T>(candidateModels: string[], operation: (modelId: string) => Promise<T>, _taskName?: string, _onLog?: undefined, preferredModelId?: string): Promise<T> => {
+                expect(candidateModels).toEqual(['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash']);
+                expect(preferredModelId).toBe('gemini-3.1-pro-preview');
+                return operation(candidateModels[0]);
+            },
+            getAiClient: () => ({
+                models: { generateContent: async () => ({ text: JSON.stringify(document()) }) as GenerateContentResponse },
+            }),
+        });
+    });
+
+    it('does not broaden setup compiler candidates to Flash-Lite or Gemma', async () => {
+        expect(STORY_SETUP_COMPILER_CANDIDATES).toEqual([
+            'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
+        ]);
+        await compileStorySetupWithGemini({
+            source: 'AUTHOR SETUP',
+            availableModelIds: ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemma-4-31b-it'],
+        }, {
+            smartExecution: async <T>(candidateModels: string[], operation: (modelId: string) => Promise<T>, _taskName?: string, _onLog?: undefined, preferredModelId?: string): Promise<T> => {
+                expect(candidateModels).toEqual(['gemini-3.5-flash']);
+                expect(preferredModelId).toBe('gemini-3.5-flash');
+                return operation(candidateModels[0]);
+            },
+            getAiClient: () => ({
+                models: { generateContent: async () => ({ text: JSON.stringify(document()) }) as GenerateContentResponse },
+            }),
+        });
     });
 
     it('keeps strict runtime rejection for an empty required model string', () => {

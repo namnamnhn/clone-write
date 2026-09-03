@@ -4,7 +4,7 @@ import { STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA } from '../../storyEngine
 import { getAiClient, SAFETY_SETTINGS, smartExecution } from '../api/gemini';
 
 export const STORY_SETUP_COMPILER_CANDIDATES = [
-    'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash',
+    'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
 ] as const;
 
 export class GeminiStorySetupCompilerError extends Error {
