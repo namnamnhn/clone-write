@@ -473,9 +473,13 @@ describe('WORK 12 production staged runtime', () => {
         ['writer', 'writing'],
     ] as const)('maps typed %s infrastructure failure to MODEL_RUNTIME_FAILURE with the correct stage and role', async (role, stage) => {
         const { seed, runtime } = harness({ runtimeFailRole: role });
+        const stateBefore = structuredClone(seed.state);
+        const memoryBefore = structuredClone(seed.memory);
         const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
         expect(result).toMatchObject({ status: 'blocked', code: 'MODEL_RUNTIME_FAILURE', stage, role });
         expect(JSON.stringify(result)).not.toContain('provider failed');
+        expect(seed.state).toEqual(stateBefore);
+        expect(seed.memory).toEqual(memoryBefore);
     });
 
     it.each(['EMPTY_RESPONSE', 'MALFORMED_JSON'] as const)(

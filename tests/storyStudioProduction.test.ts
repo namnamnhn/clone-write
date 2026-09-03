@@ -1191,9 +1191,13 @@ describe('WORK 13 Story Studio production persistence', () => {
             preparedWasPublished = true;
             return value;
         });
-        expect(providerSignal).toBe(abortController.signal);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(providerSignal).toBeDefined();
+        expect(providerSignal).not.toBe(abortController.signal);
         abortController.abort();
         await expect(compilation).rejects.toMatchObject({ code: 'CANCELLED' });
+        expect(providerSignal?.aborted).toBe(true);
         expect(preparedWasPublished).toBe(false);
         expect(controller.currentProject).toEqual(active);
         expect(JSON.stringify(adapter.values.get(STORY_STUDIO_STORAGE_KEY))).toBe(storedBefore);

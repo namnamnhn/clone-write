@@ -2,6 +2,7 @@ import type { GenerateContentResponse } from '@google/genai';
 import { getAiClient, SAFETY_SETTINGS, smartExecution } from '../api/gemini';
 import { StoryEngineModelRuntimeError } from '../../storyEngine/productionRuntimeTypes';
 import type { StoryEngineModelRole, StoryEngineModelRoute } from '../../storyEngine/productionRuntimeTypes';
+import { runGeminiV4RequestWithDeadline } from './geminiV4RequestDeadline';
 
 export class GeminiStoryEngineProtocolError extends Error {
     constructor(readonly code: 'EMPTY_RESPONSE' | 'MALFORMED_JSON') {
@@ -59,16 +60,20 @@ export const runGeminiStoryEngineJson = async (
             let response: GenerateContentResponse;
             try {
                 const ai = dependencies.getAiClient();
-                response = await ai.models.generateContent({
-                    model: modelId,
-                    contents: request.contents,
-                    config: {
-                        temperature: request.route.temperature,
-                        responseMimeType: 'application/json',
-                        ...(request.responseJsonSchema === undefined ? {} : { responseJsonSchema: request.responseJsonSchema }),
-                        safetySettings: SAFETY_SETTINGS,
-                        ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
-                    },
+                response = await runGeminiV4RequestWithDeadline({
+                    surface: request.role,
+                    externalSignal: request.signal,
+                    operation: attemptSignal => ai.models.generateContent({
+                        model: modelId,
+                        contents: request.contents,
+                        config: {
+                            temperature: request.route.temperature,
+                            responseMimeType: 'application/json',
+                            ...(request.responseJsonSchema === undefined ? {} : { responseJsonSchema: request.responseJsonSchema }),
+                            safetySettings: SAFETY_SETTINGS,
+                            abortSignal: attemptSignal,
+                        },
+                    }),
                 });
             } catch (error) {
                 if (request.signal?.aborted) throw new Error('ABORTED');

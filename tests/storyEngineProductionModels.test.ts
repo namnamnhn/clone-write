@@ -194,7 +194,7 @@ describe('WORK 12 strict Gemini JSON runner', () => {
             .rejects.toMatchObject({ code: 'EMPTY_RESPONSE' } satisfies Partial<GeminiStoryEngineProtocolError>);
     });
 
-    it('threads JSON MIME type, role schema, temperature, safety, and cancellation through the SDK config', async () => {
+    it('threads JSON MIME type, role schema, temperature, safety, and a per-attempt signal through the SDK config', async () => {
         let captured: unknown;
         const controller = new AbortController();
         const responseJsonSchema = { type: 'object' };
@@ -213,9 +213,13 @@ describe('WORK 12 strict Gemini JSON runner', () => {
             contents: 'prompt',
             config: {
                 responseMimeType: 'application/json', responseJsonSchema,
-                temperature: 0.3, abortSignal: controller.signal,
+                temperature: 0.3,
             },
         });
+        const attemptSignal = (captured as { config: { abortSignal: AbortSignal } }).config.abortSignal;
+        expect(attemptSignal).toBeInstanceOf(AbortSignal);
+        expect(attemptSignal).not.toBe(controller.signal);
+        expect(attemptSignal.aborted).toBe(false);
     });
 
     it('fails closed before execution when already cancelled', async () => {

@@ -5,6 +5,7 @@ import { quotaManager } from '../../utils/quotaManager';
 import { MODEL_CONFIGS, IS_LITE } from '../../constants';
 import type { LogContext } from '../../types';
 import { redactSensitiveText } from '../../utils/logSanitizer';
+import { isGeminiV4RequestTimeoutError } from '../storyEngine/geminiV4RequestDeadline';
 
 // ============================================================================
 // FIX59 (bản Lite): API Key Gemini CÁ NHÂN do người dùng nhập.
@@ -734,6 +735,20 @@ export const smartExecution = async <T>(
             // "Tất cả model đã thử đều gặp lỗi hoặc hết Quota [CAUSE:BLACKLIST_TEMP]" gây hiểu
             // lầm. Người dùng đã dừng thì ném thẳng ra ngoài, không đụng quotaManager.
             if ((error.message || '') === 'ABORTED') throw error;
+
+            // Story Engine V4 request deadlines already consumed the full per-attempt safety budget.
+            // Skip this model immediately without quota/error accounting or same-model backoff. Legacy
+            // callers are unaffected unless they explicitly throw the typed V4 timeout marker.
+            if (isGeminiV4RequestTimeoutError(error)) {
+                if (onLog) onLog(`Model ${selectedId} exceeded the Story Engine V4 request deadline. Trying the next enabled model.`, {
+                    operation: taskName,
+                    provider: 'gemini',
+                    modelId: selectedId,
+                    cause: 'request_timeout',
+                });
+                if (!temporaryBlacklist.includes(selectedId)) temporaryBlacklist.push(selectedId);
+                continue;
+            }
 
             const isQuotaError = msg.includes('429') || msg.includes('exceeded quota') || msg.includes('quota exceeded') || msg.includes('resource exhausted') || msg.includes('quota');
             const isInvalidKey = msg.includes('api key not valid') || msg.includes('api_key_invalid') || (error.status === 400 && msg.includes('key')) || msg.includes('401 unauthorized');

@@ -2,6 +2,7 @@ import type { GenerateContentResponse } from '@google/genai';
 import { MODEL_CONFIGS } from '../../constants';
 import { STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA } from '../../storyEngine';
 import { getAiClient, SAFETY_SETTINGS, smartExecution } from '../api/gemini';
+import { runGeminiV4RequestWithDeadline } from './geminiV4RequestDeadline';
 
 export const STORY_SETUP_COMPILER_CANDIDATES = [
     'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
@@ -91,16 +92,20 @@ export const compileStorySetupWithGemini = async (
                 let response: GenerateContentResponse;
                 try {
                     const ai = dependencies.getAiClient();
-                    response = await ai.models.generateContent({
-                        model: modelId,
-                        contents: buildStorySetupCompilerPrompt(request.source),
-                        config: {
-                            temperature: 0.1,
-                            responseMimeType: 'application/json',
-                            responseJsonSchema: STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
-                            safetySettings: SAFETY_SETTINGS,
-                            ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
-                        },
+                    response = await runGeminiV4RequestWithDeadline({
+                        surface: 'setupCompiler',
+                        externalSignal: request.signal,
+                        operation: attemptSignal => ai.models.generateContent({
+                            model: modelId,
+                            contents: buildStorySetupCompilerPrompt(request.source),
+                            config: {
+                                temperature: 0.1,
+                                responseMimeType: 'application/json',
+                                responseJsonSchema: STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
+                                safetySettings: SAFETY_SETTINGS,
+                                abortSignal: attemptSignal,
+                            },
+                        }),
                     });
                 } catch (error) {
                     if (request.signal?.aborted) throw new Error('ABORTED');
