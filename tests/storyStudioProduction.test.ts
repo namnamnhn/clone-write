@@ -923,6 +923,25 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(prompt).not.toContain('DeepSeek');
     });
 
+    it('setup compiler prompt requires beats to be absent or a complete contiguous arc partition', () => {
+        const prompt = buildStorySetupCompilerPrompt('AUTHOR SETUP');
+        expect(prompt).toContain('For each arc, choose exactly one valid representation: (A) emit no beats for that arc; or (B) if beats are emitted');
+        expect(prompt).toContain('all beats must reference that arc');
+        expect(prompt).toContain('stay fully inside the arc range');
+        expect(prompt).toContain('have strictly increasing order');
+        expect(prompt).toContain('first beat.startChapter == arc.startChapter');
+        expect(prompt).toContain('each next beat.startChapter == previous beat.endChapter + 1');
+        expect(prompt).toContain('last beat.endChapter == arc.endChapter');
+        expect(prompt).toContain('cover every chapter exactly once with no gaps and no overlaps');
+    });
+
+    it('setup compiler prompt omits beats rather than guessing an invalid partition', () => {
+        const prompt = buildStorySetupCompilerPrompt('AUTHOR SETUP');
+        expect(prompt).toContain('Never invent or guess exact numeric beat boundaries from vague prose');
+        expect(prompt).toContain('Only emit beats when the AUTHOR DATA provides enough exact chapter-range information to form a valid total partition');
+        expect(prompt).toContain('If beat-like notes are vague, partial, overlapping, or internally inconsistent, omit beats for that arc rather than manufacturing boundaries');
+    });
+
     it('Gemini setup compiler scopes client lookup inside smartExecution and preserves candidate order', async () => {
         const events: string[] = [];
         let generatedContents = '';
