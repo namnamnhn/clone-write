@@ -6,6 +6,7 @@ import { MODEL_CONFIGS, IS_LITE } from '../../constants';
 import type { LogContext } from '../../types';
 import { redactSensitiveText } from '../../utils/logSanitizer';
 import { isGeminiV4RequestTimeoutError } from '../storyEngine/geminiV4RequestDeadline';
+import { createGeminiServerBridgeClient, isGeminiServerBridgeEnabled } from './geminiTransport';
 
 // ============================================================================
 // FIX59 (bản Lite): API Key Gemini CÁ NHÂN do người dùng nhập.
@@ -54,9 +55,15 @@ const computeKeyId = (raw: string): string => {
 // từ chối key nhúng, giữ nguyên yêu cầu bắt buộc nhập key cá nhân).
 const DEFAULT_GEMINI_API_KEY: string | undefined =
     (!IS_LITE && process.env.GEMINI_API_KEY) ? process.env.GEMINI_API_KEY : undefined;
+const HOSTED_SERVER_DEFAULT_CREDENTIAL = '__hosted_server_default__';
+const HAS_HOSTED_SERVER_DEFAULT = !IS_LITE && isGeminiServerBridgeEnabled();
 const DEFAULT_GEMINI_KEY_ID: string | undefined =
-    DEFAULT_GEMINI_API_KEY ? computeKeyId(DEFAULT_GEMINI_API_KEY) : undefined;
-export const hasDefaultGeminiKey = (): boolean => !!DEFAULT_GEMINI_API_KEY;
+    DEFAULT_GEMINI_API_KEY
+        ? computeKeyId(DEFAULT_GEMINI_API_KEY)
+        : HAS_HOSTED_SERVER_DEFAULT
+            ? 'server_default_srv0'
+            : undefined;
+export const hasDefaultGeminiKey = (): boolean => !!DEFAULT_GEMINI_API_KEY || HAS_HOSTED_SERVER_DEFAULT;
 
 // fix69: hồ bơi HIỆU LỰC dùng để cấp client thật (getAiClient) và đăng ký với quotaManager.
 // Luôn = [key mặc định?] + [key cá nhân...]. Tính lại mỗi khi danh sách key cá nhân đổi.
@@ -64,8 +71,8 @@ let effectiveKeys: string[] = [];
 let effectiveKeyIds: string[] = [];
 
 const recomputeEffectiveKeyPool = (): void => {
-    if (DEFAULT_GEMINI_API_KEY && DEFAULT_GEMINI_KEY_ID) {
-        effectiveKeys = [DEFAULT_GEMINI_API_KEY, ...userGeminiKeys];
+    if (DEFAULT_GEMINI_KEY_ID && (DEFAULT_GEMINI_API_KEY || HAS_HOSTED_SERVER_DEFAULT)) {
+        effectiveKeys = [DEFAULT_GEMINI_API_KEY ?? HOSTED_SERVER_DEFAULT_CREDENTIAL, ...userGeminiKeys];
         effectiveKeyIds = [DEFAULT_GEMINI_KEY_ID, ...userKeyIds];
     } else {
         effectiveKeys = [...userGeminiKeys];
@@ -115,11 +122,11 @@ export interface GeminiKeyPoolEntry {
 }
 export const getGeminiKeyPoolForUi = (): GeminiKeyPoolEntry[] => {
     const entries: GeminiKeyPoolEntry[] = [];
-    if (DEFAULT_GEMINI_API_KEY && DEFAULT_GEMINI_KEY_ID) {
+    if (DEFAULT_GEMINI_KEY_ID && (DEFAULT_GEMINI_API_KEY || HAS_HOSTED_SERVER_DEFAULT)) {
         entries.push({
             id: DEFAULT_GEMINI_KEY_ID,
-            label: 'Mặc định (tự nạp)',
-            maskedTail: DEFAULT_GEMINI_API_KEY.slice(-4),
+            label: HAS_HOSTED_SERVER_DEFAULT ? 'Mặc định (máy chủ)' : 'Mặc định (tự nạp)',
+            maskedTail: HAS_HOSTED_SERVER_DEFAULT ? 'srv0' : DEFAULT_GEMINI_API_KEY!.slice(-4),
             isDefault: true,
         });
     }
@@ -280,7 +287,10 @@ export const getAiClient = () => {
   // FIX67 (giờ áp dụng cho CẢ 2 bản — fix69): bọc client để mọi lỗi SDK mang id key thực tế
   // (__qkKeyId) -> ghi nhận quota-per-key đúng key đã gọi thật, kể cả khi hồ bơi chỉ có 1 key
   // mặc định duy nhất (bản Full chưa thêm key cá nhân).
-  return wrapAiClientWithTaggedKeyErrors(new GoogleGenAI({ apiKey }), issuedKeyId);
+  const ai = isGeminiServerBridgeEnabled()
+      ? createGeminiServerBridgeClient(apiKey === HOSTED_SERVER_DEFAULT_CREDENTIAL ? undefined : apiKey) as unknown as GoogleGenAI
+      : new GoogleGenAI({ apiKey });
+  return wrapAiClientWithTaggedKeyErrors(ai, issuedKeyId);
 };
 
 const SAFETY_SETTINGS = [

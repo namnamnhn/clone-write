@@ -1,0 +1,35 @@
+STORY STUDIO V4 AUTHOR SETUP - WORK14 AI STUDIO SMOKE
+
+[STORY_ENGINE_SETTINGS] {"plannedChapterCount":3,"safeMaxBatchSize":2}
+
+PREMISE
+Minh An inherits a sealed archive whose doors record every durable choice.
+He must learn why a map reacts to his decisions without exposing its final truth too early.
+
+CHARACTERS
+1. Minh An - protagonist and point-of-view character, available from chapter 1.
+2. Linh Vu - guide, first available from chapter 3.
+
+ARC: THE ARCHIVE DOOR (1-2)
+Chapter 1: Minh An enters the archive and makes one bounded, irreversible choice.
+Chapter 2: The consequence of that choice changes the safe route through the archive.
+
+ARC: THE MAP TRUTH (3-3)
+Chapter 3: Linh Vu can appear and the public explanation of the map may be revealed.
+
+POV GATE
+Minh An may be used as POV from chapter 1.
+
+REVEAL GATE
+The map truth must not be revealed before chapter 3.
+
+CANON RULE
+Every durable choice made inside the archive leaves a trace.
+
+AUTHOR SECRET
+The private origin of the map is known to the author and must remain Author-only until its reveal gate.
+
+SPOILER CHAPTER 3
+Only at chapter 3 may Writer-safe context name the public origin of the map.
+
+END OF WORK14 SMOKE SETUP
