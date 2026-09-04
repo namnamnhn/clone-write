@@ -129,20 +129,66 @@ const resourceChangesArray = (chapterNumber: number, affordances: StateExtractio
     },
 );
 
-const continuityChangesArray = (chapterNumber: number, affordances: StateExtractionAffordances) => exactArray(
-    affordances.continuityTargets.length,
-    {
-        type: 'object', additionalProperties: false,
-        required: ['operation', 'provenance'],
-        properties: {
-            operation: { type: 'string', enum: ['open', 'resolve', 'supersede'] },
-            entry: { type: 'object', additionalProperties: true },
-            continuityId: constrainedString(affordances.continuityTargets.map(value => value.id)),
-            chapterNumber: { type: 'integer', enum: [chapterNumber] },
-            provenance: chapterProvenance(chapterNumber),
-        },
-    },
-);
+const CANONICAL_CONTINUITY_KINDS = [
+    'pending-thread', 'obligation', 'condition', 'clue', 'promise',
+] as const;
+
+const continuityTargetSchema = (
+    chapterNumber: number,
+    target: StateExtractionAffordances['continuityTargets'][number],
+) => {
+    if (target.allowedOperations.length === 1 && target.allowedOperations[0] === 'open') {
+        return {
+            type: 'object', additionalProperties: false,
+            required: ['operation', 'entry', 'provenance'],
+            properties: {
+                operation: { type: 'string', enum: ['open'] },
+                entry: {
+                    type: 'object', additionalProperties: false,
+                    required: ['id', 'kind', 'text', 'visibility', 'establishedChapter', 'status', 'provenance'],
+                    properties: {
+                        id: { type: 'string', enum: [target.id] },
+                        kind: {
+                            type: 'string',
+                            enum: target.requiredKind === 'clue'
+                                ? ['clue']
+                                : [...CANONICAL_CONTINUITY_KINDS],
+                        },
+                        text: target.exactText === undefined
+                            ? { type: 'string' }
+                            : { type: 'string', enum: [target.exactText] },
+                        visibility: { type: 'string', enum: ['writer'] },
+                        establishedChapter: { type: 'integer', enum: [chapterNumber] },
+                        status: { type: 'string', enum: ['open'] },
+                        provenance: chapterProvenance(chapterNumber),
+                    },
+                },
+                provenance: chapterProvenance(chapterNumber),
+            },
+        } as const;
+    }
+    if (target.allowedOperations.length > 0
+        && target.allowedOperations.every(operation => operation === 'resolve' || operation === 'supersede')) {
+        return {
+            type: 'object', additionalProperties: false,
+            required: ['operation', 'continuityId', 'chapterNumber', 'provenance'],
+            properties: {
+                operation: { type: 'string', enum: [...target.allowedOperations] },
+                continuityId: { type: 'string', enum: [target.id] },
+                chapterNumber: { type: 'integer', enum: [chapterNumber] },
+                provenance: chapterProvenance(chapterNumber),
+            },
+        } as const;
+    }
+    throw new StoryStateDeltaResponseSchemaError();
+};
+
+const continuityChangesArray = (chapterNumber: number, affordances: StateExtractionAffordances) => ({
+    type: 'array',
+    minItems: affordances.continuityTargets.length,
+    maxItems: affordances.continuityTargets.length,
+    prefixItems: affordances.continuityTargets.map(target => continuityTargetSchema(chapterNumber, target)),
+} as const);
 
 const revealChangesArray = (chapterNumber: number, affordances: StateExtractionAffordances) => exactArray(
     affordances.plannedRevealIds.length,

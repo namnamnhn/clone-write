@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
-import type { PlannerContext, StateExtractionContext, StateExtractorModelRequest } from '../src/storyEngine';
+import type {
+    PlannerContext,
+    StateExtractionAffordances,
+    StateExtractionContext,
+    StateExtractorModelRequest,
+} from '../src/storyEngine';
 import {
     buildInternalChapterPlanResponseJsonSchema,
     buildPlannerValidationAffordances,
@@ -92,6 +97,15 @@ const extractorContext = (
 const extractorSchema = (chapterNumber = 1, expectedRevision = 0) => {
     const affordances = buildStateExtractionAffordances(extractorContext(chapterNumber, expectedRevision));
     return buildStoryStateDeltaResponseJsonSchema(chapterNumber, expectedRevision, affordances);
+};
+const extractorSchemaWithContinuityTargets = (
+    continuityTargets: StateExtractionAffordances['continuityTargets'],
+    chapterNumber = 1,
+) => {
+    const affordances = buildStateExtractionAffordances(extractorContext(chapterNumber, chapterNumber - 1));
+    return buildStoryStateDeltaResponseJsonSchema(chapterNumber, chapterNumber - 1, {
+        ...affordances, continuityTargets,
+    });
 };
 
 const extractorRequest = (
@@ -661,12 +675,83 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         });
         expect(schema.properties.continuityChanges).toMatchObject({
             type: 'array', minItems: 3, maxItems: 3,
-            items: {
-                additionalProperties: false,
-                required: ['operation', 'provenance'],
-                properties: {
-                    operation: { type: 'string', enum: ['open', 'resolve', 'supersede'] },
-                    chapterNumber: { type: 'integer', enum: [chapterNumber] },
+            prefixItems: [
+                {
+                    additionalProperties: false,
+                    required: ['operation', 'entry', 'provenance'],
+                    properties: {
+                        operation: { type: 'string', enum: ['open'] },
+                        entry: {
+                            additionalProperties: false,
+                            required: ['id', 'kind', 'text', 'visibility', 'establishedChapter', 'status', 'provenance'],
+                            properties: {
+                                id: { type: 'string', enum: ['new-promise'] },
+                                text: { type: 'string', enum: ['A writer-safe promise remains.'] },
+                                visibility: { type: 'string', enum: ['writer'] },
+                                establishedChapter: { type: 'integer', enum: [chapterNumber] },
+                                status: { type: 'string', enum: ['open'] },
+                            },
+                        },
+                    },
+                },
+                {
+                    properties: {
+                        operation: { type: 'string', enum: ['open'] },
+                        entry: { properties: {
+                            id: { type: 'string', enum: ['new-clue'] },
+                            kind: { type: 'string', enum: ['clue'] },
+                            text: { type: 'string' },
+                        } },
+                    },
+                },
+                {
+                    additionalProperties: false,
+                    required: ['operation', 'continuityId', 'chapterNumber', 'provenance'],
+                    properties: {
+                        operation: { type: 'string', enum: ['resolve'] },
+                        continuityId: { type: 'string', enum: ['old-clue'] },
+                        chapterNumber: { type: 'integer', enum: [chapterNumber] },
+                    },
+                },
+            ],
+        });
+        expect(schema.properties.continuityChanges).not.toHaveProperty('items');
+        expect(schema.properties.continuityChanges.prefixItems[0]).toEqual({
+            type: 'object',
+            additionalProperties: false,
+            required: ['operation', 'entry', 'provenance'],
+            properties: {
+                operation: { type: 'string', enum: ['open'] },
+                entry: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['id', 'kind', 'text', 'visibility', 'establishedChapter', 'status', 'provenance'],
+                    properties: {
+                        id: { type: 'string', enum: ['new-promise'] },
+                        kind: { type: 'string', enum: ['pending-thread', 'obligation', 'condition', 'clue', 'promise'] },
+                        text: { type: 'string', enum: ['A writer-safe promise remains.'] },
+                        visibility: { type: 'string', enum: ['writer'] },
+                        establishedChapter: { type: 'integer', enum: [chapterNumber] },
+                        status: { type: 'string', enum: ['open'] },
+                        provenance: {
+                            type: 'object', additionalProperties: false,
+                            required: ['sourceChapter', 'sourceType'],
+                            properties: {
+                                sourceChapter: { type: 'integer', enum: [chapterNumber] },
+                                sourceType: { type: 'string', enum: ['chapter'] },
+                                sourceId: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+                provenance: {
+                    type: 'object', additionalProperties: false,
+                    required: ['sourceChapter', 'sourceType'],
+                    properties: {
+                        sourceChapter: { type: 'integer', enum: [chapterNumber] },
+                        sourceType: { type: 'string', enum: ['chapter'] },
+                        sourceId: { type: 'string' },
+                    },
                 },
             },
         });
@@ -689,6 +774,56 @@ describe('WORK 12 role-specific Gemini serialization', () => {
                 type: 'array', items: { type: 'object', additionalProperties: true },
             });
         });
+    });
+
+    it('serializes zero, open, resolve, and mixed target-specific continuity schemas deterministically', () => {
+        const zero = extractorSchemaWithContinuityTargets([]).properties.continuityChanges;
+        expect(zero).toEqual({ type: 'array', minItems: 0, maxItems: 0, prefixItems: [] });
+
+        const open = extractorSchemaWithContinuityTargets([{
+            id: 'target-open', allowedOperations: ['open'], requiredKind: 'clue', exactText: 'Exact writer-safe text.',
+        }]).properties.continuityChanges;
+        expect(open).toMatchObject({ minItems: 1, maxItems: 1, prefixItems: [{
+            required: ['operation', 'entry', 'provenance'],
+            properties: { entry: { properties: {
+                id: { type: 'string', enum: ['target-open'] },
+                kind: { type: 'string', enum: ['clue'] },
+                text: { type: 'string', enum: ['Exact writer-safe text.'] },
+                visibility: { type: 'string', enum: ['writer'] },
+                establishedChapter: { type: 'integer', enum: [1] },
+                status: { type: 'string', enum: ['open'] },
+            } } },
+        }] });
+        expect(open.prefixItems[0].properties).not.toHaveProperty('continuityId');
+        expect(open.prefixItems[0].properties).not.toHaveProperty('chapterNumber');
+        expect(open.prefixItems[0].properties.entry.properties).not.toHaveProperty('resolvedChapter');
+
+        const resolve = extractorSchemaWithContinuityTargets([{
+            id: 'target-resolve', allowedOperations: ['resolve'],
+        }]).properties.continuityChanges;
+        expect(resolve).toMatchObject({ minItems: 1, maxItems: 1, prefixItems: [{
+            required: ['operation', 'continuityId', 'chapterNumber', 'provenance'],
+            properties: {
+                operation: { type: 'string', enum: ['resolve'] },
+                continuityId: { type: 'string', enum: ['target-resolve'] },
+                chapterNumber: { type: 'integer', enum: [1] },
+            },
+        }] });
+        expect(resolve.prefixItems[0].properties).not.toHaveProperty('entry');
+
+        const mixedTargets = [
+            { id: 'target-a', allowedOperations: ['open'] as const, exactText: 'A.' },
+            { id: 'target-b', allowedOperations: ['resolve'] as const },
+            { id: 'target-c', allowedOperations: ['resolve', 'supersede'] as const },
+        ];
+        const mixed = extractorSchemaWithContinuityTargets(mixedTargets).properties.continuityChanges;
+        expect(mixed).toMatchObject({ minItems: 3, maxItems: 3 });
+        expect(mixed.prefixItems.map(item => item.properties.operation.enum)).toEqual([
+            ['open'], ['resolve'], ['resolve', 'supersede'],
+        ]);
+        expect(mixed.prefixItems.map(item => 'entry' in item.properties
+            ? item.properties.entry.properties.id.enum[0]
+            : item.properties.continuityId.enum[0])).toEqual(['target-a', 'target-b', 'target-c']);
     });
 
     it('passes the per-request StateDelta cursor schema through the specialized extractor adapter', async () => {
@@ -752,6 +887,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         expect(schema.properties.locationChanges.items.properties.characterId.enum)
             .toEqual(realisticParticipantIds);
         const serialized = JSON.stringify(schema);
+        expect(serialized).toContain('"prefixItems"');
         ['oneOf', 'anyOf', 'allOf', 'const', 'pattern', 'minLength'].forEach(keyword => {
             expect(serialized).not.toContain(`"${keyword}"`);
         });
@@ -760,7 +896,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
             hasObjectCycle: false, hasReferenceCycle: false, definitionCount: 0,
         });
         // Conservative internal maintenance budget, not a claimed Google API hard limit.
-        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(100);
+        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(130);
         expect(complexity.maxDepth).toBeLessThanOrEqual(6);
         expect(complexity.serializedBytes).toBeLessThanOrEqual(12_000);
     });

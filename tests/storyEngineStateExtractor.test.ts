@@ -462,8 +462,14 @@ describe('WORK 11 deterministic extraction contract', () => {
         ].forEach(section => expect(prompt).toContain(section));
         expect(prompt).toContain('represent every {id,text} exactly once');
         expect(prompt).toContain('never change the id or paraphrase text');
+        expect(prompt).toContain('exact order of EXTRACTION_AFFORDANCES.continuityTargets');
+        expect(prompt).toContain('exactly one operation per target');
+        expect(prompt).toContain('Choose only from each target.allowedOperations');
+        expect(prompt).toContain('copy the exact target id and exactText verbatim');
+        expect(prompt).toContain('For an existing target, emit continuityId exactly (never entry)');
         expect(prompt).toContain('cluesPlantedIds must be exact open clue entry IDs');
         expect(prompt).toContain('cluesPaidOffIds must be exact resolve continuityId values');
+        expect(prompt).toContain('If continuityTargets is empty, return continuityChanges: []');
         expect(prompt).toContain('resourceChanges must have exactly');
         expect(prompt).toContain('relationshipChanges must have exactly');
         expect(prompt).toContain('occurrence.revealId set must exactly equal plannedRevealIds');
@@ -538,6 +544,35 @@ describe('WORK 11 deterministic extraction contract', () => {
             .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
     });
 
+    it('keeps operation-specific continuity parsing authoritative when provider schema is bypassed', async () => {
+        const base = goldenDelta();
+        const open = base.continuityChanges.find(value => value.operation === 'open')!;
+        const close = base.continuityChanges.find(value => value.operation === 'resolve')!;
+        const malformed = [
+            { ...base, continuityChanges: [{ operation: 'open', provenance: open.provenance }] },
+            { ...base, continuityChanges: [{ ...open, operation: 'resolve' }] },
+            { ...base, continuityChanges: [{ ...close, operation: 'supersede', chapterNumber: undefined }] },
+            { ...base, continuityChanges: [{ ...open, entry: { ...open.entry, text: undefined } }] },
+            { ...base, continuityChanges: [{ ...open, entry: { ...open.entry, unexpected: 'not allowed' } }] },
+            { ...base, continuityChanges: [{
+                ...open, entry: { ...open.entry, resolvedChapter: 2 },
+            }] },
+        ];
+        malformed.forEach(value => expect(() => parseStoryStateDelta(value))
+            .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
+
+        const state = baseState();
+        const before = JSON.stringify(state);
+        const blocked = await extractState({
+            approved: await approve(), state, control, model: modelFor(malformed[0]),
+        });
+        expect(blocked).toMatchObject({ status: 'blocked', issues: [{
+            code: 'INVALID_EXTRACTOR_OUTPUT', parseCode: 'INVALID_DELTA',
+            parsePathFamily: 'continuityChanges',
+        }] });
+        expect(JSON.stringify(state)).toBe(before);
+    });
+
     it('keeps runtime temporal, provenance, identity, and participant checks for location changes', async () => {
         const location = goldenDelta().locationChanges[0];
         const wrongChapter = await extractState({
@@ -604,6 +639,7 @@ describe('WORK 11 deterministic extraction contract', () => {
         ['clue mismatch', { continuityChanges: goldenDelta().continuityChanges.filter(value => value.operation === 'open' ? value.entry!.id !== 'new-clue' : true) }, 'PLAN_CLUE_MISMATCH'],
         ['continuity consequence mismatch', { continuityChanges: goldenDelta().continuityChanges.filter(value => value.operation === 'open' ? value.entry!.id !== 'promise-2' : true) }, 'PLAN_CONTINUITY_MISMATCH'],
         ['paraphrased continuity consequence', { continuityChanges: goldenDelta().continuityChanges.map(value => value.operation === 'open' && value.entry!.id === 'promise-2' ? { ...value, entry: { ...value.entry!, text: 'Paraphrased consequence.' } } : value) }, 'PLAN_CONTINUITY_MISMATCH'],
+        ['missing expected plus extra unrelated continuity', { continuityChanges: [...goldenDelta().continuityChanges.filter(value => value.operation !== 'open' || value.entry!.id !== 'promise-2'), { operation: 'open' as const, entry: { id: 'unplanned-promise', kind: 'promise' as const, text: 'Unplanned.', visibility: 'writer' as const, establishedChapter: 2, status: 'open' as const, provenance: provenance(2, 'unplanned-promise') }, provenance: provenance(2, 'unplanned-promise') }] }, 'PLAN_CONTINUITY_MISMATCH'],
         ['extra unrelated clue', { continuityChanges: [...goldenDelta().continuityChanges, { operation: 'open' as const, entry: { id: 'unplanned-clue', kind: 'clue' as const, text: 'Unplanned.', visibility: 'writer' as const, establishedChapter: 2, status: 'open' as const, provenance: provenance(2, 'unplanned-clue') }, provenance: provenance(2, 'unplanned-clue') }] }, 'PLAN_CLUE_MISMATCH'],
     ])('blocks %s', async (_label, changes, code) => {
         const result = await extractState({ approved: await approve(), state: baseState(), control, model: modelFor({ ...goldenDelta(), ...changes }) });
