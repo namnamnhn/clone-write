@@ -28,7 +28,7 @@ export const DraftPanel: React.FC<{ draft?: StoryStudioDraftView }> = ({ draft }
                 {draft.prose.split('\n').map((paragraph, index) => paragraph ? <p key={`paragraph-${index}`} className="mb-4">{paragraph}</p> : <div key={`space-${index}`} className="h-2" />)}
             </article>
             <div className="flex items-center gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-400">
-                <LockKeyhole className="h-4 w-4" /> Chỉ đọc · Không có đường cập nhật Canon trong WORK 09.
+                <LockKeyhole className="h-4 w-4" /> Chỉ đọc · Bản nháp chỉ vào Canon sau Review và xác nhận Make Canon.
             </div>
         </section>
     );

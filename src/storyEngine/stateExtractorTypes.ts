@@ -9,7 +9,9 @@ import type {
     RelationshipChange,
     ResourceChange,
     StoryStateDeltaV2,
+    StoryStateTransitionIssueCode,
 } from './storyStateTypes';
+import { STORY_STATE_TRANSITION_ISSUE_CODES, StoryStateTransitionError } from './storyStateTypes';
 import type { ForeshadowChange, PayoffChange, RevealChange } from './plotTypes';
 import type { FullStoryControl, StoryState } from './types';
 import type { ValidatedChapterSource, ValidationPipelineResult } from './validationTypes';
@@ -30,11 +32,89 @@ export const STATE_EXTRACTION_ISSUE_CODES = [
 
 export type StateExtractionIssueCode = typeof STATE_EXTRACTION_ISSUE_CODES[number];
 
+export const STATE_DELTA_PARSE_PATH_FAMILIES = [
+    'root', 'factChanges', 'epistemicChanges', 'locationChanges', 'statusChanges',
+    'activationChanges', 'relationshipChanges', 'resourceChanges', 'continuityChanges',
+    'revealChanges', 'foreshadowChanges', 'payoffChanges', 'other',
+] as const;
+export type StateDeltaParsePathFamily = typeof STATE_DELTA_PARSE_PATH_FAMILIES[number];
+export type SafeStateDeltaParseCode = StoryStateTransitionIssueCode;
+
+const STORY_STATE_TRANSITION_ISSUE_CODE_SET = new Set<string>(STORY_STATE_TRANSITION_ISSUE_CODES);
+const STATE_DELTA_OPERATION_PATH_FAMILIES = new Set<StateDeltaParsePathFamily>(
+    STATE_DELTA_PARSE_PATH_FAMILIES.filter(family => family !== 'root' && family !== 'other'),
+);
+
+export const sanitizeStateDeltaParseCode = (value: unknown): SafeStateDeltaParseCode | undefined =>
+    typeof value === 'string' && STORY_STATE_TRANSITION_ISSUE_CODE_SET.has(value)
+        ? value as SafeStateDeltaParseCode : undefined;
+
+export const sanitizeStateDeltaParsePathFamily = (value: unknown): StateDeltaParsePathFamily => {
+    if (typeof value !== 'string') return 'other';
+    const normalized = value.startsWith('$.') ? value.slice(2) : value;
+    if (normalized === '' || normalized === 'delta' || normalized === 'root') return 'root';
+    if (normalized === 'other') return 'other';
+    const withoutRoot = normalized.startsWith('delta.') ? normalized.slice('delta.'.length) : normalized;
+    const family = withoutRoot.match(/^[A-Za-z]+/)?.[0] as StateDeltaParsePathFamily | undefined;
+    return family !== undefined && STATE_DELTA_OPERATION_PATH_FAMILIES.has(family) ? family : 'other';
+};
+
+export const summarizeStateDeltaParseFailure = (
+    error: unknown,
+): { readonly parseCode?: SafeStateDeltaParseCode; readonly parsePathFamily: StateDeltaParsePathFamily } => {
+    if (!(error instanceof StoryStateTransitionError)) return { parsePathFamily: 'other' };
+    const parseCode = sanitizeStateDeltaParseCode(error.code);
+    return {
+        ...(parseCode === undefined ? {} : { parseCode }),
+        parsePathFamily: sanitizeStateDeltaParsePathFamily(error.path),
+    };
+};
+
+export const OTHER_EXTRACTION_ISSUE = 'OTHER_EXTRACTION_ISSUE' as const;
+export const MAX_SAFE_STATE_EXTRACTION_ISSUES = 12;
+export type SafeStateExtractionIssueCode = StateExtractionIssueCode | typeof OTHER_EXTRACTION_ISSUE;
+
+const STATE_EXTRACTION_ISSUE_CODE_SET = new Set<string>(STATE_EXTRACTION_ISSUE_CODES);
+
+export const sanitizeStateExtractionIssueCodes = (
+    values: readonly string[],
+): readonly SafeStateExtractionIssueCode[] => [...new Set(values.map(value =>
+    STATE_EXTRACTION_ISSUE_CODE_SET.has(value)
+        ? value as StateExtractionIssueCode
+        : OTHER_EXTRACTION_ISSUE,
+))].slice(0, MAX_SAFE_STATE_EXTRACTION_ISSUES);
+
+export const summarizeStateExtractionIssues = (
+    issues: readonly {
+        readonly code: string;
+        readonly parseCode?: unknown;
+        readonly parsePathFamily?: unknown;
+    }[],
+): {
+    readonly issueCount: number;
+    readonly issueCodes: readonly SafeStateExtractionIssueCode[];
+    readonly parseCode?: SafeStateDeltaParseCode;
+    readonly parsePathFamily?: StateDeltaParsePathFamily;
+} => {
+    const parseIssue = issues.find(issue => issue.parseCode !== undefined || issue.parsePathFamily !== undefined);
+    const parseCode = sanitizeStateDeltaParseCode(parseIssue?.parseCode);
+    const parsePathFamily = parseIssue?.parsePathFamily === undefined
+        ? undefined : sanitizeStateDeltaParsePathFamily(parseIssue.parsePathFamily);
+    return {
+        issueCount: issues.length,
+        issueCodes: sanitizeStateExtractionIssueCodes(issues.map(issue => issue.code)),
+        ...(parseCode === undefined ? {} : { parseCode }),
+        ...(parsePathFamily === undefined ? {} : { parsePathFamily }),
+    };
+};
+
 export interface StateExtractionIssue {
     readonly code: StateExtractionIssueCode;
     readonly path: string;
     /** Safe identifiers or deterministic diagnostics only; never privileged prose. */
     readonly detail?: string;
+    readonly parseCode?: SafeStateDeltaParseCode;
+    readonly parsePathFamily?: StateDeltaParsePathFamily;
 }
 
 export interface StateExtractionContext {
@@ -62,6 +142,13 @@ export interface StateExtractionContext {
     readonly controlledRevealIds: readonly string[];
     readonly openForeshadowThreads: readonly { readonly id: string; readonly writerLabel: string }[];
     readonly openPayoffObligations: readonly { readonly id: string; readonly writerLabel: string }[];
+    readonly existingContinuityEntriesNeededForPlan: readonly {
+        readonly id: string;
+        readonly kind: 'pending-thread' | 'obligation' | 'condition' | 'clue' | 'promise';
+        readonly text: string;
+        readonly status: 'open' | 'resolved' | 'superseded';
+        readonly establishedChapter: number;
+    }[];
 }
 
 export interface StateExtractorModelRequest {

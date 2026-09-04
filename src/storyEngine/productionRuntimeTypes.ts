@@ -4,11 +4,20 @@ import type { ValidatorRelationshipView } from './relationshipTypes';
 import type { RepairModel } from './repair';
 import type { SemanticValidatorModel } from './semanticValidator';
 import type { StateExtractionContextSelectionPolicy } from './stateExtractionContext';
-import type { CanonCommitProposal, StateExtractionResult, StateExtractorModel } from './stateExtractorTypes';
+import type {
+    CanonCommitProposal,
+    SafeStateDeltaParseCode,
+    StateDeltaParsePathFamily,
+    StateExtractionResult,
+    StateExtractorModel,
+} from './stateExtractorTypes';
 import type { ValidatorStrategicView } from './strategicTypes';
 import type { ValidationPipelineResult } from './validationTypes';
 import type { ValidatorContextSelectionPolicy } from './validatorContext';
 import type { WriterChapterDraft, WriterContextSelectionPolicy, WriterModel } from './writerTypes';
+import type { SafePlanValidationIssuePath } from './planDiagnostics';
+import { sanitizeSafeModelAttemptOutcomes } from './modelAttemptDiagnostics';
+import type { SafeModelAttemptOutcome } from './modelAttemptDiagnostics';
 
 export const STORY_ENGINE_MODEL_ROLES = ['planner', 'writer', 'semanticValidator', 'repair', 'stateExtractor'] as const;
 export type StoryEngineModelRole = typeof STORY_ENGINE_MODEL_ROLES[number];
@@ -101,10 +110,24 @@ export const PRODUCTION_RUNTIME_ERROR_CODES = [
     'MEMORY_STORY_MISMATCH', 'MEMORY_CANON_MISMATCH',
     'PLAN_PROTOCOL_FAILURE', 'PLAN_VALIDATION_FAILURE', 'WRITER_PROTOCOL_FAILURE',
     'VALIDATION_REJECTED', 'VALIDATOR_INFRASTRUCTURE_FAILURE', 'EXTRACTION_BLOCKED',
-    'CANON_REVIEW_BLOCKED', 'MODEL_RUNTIME_FAILURE', 'NO_MODEL_AVAILABLE', 'CANCELLED',
+    'CANON_REVIEW_BLOCKED', 'MODEL_RUNTIME_FAILURE', 'NO_MODEL_AVAILABLE', 'NO_ALLOWED_POV', 'CANCELLED',
 ] as const;
 export type ProductionRuntimeErrorCode = typeof PRODUCTION_RUNTIME_ERROR_CODES[number];
 export type ProductionRuntimeStage = 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review';
+
+export class StoryEngineModelRuntimeError extends Error {
+    readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
+
+    constructor(
+        readonly role: StoryEngineModelRole,
+        modelAttempts?: readonly SafeModelAttemptOutcome[],
+    ) {
+        super('MODEL_RUNTIME_FAILURE');
+        this.name = 'StoryEngineModelRuntimeError';
+        const safeAttempts = sanitizeSafeModelAttemptOutcomes(modelAttempts);
+        if (safeAttempts.length > 0) this.modelAttempts = safeAttempts;
+    }
+}
 
 export class ProductionRuntimeError extends Error {
     constructor(
@@ -113,6 +136,11 @@ export class ProductionRuntimeError extends Error {
         readonly chapter: number,
         readonly role?: StoryEngineModelRole,
         readonly issueCodes?: readonly string[],
+        readonly issueCount?: number,
+        readonly issuePaths?: readonly SafePlanValidationIssuePath[],
+        readonly modelAttempts?: readonly SafeModelAttemptOutcome[],
+        readonly parseCode?: SafeStateDeltaParseCode,
+        readonly parsePathFamily?: StateDeltaParsePathFamily,
     ) {
         super(`${code} at ${stage} for chapter ${chapter}`);
         this.name = 'ProductionRuntimeError';
@@ -144,5 +172,10 @@ export type ProductionChapterRunResult =
         readonly chapter: number;
         readonly role?: StoryEngineModelRole;
         readonly issueCodes?: readonly string[];
+        readonly issueCount?: number;
+        readonly issuePaths?: readonly SafePlanValidationIssuePath[];
+        readonly modelAttempts?: readonly SafeModelAttemptOutcome[];
+        readonly parseCode?: SafeStateDeltaParseCode;
+        readonly parsePathFamily?: StateDeltaParsePathFamily;
         readonly telemetry: ProductionRunTelemetry;
     };

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     applyStoryStateDelta,
     buildPlannerContext,
+    buildStateExtractionAffordances,
+    buildStateExtractorPrompt,
     buildValidatorStrategicView,
     buildCanonCommitReview,
     createInitialStoryState,
@@ -13,9 +15,14 @@ import {
     makeCanon,
     MakeCanonError,
     parseStoryState,
+    parseStoryStateDelta,
     prepareCanonCommit,
     sanitizeWriterChapterPlan,
     STATE_DELTA_V2_REPRESENTABILITY_MATRIX,
+    STORY_STATE_TRANSITION_ISSUE_CODES,
+    sanitizeStateDeltaParsePathFamily,
+    StoryStateTransitionError,
+    summarizeStateDeltaParseFailure,
     type CanonCommitProposal,
     type FullStoryControl,
     type StateExtractionResult,
@@ -333,9 +340,275 @@ describe('WORK 11 untrusted V2 extractor protocol', () => {
         const result = await extractState({ approved: await approve(), state: baseState(), control, model: modelFor(output) });
         expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code })]) });
     });
+
+    it.each([
+        ['fact', {
+            factChanges: [{
+                ...goldenDelta().factChanges[0],
+                provenance: { ...goldenDelta().factChanges[0].provenance, sourceType: 'RAW_INVALID_SOURCE_TYPE' },
+            }],
+        }, 'INVALID_DELTA', 'factChanges'],
+        ['epistemic', {
+            epistemicChanges: [{
+                ...goldenDelta().epistemicChanges[0],
+                source: { ...goldenDelta().epistemicChanges[0].source, type: 'RAW_INVALID_SOURCE_TYPE' },
+            }],
+        }, 'INVALID_DELTA', 'epistemicChanges'],
+        ['resource', {
+            resourceChanges: [{ ...goldenDelta().resourceChanges[0], quantityDelta: Number.POSITIVE_INFINITY }],
+        }, 'RESOURCE_VALUE_INVALID', 'resourceChanges'],
+        ['reveal', {
+            revealChanges: [{ ...goldenDelta().revealChanges[0], operation: 'RAW_INVALID_OPERATION' }],
+        }, 'INVALID_DELTA', 'revealChanges'],
+        ['foreshadow', { foreshadowChanges: [{}] }, 'INVALID_DELTA', 'foreshadowChanges'],
+        ['payoff', { payoffChanges: [{}] }, 'INVALID_DELTA', 'payoffChanges'],
+    ])('sanitizes %s parser failures into closed parse metadata', async (_label, changes, parseCode, parsePathFamily) => {
+        const output = { ...goldenDelta(), ...changes };
+        const result = await extractState({
+            approved: await approve(), state: baseState(), control, model: modelFor(output),
+        });
+        expect(result).toMatchObject({
+            status: 'blocked',
+            issues: [{ code: 'INVALID_EXTRACTOR_OUTPUT', path: 'model.output', parseCode, parsePathFamily }],
+        });
+    });
+
+    it('maps only closed structural path families and discards unknown error contents', () => {
+        expect(sanitizeStateDeltaParsePathFamily('delta.factChanges[0].provenance.sourceType')).toBe('factChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.epistemicChanges[2].source')).toBe('epistemicChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.locationChanges[0]')).toBe('locationChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.statusChanges[0]')).toBe('statusChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.activationChanges[0]')).toBe('activationChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.relationshipChanges[0]')).toBe('relationshipChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.resourceChanges[0]')).toBe('resourceChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.continuityChanges[0]')).toBe('continuityChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.revealChanges[0]')).toBe('revealChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.foreshadowChanges[0]')).toBe('foreshadowChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta.payoffChanges[0]')).toBe('payoffChanges');
+        expect(sanitizeStateDeltaParsePathFamily('delta')).toBe('root');
+        expect(sanitizeStateDeltaParsePathFamily('root')).toBe('root');
+        expect(sanitizeStateDeltaParsePathFamily('delta.RAW_MODEL_ID.private')).toBe('other');
+
+        const unknown = summarizeStateDeltaParseFailure(new Error('RAW_UNKNOWN_ERROR_MESSAGE_SENTINEL'));
+        expect(unknown).toEqual({ parsePathFamily: 'other' });
+        expect(JSON.stringify(unknown)).not.toContain('RAW_UNKNOWN_ERROR_MESSAGE_SENTINEL');
+    });
+
+    it('keeps the strict parser error typed while removing its raw path from extraction metadata', () => {
+        const output = {
+            ...goldenDelta(),
+            factChanges: [{
+                ...goldenDelta().factChanges[0],
+                provenance: { ...goldenDelta().factChanges[0].provenance, sourceType: 'RAW_INVALID_SOURCE_TYPE' },
+            }],
+        };
+        let caught: unknown;
+        try {
+            parseStoryStateDelta(output);
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(StoryStateTransitionError);
+        expect(caught).toMatchObject({
+            code: 'INVALID_DELTA', path: 'delta.factChanges[0].provenance.sourceType',
+        });
+        expect(summarizeStateDeltaParseFailure(caught)).toEqual({
+            parseCode: 'INVALID_DELTA', parsePathFamily: 'factChanges',
+        });
+        STORY_STATE_TRANSITION_ISSUE_CODES.forEach(code => {
+            expect(summarizeStateDeltaParseFailure(new StoryStateTransitionError(code, 'RAW_MESSAGE', 'delta')))
+                .toEqual({ parseCode: code, parsePathFamily: 'root' });
+        });
+    });
 });
 
 describe('WORK 11 deterministic extraction contract', () => {
+    it('states the exact extraction-valid factChanges contract without exposing author truth', () => {
+        const prompt = buildStateExtractorPrompt(37);
+        expect(prompt).toContain('FACT CHANGES');
+        expect(prompt).toContain('actually establishes a new canonical fact');
+        expect(prompt).toContain('establishedChapter=37');
+        expect(prompt).toContain('visibility="writer"');
+        expect(prompt).toContain('status="active"');
+        expect(prompt).toContain('provenance.sourceChapter=37');
+        expect(prompt).toContain('provenance.sourceType="chapter"');
+        expect(prompt).toContain('provenance.sourceId is optional');
+        expect(prompt).toContain('Do not add extra fields');
+        expect(prompt).toContain('return factChanges: []');
+        expect(prompt).toContain('stable machine IDs');
+        expect(prompt).not.toContain(RAW_VAULT);
+    });
+
+    it('states the exact extraction-valid locationChanges contract without inventing movement', () => {
+        const prompt = buildStateExtractorPrompt(37);
+        expect(prompt).toContain('LOCATION CHANGES');
+        expect(prompt).toContain('actually establishes that a participant is now at a new or current canonical location');
+        expect(prompt).toContain('exactly id, characterId, location, sinceChapter, and provenance');
+        expect(prompt).toContain('sinceChapter=37');
+        expect(prompt).toContain('provenance.sourceChapter=37');
+        expect(prompt).toContain('provenance.sourceType="chapter"');
+        expect(prompt).toContain('provenance.sourceId is optional');
+        expect(prompt).toContain('return locationChanges: []');
+        expect(prompt).toContain('Never infer hidden or off-page movement');
+        expect(prompt).not.toContain(RAW_VAULT);
+    });
+
+    it('states every remaining closed-world reconciliation contract', () => {
+        const prompt = buildStateExtractorPrompt(2);
+        [
+            'CLOSED-WORLD AFFORDANCES', 'RESOURCE RECONCILIATION', 'RELATIONSHIP RECONCILIATION',
+            'REVEAL RECONCILIATION', 'CONTINUITY AND CLUES', 'PARTICIPANT STATE',
+            'FORESHADOW AND PAYOFF',
+        ].forEach(section => expect(prompt).toContain(section));
+        expect(prompt).toContain('represent every {id,text} exactly once');
+        expect(prompt).toContain('never change the id or paraphrase text');
+        expect(prompt).toContain('exact order of EXTRACTION_AFFORDANCES.continuityTargets');
+        expect(prompt).toContain('exactly one operation per target');
+        expect(prompt).toContain('Choose only from each target.allowedOperations');
+        expect(prompt).toContain('copy the exact target id and exactText verbatim');
+        expect(prompt).toContain('For an existing target, emit continuityId exactly (never entry)');
+        expect(prompt).toContain('cluesPlantedIds must be exact open clue entry IDs');
+        expect(prompt).toContain('cluesPaidOffIds must be exact resolve continuityId values');
+        expect(prompt).toContain('If continuityTargets is empty, return continuityChanges: []');
+        expect(prompt).toContain('resourceChanges must have exactly');
+        expect(prompt).toContain('relationshipChanges must have exactly');
+        expect(prompt).toContain('occurrence.revealId set must exactly equal plannedRevealIds');
+        expect(prompt).toContain('Prefer [] over inventing');
+        expect(prompt).not.toContain(RAW_VAULT);
+    });
+
+    it('derives bounded exact extraction affordances from plan and base state only', async () => {
+        let modelRequest: StateExtractorModelRequest | undefined;
+        const result = await extractState({
+            approved: await approve(), state: baseState(), control,
+            model: { async extract(request) { modelRequest = request; return goldenDelta(); } },
+        });
+        expect(result.status).toBe('extracted-not-canon');
+        const affordances = buildStateExtractionAffordances(modelRequest!.context);
+        expect(affordances).toMatchObject({
+            kind: 'state-extraction-affordances', targetChapter: 2,
+            participantIds: ['a', 'b'],
+            expectedResourceDeltas: [{ characterId: 'a', resourceId: 'money', name: 'Money', quantityDelta: -10 }],
+            allowedResourceRefs: [{ characterId: 'a', resourceId: 'money', name: 'Money' }],
+            expectedRelationshipDeltas: [{ relationshipId: 'rel-ab', participantIds: ['a', 'b'], expectedState: 'allies' }],
+            allowedRelationshipIds: ['rel-ab'],
+            plannedRevealIds: ['reveal-alpha'],
+            cluesPlantedIds: ['new-clue'], cluesPaidOffIds: ['old-clue'],
+            expectedContinuityConsequences: [{ id: 'promise-2', text: 'The debt remains due.' }],
+            existingContinuityEntriesNeededForPlan: [{
+                id: 'old-clue', kind: 'clue', text: 'A broken seal remains unexplained.',
+                status: 'open', establishedChapter: 1,
+            }],
+            continuityTargets: [
+                { id: 'promise-2', allowedOperations: ['open'], exactText: 'The debt remains due.' },
+                { id: 'new-clue', allowedOperations: ['open'], requiredKind: 'clue' },
+                { id: 'old-clue', allowedOperations: ['resolve'] },
+            ],
+        });
+        const serialized = JSON.stringify(affordances);
+        expect(serialized).not.toContain(RAW_VAULT);
+        expect(serialized).not.toContain(modelRequest!.candidate.prose);
+        expect(serialized).not.toContain('authorOnlySecrets');
+    });
+
+    it('keeps strict fact parsing authoritative when provider schema is bypassed', () => {
+        const base = goldenDelta();
+        const fact = base.factChanges[0];
+        const malformed = [
+            { ...base, factChanges: [{ ...fact, id: undefined }] },
+            { ...base, factChanges: [{ ...fact, text: undefined }] },
+            { ...base, factChanges: [{ ...fact, unexpected: 'not allowed' }] },
+            { ...base, factChanges: [{ ...fact, id: '' }] },
+            { ...base, factChanges: [{ ...fact, text: '' }] },
+            { ...base, factChanges: [{ ...fact, provenance: { ...fact.provenance, sourceType: 'not-a-source' } }] },
+        ];
+        malformed.forEach(value => expect(() => parseStoryStateDelta(value))
+            .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
+    });
+
+    it('keeps strict location parsing authoritative when provider schema is bypassed', () => {
+        const base = goldenDelta();
+        const location = base.locationChanges[0];
+        const malformed = [
+            { ...base, locationChanges: [{ ...location, id: undefined }] },
+            { ...base, locationChanges: [{ ...location, characterId: undefined }] },
+            { ...base, locationChanges: [{ ...location, location: undefined }] },
+            { ...base, locationChanges: [{ ...location, location: '' }] },
+            { ...base, locationChanges: [{ ...location, unexpected: 'not allowed' }] },
+            { ...base, locationChanges: [{ ...location, provenance: { sourceChapter: 2 } }] },
+            { ...base, locationChanges: [{
+                ...location, provenance: { ...location.provenance, sourceType: 'not-a-source' },
+            }] },
+        ];
+        malformed.forEach(value => expect(() => parseStoryStateDelta(value))
+            .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
+    });
+
+    it('keeps operation-specific continuity parsing authoritative when provider schema is bypassed', async () => {
+        const base = goldenDelta();
+        const open = base.continuityChanges.find(value => value.operation === 'open')!;
+        const close = base.continuityChanges.find(value => value.operation === 'resolve')!;
+        const malformed = [
+            { ...base, continuityChanges: [{ operation: 'open', provenance: open.provenance }] },
+            { ...base, continuityChanges: [{ ...open, operation: 'resolve' }] },
+            { ...base, continuityChanges: [{ ...close, operation: 'supersede', chapterNumber: undefined }] },
+            { ...base, continuityChanges: [{ ...open, entry: { ...open.entry, text: undefined } }] },
+            { ...base, continuityChanges: [{ ...open, entry: { ...open.entry, unexpected: 'not allowed' } }] },
+            { ...base, continuityChanges: [{
+                ...open, entry: { ...open.entry, resolvedChapter: 2 },
+            }] },
+        ];
+        malformed.forEach(value => expect(() => parseStoryStateDelta(value))
+            .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
+
+        const state = baseState();
+        const before = JSON.stringify(state);
+        const blocked = await extractState({
+            approved: await approve(), state, control, model: modelFor(malformed[0]),
+        });
+        expect(blocked).toMatchObject({ status: 'blocked', issues: [{
+            code: 'INVALID_EXTRACTOR_OUTPUT', parseCode: 'INVALID_DELTA',
+            parsePathFamily: 'continuityChanges',
+        }] });
+        expect(JSON.stringify(state)).toBe(before);
+    });
+
+    it('keeps runtime temporal, provenance, identity, and participant checks for location changes', async () => {
+        const location = goldenDelta().locationChanges[0];
+        const wrongChapter = await extractState({
+            approved: await approve(), state: baseState(), control,
+            model: modelFor({ ...goldenDelta(), locationChanges: [{ ...location, sinceChapter: 3 }] }),
+        });
+        expect(wrongChapter).toMatchObject({
+            status: 'blocked', issues: [{
+                code: 'INVALID_EXTRACTOR_OUTPUT', parseCode: 'TEMPORAL_VIOLATION',
+                parsePathFamily: 'locationChanges',
+            }],
+        });
+
+        const wrongProvenance = await extractState({
+            approved: await approve(), state: baseState(), control,
+            model: modelFor({ ...goldenDelta(), locationChanges: [{
+                ...location, provenance: { sourceChapter: 2, sourceType: 'canon-rule' },
+            }] }),
+        });
+        expect(wrongProvenance).toMatchObject({
+            status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code: 'PROVENANCE_VIOLATION' })]),
+        });
+
+        const unknownCharacterDelta = {
+            ...goldenDelta(), locationChanges: [{ ...location, characterId: 'unknown-character' }],
+        };
+        const unauthorized = await extractState({
+            approved: await approve(), state: baseState(), control, model: modelFor(unknownCharacterDelta),
+        });
+        expect(unauthorized).toMatchObject({
+            status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code: 'UNAUTHORIZED_CHARACTER_MUTATION' })]),
+        });
+        expect(() => applyStoryStateDelta(control, baseState(), unknownCharacterDelta))
+            .toThrowError(expect.objectContaining({ code: 'UNKNOWN_CHARACTER' }));
+    });
+
     it('accepts the exact resource, relationship, reveal, clue, and continuity contract', async () => {
         expect(await extractGolden(await approve())).toMatchObject({ status: 'extracted-not-canon', delta: goldenDelta() });
     });
@@ -365,6 +638,9 @@ describe('WORK 11 deterministic extraction contract', () => {
         ['omitted reveal', { revealChanges: [] }, 'PLAN_REVEAL_MISMATCH'],
         ['clue mismatch', { continuityChanges: goldenDelta().continuityChanges.filter(value => value.operation === 'open' ? value.entry!.id !== 'new-clue' : true) }, 'PLAN_CLUE_MISMATCH'],
         ['continuity consequence mismatch', { continuityChanges: goldenDelta().continuityChanges.filter(value => value.operation === 'open' ? value.entry!.id !== 'promise-2' : true) }, 'PLAN_CONTINUITY_MISMATCH'],
+        ['paraphrased continuity consequence', { continuityChanges: goldenDelta().continuityChanges.map(value => value.operation === 'open' && value.entry!.id === 'promise-2' ? { ...value, entry: { ...value.entry!, text: 'Paraphrased consequence.' } } : value) }, 'PLAN_CONTINUITY_MISMATCH'],
+        ['missing expected plus extra unrelated continuity', { continuityChanges: [...goldenDelta().continuityChanges.filter(value => value.operation !== 'open' || value.entry!.id !== 'promise-2'), { operation: 'open' as const, entry: { id: 'unplanned-promise', kind: 'promise' as const, text: 'Unplanned.', visibility: 'writer' as const, establishedChapter: 2, status: 'open' as const, provenance: provenance(2, 'unplanned-promise') }, provenance: provenance(2, 'unplanned-promise') }] }, 'PLAN_CONTINUITY_MISMATCH'],
+        ['extra unrelated clue', { continuityChanges: [...goldenDelta().continuityChanges, { operation: 'open' as const, entry: { id: 'unplanned-clue', kind: 'clue' as const, text: 'Unplanned.', visibility: 'writer' as const, establishedChapter: 2, status: 'open' as const, provenance: provenance(2, 'unplanned-clue') }, provenance: provenance(2, 'unplanned-clue') }] }, 'PLAN_CLUE_MISMATCH'],
     ])('blocks %s', async (_label, changes, code) => {
         const result = await extractState({ approved: await approve(), state: baseState(), control, model: modelFor({ ...goldenDelta(), ...changes }) });
         expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code })]) });
@@ -380,6 +656,8 @@ describe('WORK 11 deterministic extraction contract', () => {
         ['off-screen knower', { epistemicChanges: [{ ...goldenDelta().epistemicChanges[0], characterId: 'c' }] }, 'INVALID_EPISTEMIC_CHANGE'],
         ['future source', { epistemicChanges: [{ ...goldenDelta().epistemicChanges[0], source: { type: 'witnessed', sourceChapter: 3 } }] }, 'INVALID_EXTRACTOR_OUTPUT'],
         ['wrong provenance', { factChanges: [{ ...goldenDelta().factChanges[0], provenance: { sourceChapter: 1, sourceType: 'canon-rule', sourceId: 'fake' } }] }, 'PROVENANCE_VIOLATION'],
+        ['activation wrong provenance', { activationChanges: [{ characterId: 'a', active: true, provenance: { sourceChapter: 1, sourceType: 'canon-rule' } }] }, 'PROVENANCE_VIOLATION'],
+        ['status wrong provenance', { statusChanges: [{ operation: 'add', record: { id: 'a-new-status', characterId: 'a', kind: 'status', state: 'changed', establishedChapter: 2, provenance: provenance(2, 'a-new-status') }, provenance: { sourceChapter: 1, sourceType: 'canon-rule' } }] }, 'PROVENANCE_VIOLATION'],
     ])('blocks %s', async (_label, changes, code) => {
         const result = await extractState({ approved: await approve(), state: baseState(), control, model: modelFor({ ...goldenDelta(), ...changes }) });
         expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code })]) });
@@ -495,7 +773,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
         expect(prepareCanonCommit({ approved, extraction, state: baseState(), control, maxTotalChanges: 9 })).toMatchObject({ status: 'blocked', issues: [{ code: 'REVIEW_CAPACITY_EXCEEDED' }] });
     });
 
-    it('projects activation, foreshadow, and payoff operations without hidden review omissions', async () => {
+    it('accepts one valid response spanning all eleven operation families through Canon proposal', async () => {
         const approved = await approve();
         const expanded = v2(2, 1, {
             ...goldenDelta(),
@@ -504,6 +782,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
             payoffChanges: [{ operation: 'open', obligation: { id: 'payoff-2', writerLabel: 'The river debt must return.', openedChapter: 2, provenance: provenance(2, 'chapter-2:payoff') } }],
         });
         const extraction = await extractState({ approved, state: baseState(), control, model: modelFor(expanded) });
+        expect(extraction.status).toBe('extracted-not-canon');
         const prepared = prepareCanonCommit({ approved, extraction, state: baseState(), control }) as CanonCommitProposal;
         expect(prepared.status).toBe('ready-for-review');
         expect(prepared.review).toMatchObject({ totalChanges: 13, activations: [{ characterId: 'a' }], foreshadow: [{ operation: 'open' }], payoffs: [{ operation: 'open' }] });

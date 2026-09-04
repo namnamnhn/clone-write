@@ -1,6 +1,9 @@
 import type { GenerateContentResponse } from '@google/genai';
 import { getAiClient, SAFETY_SETTINGS, smartExecution } from '../api/gemini';
+import { StoryEngineModelRuntimeError } from '../../storyEngine/productionRuntimeTypes';
 import type { StoryEngineModelRole, StoryEngineModelRoute } from '../../storyEngine/productionRuntimeTypes';
+import { runGeminiV4RequestWithDeadline } from './geminiV4RequestDeadline';
+import { GeminiV4AttemptOutcomeCollector } from './geminiV4AttemptOutcomes';
 
 export class GeminiStoryEngineProtocolError extends Error {
     constructor(readonly code: 'EMPTY_RESPONSE' | 'MALFORMED_JSON') {
@@ -33,6 +36,7 @@ export interface RunGeminiStoryEngineJsonRequest {
     readonly role: StoryEngineModelRole;
     readonly route: StoryEngineModelRoute;
     readonly contents: string;
+    readonly responseJsonSchema?: unknown;
     readonly signal?: AbortSignal;
 }
 
@@ -46,40 +50,65 @@ export const runGeminiStoryEngineJson = async (
     dependencies: GeminiStoryEngineRunnerDependencies = DEFAULT_GEMINI_STORY_ENGINE_RUNNER_DEPENDENCIES,
 ): Promise<GeminiStoryEngineJsonResult> => {
     if (request.signal?.aborted) throw new Error('ABORTED');
-    return dependencies.smartExecution(
+    const attemptOutcomes = new GeminiV4AttemptOutcomeCollector();
+    let lastProtocolError: GeminiStoryEngineProtocolError | undefined;
+    let sawInfrastructureFailure = false;
+    try {
+        return await dependencies.smartExecution(
         [...request.route.candidateModelIds],
         async (modelId) => {
             if (request.signal?.aborted) throw new Error('ABORTED');
+            const attemptStartedAt = Date.now();
             // This must remain inside the selected smartExecution operation so key attribution is correct.
-            const ai = dependencies.getAiClient();
             let response: GenerateContentResponse;
             try {
-                response = await ai.models.generateContent({
-                    model: modelId,
-                    contents: request.contents,
-                    config: {
-                        temperature: request.route.temperature,
-                        responseMimeType: 'application/json',
-                        safetySettings: SAFETY_SETTINGS,
-                        ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
-                    },
+                const ai = dependencies.getAiClient();
+                response = await runGeminiV4RequestWithDeadline({
+                    surface: request.role,
+                    externalSignal: request.signal,
+                    operation: attemptSignal => ai.models.generateContent({
+                        model: modelId,
+                        contents: request.contents,
+                        config: {
+                            temperature: request.route.temperature,
+                            responseMimeType: 'application/json',
+                            ...(request.responseJsonSchema === undefined ? {} : { responseJsonSchema: request.responseJsonSchema }),
+                            safetySettings: SAFETY_SETTINGS,
+                            abortSignal: attemptSignal,
+                        },
+                    }),
                 });
             } catch (error) {
+                attemptOutcomes.recordFailure(modelId, attemptStartedAt, error, request.signal?.aborted);
                 if (request.signal?.aborted) throw new Error('ABORTED');
+                sawInfrastructureFailure = true;
                 throw error;
             }
             const output = response.text?.trim();
-            if (!output) throw new GeminiStoryEngineProtocolError('EMPTY_RESPONSE');
+            if (!output) {
+                attemptOutcomes.record(modelId, 'EMPTY_RESPONSE', attemptStartedAt);
+                lastProtocolError = new GeminiStoryEngineProtocolError('EMPTY_RESPONSE');
+                throw lastProtocolError;
+            }
             let value: unknown;
             try {
                 value = JSON.parse(output);
             } catch {
-                throw new GeminiStoryEngineProtocolError('MALFORMED_JSON');
+                attemptOutcomes.record(modelId, 'MALFORMED_JSON', attemptStartedAt);
+                lastProtocolError = new GeminiStoryEngineProtocolError('MALFORMED_JSON');
+                throw lastProtocolError;
             }
+            attemptOutcomes.record(modelId, 'SUCCESS', attemptStartedAt);
             return { value, selectedModelId: modelId };
         },
         `Story Engine V4 ${request.role}`,
         undefined,
         request.route.preferredModelId,
-    );
+        );
+    } catch (error) {
+        if (request.signal?.aborted || (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError'))) throw error;
+        if (error instanceof GeminiStoryEngineProtocolError) throw error;
+        if (!sawInfrastructureFailure && lastProtocolError) throw lastProtocolError;
+        throw new StoryEngineModelRuntimeError(request.role, attemptOutcomes.snapshot());
+    }
 };

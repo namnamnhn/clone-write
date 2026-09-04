@@ -127,6 +127,17 @@ export const buildStateExtractionContext = (
     const selectedPayoffs = takeRequiredThenRecent(
         openPayoffs, requiredPayoffIds, policy.maxPlotItems, 'payoff context', value => value.openedChapter,
     );
+    const requiredContinuityIds = new Set([
+        ...writer.chapterPlan.expectedContinuityConsequences.map(value => value.id),
+        ...writer.chapterPlan.cluesPlantedIds,
+        ...writer.chapterPlan.cluesPaidOffIds,
+    ]);
+    const requiredContinuityEntries = state.ledgers.continuity
+        .filter(value => requiredContinuityIds.has(value.id));
+    if (requiredContinuityEntries.some(value => value.visibility !== 'writer')
+        || requiredContinuityEntries.length > policy.maxContinuityEntries) {
+        throw new StateExtractionContextCapacityError('required continuity entries are not safely representable');
+    }
 
     const context: StateExtractionContext = {
         kind: 'state-extraction-context', targetChapter: writer.targetChapter, baseRevision: state.revision,
@@ -147,6 +158,10 @@ export const buildStateExtractionContext = (
         controlledRevealIds: writer.controlledReveals.map(value => value.id).sort(),
         openForeshadowThreads: selectedForeshadow.map(value => ({ id: value.id, writerLabel: value.writerLabel })),
         openPayoffObligations: selectedPayoffs.map(value => ({ id: value.id, writerLabel: value.writerLabel })),
+        existingContinuityEntriesNeededForPlan: requiredContinuityEntries.map(value => ({
+            id: value.id, kind: value.kind, text: value.text, status: value.status,
+            establishedChapter: value.establishedChapter,
+        })),
     };
     assertModelBoundaryStringsSecretSafe(control, context, 'stateExtractionContext');
     return context;

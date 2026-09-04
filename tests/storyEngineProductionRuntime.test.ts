@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     CanonicalChapterMemoryRecord,
+    ChapterPlanValidationError,
     DEFAULT_PRODUCTION_STORY_RUNTIME_POLICY,
     NarrativeMemoryError,
     ProductionPlanArtifact,
     ProductionRuntimeError,
+    STATE_EXTRACTION_ISSUE_CODES,
     StoryBlueprintDocument,
+    StoryEngineModelRuntimeError,
     StoryState,
     applyStoryStateDelta,
     buildNarrativeMemoryInput,
@@ -22,12 +25,18 @@ import {
     recordCanonicalChapterMemory,
     parseNarrativeMemoryState,
     selectNarrativeMemory,
+    summarizeStateExtractionIssues,
     extractState,
 } from '../src/storyEngine';
 import {
+    GeminiStoryEngineProtocolError,
     GeminiStoryEngineGenerationRuntime,
     createGeminiStoryEngineAdapters,
 } from '../src/services/storyEngine';
+import {
+    getSafeStoryStudioRuntimeDiagnostic,
+    logSafeStoryStudioRuntimeDiagnostic,
+} from '../src/storyStudio/production/storyStudioRuntimeDiagnostics';
 import { createSyntheticNarrativeMemory } from './helpers/storyEngineNarrativeMemoryFixture';
 
 const RAW_SECRET = 'RAW_RUNTIME_AUTHOR_SECRET_9F3A';
@@ -95,9 +104,12 @@ interface FakeRuntimeOptions {
     readonly repairOnce?: boolean;
     readonly malformedPlan?: boolean;
     readonly invalidExtractor?: boolean;
+    readonly extractorOutput?: unknown;
     readonly writerProse?: string;
     readonly abortRole?: string;
     readonly failRole?: string;
+    readonly runtimeFailRole?: string;
+    readonly runtimeFailAttempts?: ConstructorParameters<typeof StoryEngineModelRuntimeError>[1];
 }
 
 const fakeRuntime = (
@@ -109,6 +121,9 @@ const fakeRuntime = (
         async run(request) {
             captures.push({ role: request.role, contents: request.contents });
             if (request.role === options.abortRole) throw new Error('ABORTED');
+            if (request.role === options.runtimeFailRole) {
+                throw new StoryEngineModelRuntimeError(request.role, options.runtimeFailAttempts);
+            }
             if (request.role === options.failRole) throw new Error('provider failed with unsafe details that must not escape');
             const chapter = chapterFrom(request.contents);
             if (request.role === 'planner') return { value: options.malformedPlan ? {} : internalPlan(chapter, options.goal, options.reveal && chapter === 1, options.storyEvent), selectedModelId: 'gemini-test' };
@@ -120,7 +135,11 @@ const fakeRuntime = (
                 return { value: { kind: 'semantic-validation-result', chapterNumber: chapter, issues }, selectedModelId: 'gemini-test' };
             }
             if (request.role === 'repair') return { value: { kind: 'writer-chapter-draft', chapterNumber: chapter, title: `Chapter ${chapter}`, prose: `Hero completes the corrected bounded chapter ${chapter} choice.` }, selectedModelId: 'gemini-test' };
-            return { value: options.invalidExtractor ? { ...delta(chapter), schemaVersion: 3 } : delta(chapter, options.reveal && chapter === 1), selectedModelId: 'gemini-test' };
+            return {
+                value: options.extractorOutput
+                    ?? (options.invalidExtractor ? { ...delta(chapter), schemaVersion: 3 } : delta(chapter, options.reveal && chapter === 1)),
+                selectedModelId: 'gemini-test',
+            };
         },
     };
 };
@@ -459,11 +478,231 @@ describe('WORK 12 production staged runtime', () => {
         expect(JSON.stringify(result)).not.toContain(RAW_SECRET);
     });
 
+    it.each([
+        ['planner', 'planning'],
+        ['writer', 'writing'],
+    ] as const)('maps typed %s infrastructure failure to MODEL_RUNTIME_FAILURE with the correct stage and role', async (role, stage) => {
+        const attempts = [{
+            modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX' as const,
+            httpStatus: 503, apiStatus: 'UNAVAILABLE' as const, elapsedMs: 1250, attemptCount: 3,
+        }];
+        const { seed, runtime } = harness({ runtimeFailRole: role, runtimeFailAttempts: attempts });
+        const stateBefore = structuredClone(seed.state);
+        const memoryBefore = structuredClone(seed.memory);
+        const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
+        expect(result).toMatchObject({
+            status: 'blocked', code: 'MODEL_RUNTIME_FAILURE', stage, role, modelAttempts: attempts,
+        });
+        expect(JSON.stringify(result)).not.toContain('provider failed');
+        expect(seed.state).toEqual(stateBefore);
+        expect(seed.memory).toEqual(memoryBefore);
+    });
+
+    it.each(['EMPTY_RESPONSE', 'MALFORMED_JSON'] as const)(
+        'keeps Planner %s as PLAN_PROTOCOL_FAILURE',
+        async (protocolCode) => {
+            const seed = createV4ProjectSeed(document());
+            const models = createGeminiStoryEngineAdapters(fakeRuntime([]));
+            const runtime = createProductionStoryRuntime({
+                models: {
+                    ...models,
+                    planner: { plan: async () => { throw new GeminiStoryEngineProtocolError(protocolCode); } },
+                },
+            });
+            const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
+            expect(result).toMatchObject({
+                status: 'blocked', code: 'PLAN_PROTOCOL_FAILURE', stage: 'planning', role: 'planner',
+            });
+        },
+    );
+
+    it('surfaces only capped closed Planner issue codes and structural path families', async () => {
+        const sentinelId = 'SENTINEL_MODEL_ID_7B2C';
+        const sentinelSecret = 'SENTINEL_AUTHOR_SECRET_91AF';
+        const seed = createV4ProjectSeed(document());
+        const models = createGeminiStoryEngineAdapters(fakeRuntime([]));
+        const issues = Array.from({ length: 14 }, (_, index) => ({
+            code: index === 0 ? 'INVALID_SHAPE' : `${sentinelId}_${index}`,
+            path: index === 0
+                ? `scenes.${sentinelId}.intelligentConflict.${sentinelSecret}`
+                : index === 1 ? `participantIds.${sentinelId}` : `${sentinelId}.${index}`,
+            message: `raw validator message ${sentinelSecret} ${sentinelId}`,
+            severity: 'error' as const,
+        }));
+        const runtime = createProductionStoryRuntime({
+            models: {
+                ...models,
+                planner: { plan: async () => { throw new ChapterPlanValidationError(issues); } },
+            },
+        });
+        let caught: unknown;
+        try {
+            await runtime.planProductionChapter({ control: seed.control, state: seed.state, memoryState: seed.memory });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(ProductionRuntimeError);
+        expect(caught).toMatchObject({
+            code: 'PLAN_VALIDATION_FAILURE', stage: 'planning', role: 'planner', issueCount: 14,
+            issueCodes: ['INVALID_SHAPE', ...Array.from({ length: 11 }, () => 'OTHER_PLAN_VALIDATION_ISSUE')],
+            issuePaths: ['scenes.intelligentConflict', 'participantIds', ...Array.from({ length: 10 }, () => 'other')],
+        });
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(caught);
+        expect(diagnostic).toMatchObject({
+            code: 'PLAN_VALIDATION_FAILURE', stage: 'planning', role: 'planner', issueCount: 14,
+        });
+        expect(diagnostic?.issueCodes).toHaveLength(12);
+        expect(diagnostic?.issuePaths).toHaveLength(12);
+        const serialized = JSON.stringify({ caught, diagnostic });
+        expect(serialized).not.toContain(sentinelId);
+        expect(serialized).not.toContain(sentinelSecret);
+        expect(serialized).not.toContain('raw validator message');
+
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        logSafeStoryStudioRuntimeDiagnostic(caught);
+        expect(consoleError).toHaveBeenCalledWith('Story Studio runtime diagnostic', diagnostic);
+        expect(JSON.stringify(consoleError.mock.calls)).not.toContain(sentinelId);
+        expect(JSON.stringify(consoleError.mock.calls)).not.toContain(sentinelSecret);
+        consoleError.mockRestore();
+    });
+
     it('returns a typed extraction block for unsupported extractor output', async () => {
         const { seed, runtime } = harness({ invalidExtractor: true });
         const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
-        expect(result).toMatchObject({ status: 'blocked', stage: 'extraction', code: 'EXTRACTION_BLOCKED', issueCodes: ['UNSUPPORTED_DELTA_VERSION'] });
+        expect(result).toMatchObject({
+            status: 'blocked', stage: 'extraction', code: 'EXTRACTION_BLOCKED',
+            issueCount: 1, issueCodes: ['UNSUPPORTED_DELTA_VERSION'],
+        });
+        if (result.status !== 'blocked') throw new Error('expected extraction block');
+        expect(getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            'EXTRACTION_BLOCKED', 'extraction', 1, 'stateExtractor', result.issueCodes, result.issueCount,
+        ))).toEqual({
+            code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 1, issueCodes: ['UNSUPPORTED_DELTA_VERSION'],
+        });
         expect(seed.state).toMatchObject({ currentChapter: 0, revision: 0 });
+        expect(seed.memory.records).toHaveLength(0);
+    });
+
+    it('retains the total count and unique safe codes for multiple extraction contract issues', async () => {
+        const invalid = delta(1);
+        const { seed, runtime } = harness({
+            extractorOutput: {
+                ...invalid,
+                factChanges: [{
+                    ...invalid.factChanges[0], visibility: 'internal', status: 'superseded',
+                }],
+                locationChanges: [{
+                    id: 'outsider-location', characterId: 'outsider', location: 'Unknown', sinceChapter: 1,
+                    provenance: { sourceChapter: 1, sourceType: 'chapter' },
+                }],
+            },
+        });
+        const beforeState = structuredClone(seed.state);
+        const beforeMemory = structuredClone(seed.memory);
+        const result = await runtime.runChapterToCanonReview({
+            control: seed.control, state: seed.state, memoryState: seed.memory,
+        });
+        expect(result).toMatchObject({
+            status: 'blocked', code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 3,
+            issueCodes: ['INTERNAL_FACT_NOT_ALLOWED', 'INVALID_NEW_FACT_STATUS', 'UNAUTHORIZED_CHARACTER_MUTATION'],
+        });
+        expect(seed.state).toEqual(beforeState);
+        expect(seed.memory).toEqual(beforeMemory);
+    });
+
+    it('surfaces only closed StateDelta parse metadata without advancing Canon or memory', async () => {
+        const rawStory = 'RAW_STORY_PROSE_SENTINEL';
+        const rawSecret = 'RAW_AUTHOR_SECRET_PARSE_SENTINEL';
+        const rawApiKey = 'AIzaSy_RAW_PARSE_KEY_SENTINEL';
+        const rawModelId = 'RAW_MODEL_GENERATED_ID_SENTINEL';
+        const invalid = delta(1);
+        const { seed, runtime } = harness({
+            extractorOutput: {
+                ...invalid,
+                factChanges: [{
+                    ...invalid.factChanges[0], id: rawModelId, text: rawStory,
+                    provenance: {
+                        sourceChapter: 1,
+                        sourceType: `${rawApiKey}:${rawSecret}`,
+                        sourceId: rawModelId,
+                    },
+                }],
+            },
+        }, 'parse-diagnostic-story', rawSecret);
+        const beforeState = structuredClone(seed.state);
+        const beforeMemory = structuredClone(seed.memory);
+        const result = await runtime.runChapterToCanonReview({
+            control: seed.control, state: seed.state, memoryState: seed.memory,
+        });
+        expect(result).toMatchObject({
+            status: 'blocked', code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 1, issueCodes: ['INVALID_EXTRACTOR_OUTPUT'],
+            parseCode: 'INVALID_DELTA', parsePathFamily: 'factChanges',
+        });
+        if (result.status !== 'blocked') throw new Error('expected parse block');
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            result.code, result.stage, result.chapter, result.role, result.issueCodes, result.issueCount,
+            result.issuePaths, result.modelAttempts, result.parseCode, result.parsePathFamily,
+        ));
+        expect(diagnostic).toEqual({
+            code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 1, issueCodes: ['INVALID_EXTRACTOR_OUTPUT'],
+            parseCode: 'INVALID_DELTA', parsePathFamily: 'factChanges',
+        });
+        const serialized = JSON.stringify(diagnostic);
+        [rawStory, rawSecret, rawApiKey, rawModelId, 'delta.factChanges[0].provenance.sourceType']
+            .forEach(sentinel => expect(serialized).not.toContain(sentinel));
+        expect(seed.state).toEqual(beforeState);
+        expect(seed.memory).toEqual(beforeMemory);
+    });
+
+    it('sanitizes unknown parse metadata without exposing arbitrary values', () => {
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            'EXTRACTION_BLOCKED', 'extraction', 1, 'stateExtractor', ['INVALID_EXTRACTOR_OUTPUT'], 1,
+            undefined, undefined, 'RAW_UNKNOWN_PARSE_CODE' as never, 'RAW_UNKNOWN_PARSE_PATH' as never,
+        ));
+        expect(diagnostic).toEqual({
+            code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+            issueCount: 1, issueCodes: ['INVALID_EXTRACTOR_OUTPUT'], parsePathFamily: 'other',
+        });
+        expect(JSON.stringify(diagnostic)).not.toContain('RAW_UNKNOWN');
+    });
+
+    it('exposes only bounded canonical extraction codes and a closed unknown fallback', () => {
+        const rawDetail = 'RAW_EXTRACTOR_DETAIL_SENTINEL';
+        const rawPath = 'operations.RAW_ARBITRARY_PATH_SENTINEL.private-id';
+        const issues = [
+            { code: 'UNSUPPORTED_DELTA_VERSION', path: rawPath, detail: rawDetail },
+            { code: 'UNSUPPORTED_DELTA_VERSION', path: `${rawPath}.duplicate`, detail: rawDetail },
+            { code: 'PLAN_RESOURCE_MISMATCH', path: rawPath, detail: rawDetail },
+            { code: 'UNKNOWN_EXTRACTOR_CODE_SENTINEL', path: rawPath, detail: rawDetail },
+        ];
+        const summary = summarizeStateExtractionIssues(issues);
+        const diagnostic = getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            'EXTRACTION_BLOCKED', 'extraction', 1, 'stateExtractor', summary.issueCodes, summary.issueCount,
+        ));
+        expect(diagnostic).toEqual({
+            code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor', issueCount: 4,
+            issueCodes: ['UNSUPPORTED_DELTA_VERSION', 'PLAN_RESOURCE_MISMATCH', 'OTHER_EXTRACTION_ISSUE'],
+        });
+        expect(summarizeStateExtractionIssues(STATE_EXTRACTION_ISSUE_CODES.map(code => ({ code })))).toMatchObject({
+            issueCount: STATE_EXTRACTION_ISSUE_CODES.length,
+            issueCodes: STATE_EXTRACTION_ISSUE_CODES.slice(0, 12),
+        });
+        const serialized = JSON.stringify(diagnostic);
+        expect(serialized).not.toContain(rawDetail);
+        expect(serialized).not.toContain(rawPath);
+        expect(serialized).not.toContain('UNKNOWN_EXTRACTOR_CODE_SENTINEL');
+
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        logSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            'EXTRACTION_BLOCKED', 'extraction', 1, 'stateExtractor', summary.issueCodes, summary.issueCount,
+        ));
+        expect(JSON.stringify(consoleError.mock.calls)).not.toContain(rawDetail);
+        expect(JSON.stringify(consoleError.mock.calls)).not.toContain(rawPath);
+        consoleError.mockRestore();
     });
 
     it('preserves generic StoryEvent as an explicit V2 Canon-review block', async () => {
@@ -480,7 +719,17 @@ describe('WORK 12 production staged runtime', () => {
         const captures: { role: string; contents: string }[] = [];
         const runtime = createProductionStoryRuntime({ models: createGeminiStoryEngineAdapters(fakeRuntime(captures, { storyEvent: true })) });
         const result = await runtime.runChapterToCanonReview({ control: seed.control, state: seed.state, memoryState: seed.memory });
-        expect(result).toMatchObject({ status: 'blocked', stage: 'canon-review', code: 'CANON_REVIEW_BLOCKED', issueCodes: ['UNREPRESENTABLE_CANON_OPERATION'] });
+        expect(result).toMatchObject({
+            status: 'blocked', stage: 'canon-review', code: 'CANON_REVIEW_BLOCKED',
+            issueCount: 1, issueCodes: ['UNREPRESENTABLE_CANON_OPERATION'],
+        });
+        if (result.status !== 'blocked') throw new Error('expected Canon-review block');
+        expect(getSafeStoryStudioRuntimeDiagnostic(new ProductionRuntimeError(
+            'CANON_REVIEW_BLOCKED', 'canon-review', 1, undefined, result.issueCodes, result.issueCount,
+        ))).toEqual({
+            code: 'CANON_REVIEW_BLOCKED', stage: 'canon-review',
+            issueCount: 1, issueCodes: ['UNREPRESENTABLE_CANON_OPERATION'],
+        });
         expect(seed.state).toMatchObject({ currentChapter: 0, revision: 0 });
     });
 

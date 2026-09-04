@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
     buildPlannerContext,
+    buildPlannerPrompt,
+    buildPlannerValidationAffordances,
     ChapterPlanValidationError,
     compileStoryControl,
     createInitialStoryState,
     createStructuredPlanner,
     InternalChapterPlan,
     NarrativeMemoryInput,
+    PlannerContext,
+    parseInternalChapterPlan,
     sanitizeWriterChapterPlan,
     selectNarrativeMemory,
     StoryBlueprint,
@@ -100,6 +104,226 @@ const validationCodes = (plan: InternalChapterPlan) =>
     validateInternalChapterPlan(plan, buildPlannerContext(control, stateFor(plan.chapterNumber), plan.chapterNumber)).map(issue => issue.code);
 
 describe('Story Engine V4 planner gates', () => {
+    it('derives exact closed-world beat, POV, character, event, and reveal affordances', () => {
+        const context = buildPlannerContext(control, stateFor(561), 561);
+        const affordances = buildPlannerValidationAffordances(context);
+
+        expect(affordances.targetChapter).toBe(561);
+        expect(affordances.currentArcId).toBe(context.currentArc.id);
+        expect(affordances.currentBeatId).toBe(context.currentBeat!.id);
+        expect(affordances.allowedPovIds).toEqual(
+            context.povEligibility.filter(entry => entry.allowed).map(entry => entry.id),
+        );
+        expect(affordances.availableCharacterIds).toEqual(context.availableCharacters.map(character => character.id));
+        expect(affordances.allowedRevealIds).toEqual(['mastermind-reveal']);
+        expect(affordances.allowedStoryEventIds).toEqual(['palace-civil-war']);
+        expect(affordances.allowedRelationshipEventIds).toEqual(['first-meeting']);
+        expect(affordances.strategicDomainTags).toEqual(['politics', 'military', 'commerce']);
+        expect(affordances.relationshipSceneTag).toBe('relationship');
+    });
+
+    it('uses null currentBeatId and explicitly requires beatId omission when the arc has no beats', () => {
+        const blueprint = makeBlueprint();
+        const noCurrentBeatControl = compileStoryControl({
+            ...blueprint,
+            beats: blueprint.beats!.filter(beat => beat.arcId !== 'arc-current'),
+        });
+        const context = buildPlannerContext(noCurrentBeatControl, stateFor(33), 33);
+        const affordances = buildPlannerValidationAffordances(context);
+        const prompt = buildPlannerPrompt(context);
+
+        expect(affordances.currentBeatId).toBeNull();
+        expect(prompt).toContain('If currentBeatId is null, OMIT beatId entirely; never invent one.');
+        expect(validateInternalChapterPlan(
+            { ...planFor(33, ['character-a']), beatId: 'invented-beat' },
+            context,
+        ).map(issue => issue.code)).toContain('FUTURE_BEAT');
+    });
+
+    it('exposes only allowed POVs and keeps canonical knowledge isolated per available character', () => {
+        const lockedContext = buildPlannerContext(control, stateFor(32), 32);
+        const knowledgeContext: PlannerContext = {
+            ...buildPlannerContext(control, stateFor(33), 33),
+            characterKnowledge: [
+                { characterId: 'character-a', factIds: ['fact-only-a'] },
+                { characterId: 'character-b', factIds: ['fact-only-b'] },
+            ],
+        };
+        const lockedAffordances = buildPlannerValidationAffordances(lockedContext);
+        const knowledgeAffordances = buildPlannerValidationAffordances(knowledgeContext);
+
+        expect(lockedAffordances.allowedPovIds).toEqual(['character-b']);
+        expect(lockedAffordances.allowedPovIds).not.toContain('character-a');
+        expect(knowledgeAffordances.characterKnowledgeFactIdsByCharacter).toEqual({
+            'character-a': ['fact-only-a'],
+            'character-b': ['fact-only-b'],
+        });
+        expect(knowledgeAffordances.characterKnowledgeFactIdsByCharacter['character-a']).not.toContain('fact-only-b');
+        expect(knowledgeAffordances.characterKnowledgeFactIdsByCharacter['character-b']).not.toContain('fact-only-a');
+    });
+
+    it('projects exact relationship IDs and participants without copying Author Secret values', () => {
+        const base = buildPlannerContext(control, stateFor(561), 561);
+        const context: PlannerContext = {
+            ...base,
+            characterKnowledge: [
+                { characterId: 'character-a', factIds: ['fact-a'] },
+                { characterId: 'character-b', factIds: [] },
+            ],
+            relationships: [{ id: 'canonical-a-b', participantIds: ['character-a', 'character-b'], state: 'allies' }],
+            relationshipContext: {
+                ...base.relationshipContext,
+                relationships: [{
+                    id: 'declared-a-b',
+                    participantIds: ['character-a', 'character-b'],
+                    categories: ['professional'],
+                    currentRomanceMilestone: 'none',
+                    dynamicProfile: {
+                        coreDynamicTags: ['professional-equals'],
+                        dominantConflictSources: [],
+                        trustBasis: [],
+                        respectBasis: [],
+                        prohibitedShortcuts: [],
+                    },
+                    progressionPolicy: {
+                        maxMajorMilestoneAdvancePerChapter: 1,
+                        maxConsecutiveProgressionChapters: 1,
+                        requireCanonicalBasis: true,
+                        requireMutualAgencyForMutualMilestone: true,
+                    },
+                    slowBurnHistoryComplete: true,
+                    consecutiveProgressionCount: 0,
+                    recentHistory: [],
+                }],
+            },
+            authorOnlySecretReferences: [{
+                id: 'secret-reference',
+                value: 'RAW_AUTHOR_SECRET_SENTINEL',
+            } as unknown as { readonly id: string }],
+        };
+        const serialized = JSON.stringify(buildPlannerValidationAffordances(context));
+
+        expect(buildPlannerValidationAffordances(context).relationshipDefinitions).toEqual([{
+            id: 'declared-a-b',
+            participantIds: ['character-a', 'character-b'],
+        }]);
+        expect(buildPlannerValidationAffordances(context).canonicalRelationshipIds).toEqual(['canonical-a-b']);
+        expect(buildPlannerValidationAffordances(context).characterKnowledgeFactIdsByCharacter).toEqual({
+            'character-a': ['fact-a'],
+            'character-b': [],
+        });
+        expect(serialized).not.toContain('RAW_AUTHOR_SECRET_SENTINEL');
+    });
+
+    it('states the exact nested scene contract without exposing raw Author Secret values', () => {
+        const prompt = buildPlannerPrompt(buildPlannerContext(control, stateFor(33), 33));
+        expect(prompt).toContain('Every scenes[] object must include exactly these required fields: id, order, goal, location, povCharacterId, participantIds, conflictOrObstacle, uncertainty, expectedConsequence, purposeTags, conflictImportance');
+        expect(prompt).toContain('every order is a positive integer, orders are unique and consecutive, and the first scene order is 1');
+        expect(prompt).toContain('plot, character, resource, clue, relationship, consequence, world, politics, military, commerce');
+        expect(prompt).toContain('conflictImportance must be exactly minor or major');
+        expect(prompt).toContain('A major conflict must include a complete intelligentConflict object');
+        expect(prompt).toContain('Every strategicActions and relationshipActions entry must still follow its complete documented runtime contract');
+        expect(prompt).toContain('Never emit markdown, explanatory prose, comments, prefixes, suffixes, or alternative field names');
+        expect(prompt).toContain('arcId MUST equal currentArcId exactly');
+        expect(prompt).toContain('chapter povCharacterId and every scene.povCharacterId MUST be selected only from allowedPovIds');
+        expect(prompt).toContain('Every opponentKnowledge fact ID MUST come only from characterKnowledgeFactIdsByCharacter[opponentCharacterId]');
+        expect(prompt).toContain('each scene tagged politics, military, or commerce MUST have a strategicAction of the same domain');
+        expect(prompt).toContain('Every strategicAction.sceneIds entry MUST identify a real scene carrying that same domain tag');
+        expect(prompt).toContain('do not use that strategic domain tag and emit no such action');
+        expect(prompt).toContain('relationshipActions.relationshipId may use only an ID in relationshipDefinitions');
+        expect(prompt).toContain('emit exactly one matching FINAL RelationshipAction');
+        expect(prompt).toContain('If no valid final action is planned, omit that relationship delta');
+        expect(prompt).toContain('plannedRevealIds MUST be a subset of allowedRevealIds');
+        expect(prompt).toContain('storyEventIds MUST be a subset of allowedStoryEventIds');
+        expect(prompt).toContain('relationshipEventIds MUST be a subset of allowedRelationshipEventIds');
+        expect(prompt.indexOf('VALIDATION_AFFORDANCES:')).toBeLessThan(prompt.indexOf('CONTEXT:'));
+        expect(prompt).not.toContain('Omega backup identity is classified');
+    });
+
+    it('accepts a realistic closed-world plan through the structured planner with no active beat', async () => {
+        const blueprint = makeBlueprint();
+        const noCurrentBeatControl = compileStoryControl({
+            ...blueprint,
+            beats: blueprint.beats!.filter(beat => beat.arcId !== 'arc-current'),
+        });
+        const context = buildPlannerContext(noCurrentBeatControl, stateFor(33), 33);
+        const withBeat = planFor(33, ['character-a', 'character-b']);
+        const { beatId: _omittedBeat, ...withoutBeat } = withBeat;
+        expect(_omittedBeat).toBe('beat-current');
+        const output: InternalChapterPlan = {
+            ...withoutBeat,
+            scenes: [{
+                ...withoutBeat.scenes[0],
+                participantIds: ['character-a', 'character-b'],
+                conflictImportance: 'major',
+                intelligentConflict: {
+                    opponentCharacterId: 'character-b',
+                    protagonistObjective: 'Cross the gate district.',
+                    opponentObjective: 'Keep the route closed.',
+                    opponentKnowledge: [],
+                    opponentBeliefs: ['The traveler may lack a gate token.'],
+                    rationalCountermove: 'Close the visible route.',
+                    uncertainty: 'A lawful alternative may exist.',
+                    expectedCostOrTradeoff: 'The closure reveals the patrol schedule.',
+                },
+            }],
+            strategicActions: [],
+            relationshipActions: [],
+            expectedRelationshipDeltas: [],
+        };
+
+        await expect(createStructuredPlanner({ async plan() { return output; } }, noCurrentBeatControl).plan(context))
+            .resolves.toEqual(output);
+    });
+
+    it('strictly parses and validates a complete provider-shaped scene without normalization', () => {
+        const raw = { ...planFor(33, ['character-a']), strategicActions: [], relationshipActions: [] };
+        const parsed = parseInternalChapterPlan(raw);
+        expect(parsed.issues).toEqual([]);
+        expect(parsed.plan).toEqual(raw);
+        expect(validateInternalChapterPlan(parsed.plan!, buildPlannerContext(control, stateFor(33), 33))).toEqual([]);
+    });
+
+    it('still fails closed for missing scene fields, invalid order, and unsupported purpose tags', () => {
+        const base = { ...planFor(33, ['character-a']), strategicActions: [], relationshipActions: [] };
+        const missingLocation: Record<string, unknown> = { ...base.scenes[0] };
+        delete missingLocation.location;
+        const missing = parseInternalChapterPlan({ ...base, scenes: [missingLocation] });
+        expect(missing.plan).toBeUndefined();
+        expect(missing.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'INVALID_SHAPE', path: 'scenes.0.location' }),
+        ]));
+
+        const invalidOrder = parseInternalChapterPlan({ ...base, scenes: [{ ...base.scenes[0], order: 0 }] });
+        expect(invalidOrder.plan).toBeUndefined();
+        expect(invalidOrder.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'INVALID_SCENE_ORDER', path: 'scenes.0.order' }),
+        ]));
+
+        const invalidTags = parseInternalChapterPlan({ ...base, scenes: [{ ...base.scenes[0], purposeTags: ['summary'] }] });
+        expect(invalidTags.plan).toBeUndefined();
+        expect(invalidTags.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'INVALID_PURPOSE_TAGS', path: 'scenes.0.purposeTags' }),
+        ]));
+
+        const incoherentOrder = parseInternalChapterPlan({ ...base, scenes: [{ ...base.scenes[0], order: 2 }] });
+        expect(incoherentOrder.issues).toEqual([]);
+        expect(validateInternalChapterPlan(
+            incoherentOrder.plan!, buildPlannerContext(control, stateFor(33), 33),
+        ).map(issue => issue.code)).toContain('SCENE_ORDER_INVALID');
+    });
+
+    it('keeps deep strategic and relationship action parsing strict behind generic provider arrays', () => {
+        const base = { ...planFor(33, ['character-a']), strategicActions: [], relationshipActions: [] };
+        const malformedStrategic = parseInternalChapterPlan({ ...base, strategicActions: [{}] });
+        expect(malformedStrategic.plan).toBeUndefined();
+        expect(malformedStrategic.issues.map(issue => issue.code)).toContain('INVALID_STRATEGIC_ACTION');
+
+        const malformedRelationship = parseInternalChapterPlan({ ...base, relationshipActions: [{}] });
+        expect(malformedRelationship.plan).toBeUndefined();
+        expect(malformedRelationship.issues.map(issue => issue.code)).toContain('INVALID_RELATIONSHIP_ACTION');
+    });
+
     it('rejects Character A at chapter 32 and accepts it at chapter 33', () => {
         const locked = planFor(32, ['character-a']);
         expect(validationCodes(locked)).toContain('POV_LOCKED');

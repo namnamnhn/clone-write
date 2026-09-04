@@ -292,15 +292,36 @@ const buildWorkflowStages = (
     const hasPlan = Boolean(session.writerPlan || session.internalPlan);
     const hasPlannerContext = Boolean(session.plannerContext);
     const hasDraft = Boolean(session.writerDraft);
-    const repairAttempted = (report?.validationPass ?? 1) > 1;
+    const repairAttempts = session.repairAttempts ?? 0;
+    const repairAttempted = repairAttempts > 0;
     return [
         stage('canon', 'Canon Context', session.state ? 'complete' : 'blocked', session.state ? `Canon chương ${session.state.currentChapter}` : 'Thiếu Canon', 'Canon là trạng thái truyện đã được xác nhận.'),
         stage('planner', 'Planner', hasPlan ? 'complete' : hasPlannerContext ? 'ready' : 'waiting', hasPlan ? `Đã lập chương ${targetChapter}` : hasPlannerContext ? 'Sẵn sàng lập kế hoạch' : 'Đang chờ', 'Planner dựng kế hoạch nội bộ cho chương kế tiếp.'),
         stage('writer', 'Writer', hasDraft ? 'complete' : session.writerPlan ? 'ready' : 'waiting', hasDraft ? `Đã có bản nháp chương ${targetChapter}` : session.writerPlan ? 'Sẵn sàng viết' : 'Đang chờ kế hoạch', 'Writer chỉ nhận kế hoạch và ngữ cảnh an toàn.'),
         stage('validator', 'Validator', report ? (report.status === 'passed' ? 'complete' : 'failed') : hasDraft ? 'ready' : 'waiting', report ? (report.status === 'passed' ? 'Đã vượt kiểm định' : 'Có lỗi chặn') : hasDraft ? 'Sẵn sàng kiểm định' : 'Đang chờ bản nháp', 'Validator kiểm tra bản nháp với Canon và kế hoạch.'),
-        stage('repair', 'Repair', repairAttempted ? (report?.status === 'passed' ? 'complete' : 'failed') : report?.status === 'blocked' ? 'ready' : 'unavailable', repairAttempted ? `Đã chạy lượt ${report?.validationPass}` : report?.status === 'blocked' ? 'Có thể cần sửa' : 'Chưa được gọi', 'Repair chỉ chạy khi pipeline thật được kết nối.'),
+        stage('repair', 'Repair', repairAttempted ? (report?.status === 'passed' ? 'complete' : 'failed') : report?.status === 'blocked' ? 'ready' : 'unavailable', repairAttempted ? `Đã sửa ${repairAttempts} lượt` : report?.status === 'blocked' ? 'Có thể cần sửa' : 'Chưa được gọi', 'Repair chỉ chạy hữu hạn khi Validator yêu cầu.'),
         stage('approved', 'Đạt QA', status === 'approved-not-canon' ? 'complete' : status === 'rejected' ? 'failed' : report?.status === 'passed' ? 'ready' : 'waiting', status === 'approved-not-canon' ? 'Đạt QA — Chưa Canon' : status === 'rejected' ? 'Bị từ chối' : report?.status === 'passed' ? 'Chờ xác nhận pipeline' : 'Chưa duyệt', 'Đạt QA vẫn chưa trở thành Canon.'),
-        stage('make-canon', 'Make Canon', 'unavailable', 'Chưa khả dụng', 'State Extractor / Make Canon chưa được triển khai.'),
+        stage(
+            'make-canon',
+            'Make Canon',
+            session.canonReviewReady === undefined
+                ? 'unavailable'
+                : session.canonReviewReady
+                    ? 'ready'
+                    : status === 'rejected' ? 'blocked' : 'waiting',
+            session.canonReviewReady === undefined
+                ? 'Chưa khả dụng'
+                : session.canonReviewReady
+                ? 'Sẵn sàng Review Canon'
+                : status === 'rejected'
+                    ? 'Bị chặn bởi kiểm định'
+                    : status === 'approved-not-canon'
+                        ? 'Đang hoàn tất đề xuất Canon'
+                        : 'Đang chờ QA',
+            session.canonReviewReady === undefined
+                ? 'Session chỉ-đọc không có quyền Make Canon.'
+                : 'Make Canon chỉ chạy sau khi State Extractor hoàn tất và người dùng xác nhận rõ ràng trong Review Canon.',
+        ),
     ];
 };
 

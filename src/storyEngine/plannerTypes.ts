@@ -20,6 +20,16 @@ export const CONFLICT_IMPORTANCE = ['minor', 'major'] as const;
 export type ConflictImportance = typeof CONFLICT_IMPORTANCE[number];
 export type PlanValidationSeverity = 'error' | 'warning';
 
+export const PLANNER_CONTEXT_ERROR_CODES = ['NO_ALLOWED_POV'] as const;
+export type PlannerContextErrorCode = typeof PLANNER_CONTEXT_ERROR_CODES[number];
+
+export class PlannerContextError extends Error {
+    constructor(readonly code: PlannerContextErrorCode) {
+        super(code);
+        this.name = 'PlannerContextError';
+    }
+}
+
 export interface PlanValidationIssue {
     readonly code: string;
     readonly path: string;

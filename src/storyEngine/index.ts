@@ -33,7 +33,9 @@ export * from './writerRelationshipValidator';
 export * from './relationshipValidatorContext';
 export * from './contextBuilder';
 export * from './planValidator';
+export * from './planDiagnostics';
 export * from './planSanitizer';
+export * from './plannerValidationAffordances';
 export * from './planner';
 export * from './writerTypes';
 export * from './writerContext';
@@ -53,6 +55,11 @@ export {
 } from './stateExtractionContext';
 export { buildStateExtractorPrompt, extractState } from './stateExtractor';
 export {
+    buildStateExtractionAffordances,
+    StateExtractionAffordanceError,
+} from './stateExtractionAffordances';
+export type { StateExtractionAffordances } from './stateExtractionAffordances';
+export {
     DEFAULT_MAX_CANON_REVIEW_CHANGES,
     buildCanonCommitReview,
     prepareCanonCommit,
@@ -61,7 +68,11 @@ export {
 } from './canonCommit';
 export * from './narrativeMemory';
 export * from './storyBlueprintRuntime';
+export * from './storyBlueprintResponseSchema';
+export * from './internalChapterPlanResponseSchema';
+export * from './storyStateDeltaResponseSchema';
 export * from './productionRuntimeTypes';
+export * from './modelAttemptDiagnostics';
 export * from './productionArtifactIdentity';
 export * from './productionRuntimePolicy';
 export * from './productionRuntime';
