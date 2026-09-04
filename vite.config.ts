@@ -3,6 +3,8 @@ import { cpSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { createGeminiBridgeMiddleware } from './server/geminiBridge';
+import { resolveGeminiTransportMode } from './server/geminiBridgeMode';
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +21,18 @@ const copyPdfJsAssets = () => ({
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
+    const serverBridgeEnabled = resolveGeminiTransportMode(process.env) === 'server';
+    const bridgeMiddleware = createGeminiBridgeMiddleware();
+    const geminiBridgePlugin = {
+      name: 'gemini-server-bridge',
+      configureServer(server: { middlewares: { use: (handler: typeof bridgeMiddleware) => void } }) {
+        if (serverBridgeEnabled) server.middlewares.use(bridgeMiddleware);
+      },
+      configurePreviewServer(server: { middlewares: { use: (handler: typeof bridgeMiddleware) => void } }) {
+        if (serverBridgeEnabled) server.middlewares.use(bridgeMiddleware);
+      },
+    };
+    const browserGeminiKey = serverBridgeEnabled ? 'undefined' : JSON.stringify(env.GEMINI_API_KEY);
     return {
       // Dùng đường dẫn tương đối để bản build có thể được phục vụ từ bất kỳ thư mục con nào.
       // Trình duyệt vẫn chặn ES module khi mở thẳng bằng file://, vì vậy dist kèm START_APP.bat
@@ -90,10 +104,11 @@ export default defineConfig(({ mode }) => {
           target: 'esnext'
         }
       },
-      plugins: [react(), copyPdfJsAssets()],
+      plugins: [react(), copyPdfJsAssets(), geminiBridgePlugin],
       define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        '__GEMINI_SERVER_BRIDGE__': JSON.stringify(serverBridgeEnabled),
+        'process.env.API_KEY': browserGeminiKey,
+        'process.env.GEMINI_API_KEY': browserGeminiKey
       },
       resolve: {
         alias: {
