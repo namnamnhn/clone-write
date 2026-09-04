@@ -7,6 +7,38 @@ import type {
 import type { PersistedStoryStudioWorkflow, StoryStudioBatchQueue } from './storyStudioWorkflowTypes';
 
 export const STORY_STUDIO_STORAGE_KEY = 'story_studio_v4_current_project_v1';
+export const STORY_STUDIO_PROJECT_LIBRARY_KEY = 'story_studio_v4_project_library_v1';
+export const STORY_STUDIO_PROJECT_KEY_PREFIX = 'story_studio_v4_project_v1:';
+
+declare const storyStudioProjectIdBrand: unique symbol;
+export type StoryStudioProjectId = string & { readonly [storyStudioProjectIdBrand]: true };
+
+export interface StoryStudioProjectLibraryEntry {
+    readonly projectId: StoryStudioProjectId;
+    readonly displayName: string;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+    readonly currentChapter: number;
+    readonly plannedChapterCount: number;
+    readonly workflowStage: PersistedStoryStudioWorkflow['stage'];
+}
+
+export interface StoryStudioProjectLibraryIndexV1 {
+    readonly kind: 'story-studio-project-library-index';
+    readonly formatVersion: 1;
+    readonly activeProjectId?: StoryStudioProjectId;
+    readonly entries: readonly StoryStudioProjectLibraryEntry[];
+    readonly updatedAt: string;
+}
+
+export interface StoryStudioProjectLibraryViewEntry extends StoryStudioProjectLibraryEntry {
+    readonly availability: 'available' | 'missing' | 'corrupt';
+}
+
+export interface StoryStudioProjectLibrarySnapshot {
+    readonly index: StoryStudioProjectLibraryIndexV1;
+    readonly entries: readonly StoryStudioProjectLibraryViewEntry[];
+}
 
 export interface CanonicalChapterMetadata {
     readonly kind: 'canonical-chapter-metadata';
@@ -42,14 +74,25 @@ export interface StoryStudioRuntimeProject extends StoryStudioProjectDocumentV1 
 }
 
 export type StoryStudioProjectLoadResult =
-    | { readonly status: 'empty' }
-    | { readonly status: 'loaded'; readonly project: StoryStudioRuntimeProject }
+    | { readonly status: 'empty'; readonly library: StoryStudioProjectLibrarySnapshot }
+    | {
+        readonly status: 'loaded';
+        readonly projectId: StoryStudioProjectId;
+        readonly project: StoryStudioRuntimeProject;
+        readonly library: StoryStudioProjectLibrarySnapshot;
+    }
     | {
         readonly status: 'workflow-recovered';
+        readonly projectId: StoryStudioProjectId;
         readonly project: StoryStudioRuntimeProject;
         readonly warning: 'WORKFLOW_CORRUPT_OR_STALE';
+        readonly library: StoryStudioProjectLibrarySnapshot;
     }
-    | { readonly status: 'core-corrupt'; readonly error: StoryStudioProjectError };
+    | {
+        readonly status: 'core-corrupt';
+        readonly error: StoryStudioProjectError;
+        readonly library?: StoryStudioProjectLibrarySnapshot;
+    };
 
 export type StoryStudioProjectErrorCode =
     | 'LOAD_FAILED'
@@ -58,7 +101,13 @@ export type StoryStudioProjectErrorCode =
     | 'CORE_IDENTITY_MISMATCH'
     | 'WORKFLOW_INVALID'
     | 'PROJECT_REPLACEMENT_CONFIRMATION_REQUIRED'
-    | 'NO_PROJECT';
+    | 'NO_PROJECT'
+    | 'INVALID_LIBRARY'
+    | 'MIGRATION_FAILED'
+    | 'LEGACY_CLEANUP_FAILED'
+    | 'PROJECT_NOT_FOUND'
+    | 'PROJECT_UNAVAILABLE'
+    | 'PROJECT_OPERATION_BLOCKED';
 
 export class StoryStudioProjectError extends Error {
     constructor(readonly code: StoryStudioProjectErrorCode) {

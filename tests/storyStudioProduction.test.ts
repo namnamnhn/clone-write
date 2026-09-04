@@ -21,7 +21,11 @@ import {
     InMemoryStoryStudioStorageAdapter,
     StoryStudioProjectRepository,
 } from '../src/storyStudio/production/storyStudioProjectPersistence';
-import { STORY_STUDIO_STORAGE_KEY } from '../src/storyStudio/production/storyStudioProjectTypes';
+import {
+    STORY_STUDIO_PROJECT_LIBRARY_KEY,
+    STORY_STUDIO_STORAGE_KEY,
+} from '../src/storyStudio/production/storyStudioProjectTypes';
+import { storyStudioProjectStorageKey } from '../src/storyStudio/production/storyStudioProjectPersistence';
 import {
     createStoryStudioProject,
     parseStoryStudioProjectDocument,
@@ -270,10 +274,10 @@ describe('WORK 13 Story Studio production persistence', () => {
             expect(events).toEqual(['clear-error', `run-${attempt}`]);
         },
     );
-    it('loads empty storage without writing a default project', async () => {
+    it('loads empty storage without writing a default project document', async () => {
         const { adapter, controller } = setup();
-        expect(await controller.load()).toEqual({ status: 'empty' });
-        expect(adapter.values.size).toBe(0);
+        expect(await controller.load()).toMatchObject({ status: 'empty', library: { entries: [] } });
+        expect(adapter.values.has(STORY_STUDIO_PROJECT_LIBRARY_KEY)).toBe(true);
     });
 
     it('creates C0/rev0 with empty memory and reloads exact core', async () => {
@@ -294,7 +298,7 @@ describe('WORK 13 Story Studio production persistence', () => {
         const { adapter, controller } = setup();
         adapter.values.set(STORY_STUDIO_STORAGE_KEY, { ...project, coreIdentity: 'tampered' });
         expect((await controller.load()).status).toBe('core-corrupt');
-        expect(adapter.values.get(STORY_STUDIO_STORAGE_KEY)?.coreIdentity).toBe('tampered');
+        expect((adapter.values.get(STORY_STUDIO_STORAGE_KEY) as { coreIdentity?: string })?.coreIdentity).toBe('tampered');
     });
 
     it('rejects malformed setup, control identity, state, and memory ownership before publishing', () => {
@@ -319,14 +323,15 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(parsed.project.batchQueue.paused).toBe(true);
     });
 
-    it('requires explicit confirmation before replacing the active slot', async () => {
+    it('creates a second project without replacing the first project', async () => {
         const { controller } = setup();
         await controller.load();
         await controller.createProject(document('a'), 'A');
-        await expect(controller.createProject(document('b'), 'B')).rejects.toMatchObject({ code: 'PROJECT_REPLACEMENT_CONFIRMATION_REQUIRED' });
-        expect(controller.currentProject?.displayName).toBe('A');
-        await controller.createProject(document('b'), 'B', true);
+        const firstId = controller.activeProjectId;
+        await controller.createProject(document('b'), 'B');
         expect(controller.currentProject?.displayName).toBe('B');
+        expect(controller.projectLibrary.map(entry => entry.displayName)).toEqual(['A', 'B']);
+        expect(controller.projectLibrary.some(entry => entry.projectId === firstId)).toBe(true);
     });
 
     it('persists each production stage and resumes from planned without rerunning Planner', async () => {
@@ -1375,7 +1380,9 @@ describe('WORK 13 Story Studio production persistence', () => {
         const { adapter, controller } = setup();
         await controller.load();
         const active = await controller.createProject(document('active-cancel'), 'Active cancel project');
-        const storedBefore = JSON.stringify(adapter.values.get(STORY_STUDIO_STORAGE_KEY));
+        const activeProjectId = controller.activeProjectId!;
+        const activeStorageKey = storyStudioProjectStorageKey(activeProjectId);
+        const storedBefore = JSON.stringify(adapter.values.get(activeStorageKey));
         const abortController = new AbortController();
         let providerSignal: AbortSignal | undefined;
         let preparedWasPublished = false;
@@ -1408,17 +1415,19 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(providerSignal?.aborted).toBe(true);
         expect(preparedWasPublished).toBe(false);
         expect(controller.currentProject).toEqual(active);
-        expect(JSON.stringify(adapter.values.get(STORY_STUDIO_STORAGE_KEY))).toBe(storedBefore);
+        expect(JSON.stringify(adapter.values.get(activeStorageKey))).toBe(storedBefore);
     });
 
-    it('delete removes only the dedicated Story Studio key', async () => {
+    it('delete removes only the selected namespaced Story Studio project', async () => {
         const { adapter, controller } = setup();
         await controller.load();
         await controller.createProject(document(), 'Delete');
+        const projectKey = storyStudioProjectStorageKey(controller.activeProjectId!);
         const legacy = createStoryStudioProject(document('legacy-shape-only-for-test'), 'Legacy sentinel');
         adapter.values.set('current_session_v1', withoutRuntimeControl(legacy));
         await controller.deleteProject();
-        expect(adapter.values.has(STORY_STUDIO_STORAGE_KEY)).toBe(false);
+        expect(adapter.values.has(projectKey)).toBe(false);
+        expect(adapter.values.has(STORY_STUDIO_PROJECT_LIBRARY_KEY)).toBe(true);
         expect(adapter.values.has('current_session_v1')).toBe(true);
     });
 
@@ -1436,8 +1445,12 @@ describe('WORK 13 Story Studio production persistence', () => {
         const repository = new StoryStudioProjectRepository(adapter);
         const first = createStoryStudioProject(document(), 'First');
         const second = rebuildRuntimeProject(first, { displayName: 'Second', updatedAt: '2026-09-03T01:00:00.000Z' });
-        await Promise.all([repository.save(first), repository.save(second)]);
-        expect(adapter.values.get(STORY_STUDIO_STORAGE_KEY)?.displayName).toBe('Second');
+        const created = await repository.createProject(first);
+        await Promise.all([
+            repository.saveProject(created.projectId, first),
+            repository.saveProject(created.projectId, second),
+        ]);
+        expect((adapter.values.get(storyStudioProjectStorageKey(created.projectId)) as { displayName?: string })?.displayName).toBe('Second');
     });
 
     it('never persists FullStoryControl in the project document', () => {
