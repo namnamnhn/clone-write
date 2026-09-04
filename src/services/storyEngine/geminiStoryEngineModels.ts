@@ -2,6 +2,7 @@ import { buildPlannerPrompt } from '../../storyEngine/planner';
 import { buildPlannerValidationAffordances } from '../../storyEngine/plannerValidationAffordances';
 import { buildInternalChapterPlanResponseJsonSchema } from '../../storyEngine/internalChapterPlanResponseSchema';
 import { buildStoryStateDeltaResponseJsonSchema } from '../../storyEngine/storyStateDeltaResponseSchema';
+import { buildStateExtractionAffordances } from '../../storyEngine/stateExtractionAffordances';
 import { createProductionStoryRuntime } from '../../storyEngine/productionRuntime';
 import { StoryEngineModelRuntimeError } from '../../storyEngine/productionRuntimeTypes';
 import type {
@@ -77,25 +78,28 @@ const createStateExtractorAdapter = (runtime: GeminiStoryEngineGenerationRuntime
     let selectedModelId: string | undefined;
     const execute = async (request: StateExtractorModelRequest): Promise<unknown> => {
         selectedModelId = undefined;
-        const participantIds = request.context.chapterPlan?.participantIds;
         if (!Number.isSafeInteger(request.chapterNumber) || request.chapterNumber < 1
             || request.chapterNumber !== request.context.targetChapter
-            || !Number.isSafeInteger(request.context.baseRevision) || request.context.baseRevision < 0
-            || !Array.isArray(participantIds) || participantIds.length < 1
-            || participantIds.some(id => typeof id !== 'string' || id.trim().length === 0)
-            || new Set(participantIds).size !== participantIds.length) {
+            || !Number.isSafeInteger(request.context.baseRevision) || request.context.baseRevision < 0) {
+            throw new StoryEngineModelRuntimeError('stateExtractor');
+        }
+        let affordances;
+        try {
+            affordances = buildStateExtractionAffordances(request.context);
+        } catch {
             throw new StoryEngineModelRuntimeError('stateExtractor');
         }
         const responseJsonSchema = buildStoryStateDeltaResponseJsonSchema(
             request.chapterNumber,
             request.context.baseRevision,
-            participantIds,
+            affordances,
         );
         const result = await runtime.run({
             role: 'stateExtractor',
             contents: JSON.stringify({
                 prompt: request.prompt,
-                context: request.context,
+                EXTRACTION_AFFORDANCES: affordances,
+                CONTEXT: request.context,
                 candidate: request.candidate,
             }),
             responseJsonSchema,

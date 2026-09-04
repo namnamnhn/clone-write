@@ -55,6 +55,11 @@ export {
 } from './stateExtractionContext';
 export { buildStateExtractorPrompt, extractState } from './stateExtractor';
 export {
+    buildStateExtractionAffordances,
+    StateExtractionAffordanceError,
+} from './stateExtractionAffordances';
+export type { StateExtractionAffordances } from './stateExtractionAffordances';
+export {
     DEFAULT_MAX_CANON_REVIEW_CHANGES,
     buildCanonCommitReview,
     prepareCanonCommit,

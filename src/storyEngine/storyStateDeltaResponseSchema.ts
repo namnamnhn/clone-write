@@ -1,3 +1,5 @@
+import type { StateExtractionAffordances } from './stateExtractionAffordances';
+
 export const STORY_STATE_DELTA_V2_OPERATION_FIELDS = [
     'factChanges',
     'epistemicChanges',
@@ -70,18 +72,114 @@ const locationChangesArray = (chapterNumber: number, participantIds: readonly st
     },
 } as const);
 
+const constrainedString = (values: readonly string[]) => values.length === 0
+    ? { type: 'string' } as const
+    : { type: 'string', enum: [...new Set(values)] } as const;
+
+const exactArray = (count: number, items: object) => ({
+    type: 'array', minItems: count, maxItems: count, items,
+} as const);
+
+const activationChangesArray = (chapterNumber: number, participantIds: readonly string[]) => ({
+    type: 'array',
+    items: {
+        type: 'object', additionalProperties: false,
+        required: ['characterId', 'active', 'provenance'],
+        properties: {
+            characterId: constrainedString(participantIds),
+            active: { type: 'boolean' },
+            lifeStatus: { type: 'string', enum: ['unknown', 'alive', 'dead'] },
+            provenance: chapterProvenance(chapterNumber),
+        },
+    },
+} as const);
+
+const relationshipChangesArray = (chapterNumber: number, affordances: StateExtractionAffordances) => exactArray(
+    affordances.expectedRelationshipDeltas.length,
+    {
+        type: 'object', additionalProperties: false,
+        required: ['id', 'relationshipId', 'participantIds', 'state', 'chapterNumber', 'provenance'],
+        properties: {
+            id: { type: 'string' },
+            relationshipId: constrainedString(affordances.allowedRelationshipIds),
+            participantIds: {
+                type: 'array', minItems: 2, items: constrainedString(affordances.participantIds),
+            },
+            state: constrainedString(affordances.expectedRelationshipDeltas.map(value => value.expectedState)),
+            chapterNumber: { type: 'integer', enum: [chapterNumber] },
+            provenance: chapterProvenance(chapterNumber),
+        },
+    },
+);
+
+const resourceChangesArray = (chapterNumber: number, affordances: StateExtractionAffordances) => exactArray(
+    affordances.expectedResourceDeltas.length,
+    {
+        type: 'object', additionalProperties: false,
+        required: ['id', 'characterId', 'resourceId', 'name', 'provenance'],
+        properties: {
+            id: { type: 'string' },
+            characterId: constrainedString(affordances.allowedResourceRefs.map(value => value.characterId)),
+            resourceId: constrainedString(affordances.allowedResourceRefs.map(value => value.resourceId)),
+            name: constrainedString(affordances.allowedResourceRefs.map(value => value.name)),
+            quantityDelta: { type: 'number' },
+            nextState: { type: 'string' },
+            provenance: chapterProvenance(chapterNumber),
+        },
+    },
+);
+
+const continuityChangesArray = (chapterNumber: number, affordances: StateExtractionAffordances) => exactArray(
+    affordances.continuityTargets.length,
+    {
+        type: 'object', additionalProperties: false,
+        required: ['operation', 'provenance'],
+        properties: {
+            operation: { type: 'string', enum: ['open', 'resolve', 'supersede'] },
+            entry: { type: 'object', additionalProperties: true },
+            continuityId: constrainedString(affordances.continuityTargets.map(value => value.id)),
+            chapterNumber: { type: 'integer', enum: [chapterNumber] },
+            provenance: chapterProvenance(chapterNumber),
+        },
+    },
+);
+
+const revealChangesArray = (chapterNumber: number, affordances: StateExtractionAffordances) => exactArray(
+    affordances.plannedRevealIds.length,
+    {
+        type: 'object', additionalProperties: false,
+        required: ['operation', 'occurrence'],
+        properties: {
+            operation: { type: 'string', enum: ['record'] },
+            occurrence: {
+                type: 'object', additionalProperties: false,
+                required: ['id', 'revealId', 'chapterNumber', 'provenance'],
+                properties: {
+                    id: { type: 'string' },
+                    revealId: constrainedString(affordances.plannedRevealIds),
+                    chapterNumber: { type: 'integer', enum: [chapterNumber] },
+                    provenance: chapterProvenance(chapterNumber),
+                },
+            },
+        },
+    },
+);
+
 /**
  * Compact Gemini guidance for the StateDelta V2 envelope, exact durable cursor, and
- * extraction-valid new facts/location changes. All other deep operation parsing,
- * reconciliation, and Canon representability remain runtime-owned.
+ * extraction-valid small operation families. Union-heavy operation parsing, exact
+ * cross-field reconciliation, and Canon representability remain runtime-owned.
  */
 export const buildStoryStateDeltaResponseJsonSchema = (
     chapterNumber: number,
     expectedRevision: number,
-    participantIds: readonly string[],
+    affordances: StateExtractionAffordances,
 ) => {
+    const participantIds = affordances.participantIds;
     if (!Number.isSafeInteger(chapterNumber) || chapterNumber < 1
         || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0
+        || affordances.kind !== 'state-extraction-affordances'
+        || affordances.targetChapter !== chapterNumber
         || !Array.isArray(participantIds) || participantIds.length < 1
         || participantIds.some(id => typeof id !== 'string' || id.trim().length === 0)
         || new Set(participantIds).size !== participantIds.length) {
@@ -110,11 +208,11 @@ export const buildStoryStateDeltaResponseJsonSchema = (
             epistemicChanges: operationArray(),
             locationChanges: locationChangesArray(chapterNumber, participantIds),
             statusChanges: operationArray(),
-            activationChanges: operationArray(),
-            relationshipChanges: operationArray(),
-            resourceChanges: operationArray(),
-            continuityChanges: operationArray(),
-            revealChanges: operationArray(),
+            activationChanges: activationChangesArray(chapterNumber, participantIds),
+            relationshipChanges: relationshipChangesArray(chapterNumber, affordances),
+            resourceChanges: resourceChangesArray(chapterNumber, affordances),
+            continuityChanges: continuityChangesArray(chapterNumber, affordances),
+            revealChanges: revealChangesArray(chapterNumber, affordances),
             foreshadowChanges: operationArray(),
             payoffChanges: operationArray(),
         },

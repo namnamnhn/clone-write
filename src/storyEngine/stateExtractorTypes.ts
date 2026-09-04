@@ -142,6 +142,13 @@ export interface StateExtractionContext {
     readonly controlledRevealIds: readonly string[];
     readonly openForeshadowThreads: readonly { readonly id: string; readonly writerLabel: string }[];
     readonly openPayoffObligations: readonly { readonly id: string; readonly writerLabel: string }[];
+    readonly existingContinuityEntriesNeededForPlan: readonly {
+        readonly id: string;
+        readonly kind: 'pending-thread' | 'obligation' | 'condition' | 'clue' | 'promise';
+        readonly text: string;
+        readonly status: 'open' | 'resolved' | 'superseded';
+        readonly establishedChapter: number;
+    }[];
 }
 
 export interface StateExtractorModelRequest {

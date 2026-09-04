@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     applyStoryStateDelta,
     buildPlannerContext,
+    buildStateExtractionAffordances,
     buildStateExtractorPrompt,
     buildValidatorStrategicView,
     buildCanonCommitReview,
@@ -452,6 +453,58 @@ describe('WORK 11 deterministic extraction contract', () => {
         expect(prompt).not.toContain(RAW_VAULT);
     });
 
+    it('states every remaining closed-world reconciliation contract', () => {
+        const prompt = buildStateExtractorPrompt(2);
+        [
+            'CLOSED-WORLD AFFORDANCES', 'RESOURCE RECONCILIATION', 'RELATIONSHIP RECONCILIATION',
+            'REVEAL RECONCILIATION', 'CONTINUITY AND CLUES', 'PARTICIPANT STATE',
+            'FORESHADOW AND PAYOFF',
+        ].forEach(section => expect(prompt).toContain(section));
+        expect(prompt).toContain('represent every {id,text} exactly once');
+        expect(prompt).toContain('never change the id or paraphrase text');
+        expect(prompt).toContain('cluesPlantedIds must be exact open clue entry IDs');
+        expect(prompt).toContain('cluesPaidOffIds must be exact resolve continuityId values');
+        expect(prompt).toContain('resourceChanges must have exactly');
+        expect(prompt).toContain('relationshipChanges must have exactly');
+        expect(prompt).toContain('occurrence.revealId set must exactly equal plannedRevealIds');
+        expect(prompt).toContain('Prefer [] over inventing');
+        expect(prompt).not.toContain(RAW_VAULT);
+    });
+
+    it('derives bounded exact extraction affordances from plan and base state only', async () => {
+        let modelRequest: StateExtractorModelRequest | undefined;
+        const result = await extractState({
+            approved: await approve(), state: baseState(), control,
+            model: { async extract(request) { modelRequest = request; return goldenDelta(); } },
+        });
+        expect(result.status).toBe('extracted-not-canon');
+        const affordances = buildStateExtractionAffordances(modelRequest!.context);
+        expect(affordances).toMatchObject({
+            kind: 'state-extraction-affordances', targetChapter: 2,
+            participantIds: ['a', 'b'],
+            expectedResourceDeltas: [{ characterId: 'a', resourceId: 'money', name: 'Money', quantityDelta: -10 }],
+            allowedResourceRefs: [{ characterId: 'a', resourceId: 'money', name: 'Money' }],
+            expectedRelationshipDeltas: [{ relationshipId: 'rel-ab', participantIds: ['a', 'b'], expectedState: 'allies' }],
+            allowedRelationshipIds: ['rel-ab'],
+            plannedRevealIds: ['reveal-alpha'],
+            cluesPlantedIds: ['new-clue'], cluesPaidOffIds: ['old-clue'],
+            expectedContinuityConsequences: [{ id: 'promise-2', text: 'The debt remains due.' }],
+            existingContinuityEntriesNeededForPlan: [{
+                id: 'old-clue', kind: 'clue', text: 'A broken seal remains unexplained.',
+                status: 'open', establishedChapter: 1,
+            }],
+            continuityTargets: [
+                { id: 'promise-2', allowedOperations: ['open'], exactText: 'The debt remains due.' },
+                { id: 'new-clue', allowedOperations: ['open'], requiredKind: 'clue' },
+                { id: 'old-clue', allowedOperations: ['resolve'] },
+            ],
+        });
+        const serialized = JSON.stringify(affordances);
+        expect(serialized).not.toContain(RAW_VAULT);
+        expect(serialized).not.toContain(modelRequest!.candidate.prose);
+        expect(serialized).not.toContain('authorOnlySecrets');
+    });
+
     it('keeps strict fact parsing authoritative when provider schema is bypassed', () => {
         const base = goldenDelta();
         const fact = base.factChanges[0];
@@ -550,6 +603,8 @@ describe('WORK 11 deterministic extraction contract', () => {
         ['omitted reveal', { revealChanges: [] }, 'PLAN_REVEAL_MISMATCH'],
         ['clue mismatch', { continuityChanges: goldenDelta().continuityChanges.filter(value => value.operation === 'open' ? value.entry!.id !== 'new-clue' : true) }, 'PLAN_CLUE_MISMATCH'],
         ['continuity consequence mismatch', { continuityChanges: goldenDelta().continuityChanges.filter(value => value.operation === 'open' ? value.entry!.id !== 'promise-2' : true) }, 'PLAN_CONTINUITY_MISMATCH'],
+        ['paraphrased continuity consequence', { continuityChanges: goldenDelta().continuityChanges.map(value => value.operation === 'open' && value.entry!.id === 'promise-2' ? { ...value, entry: { ...value.entry!, text: 'Paraphrased consequence.' } } : value) }, 'PLAN_CONTINUITY_MISMATCH'],
+        ['extra unrelated clue', { continuityChanges: [...goldenDelta().continuityChanges, { operation: 'open' as const, entry: { id: 'unplanned-clue', kind: 'clue' as const, text: 'Unplanned.', visibility: 'writer' as const, establishedChapter: 2, status: 'open' as const, provenance: provenance(2, 'unplanned-clue') }, provenance: provenance(2, 'unplanned-clue') }] }, 'PLAN_CLUE_MISMATCH'],
     ])('blocks %s', async (_label, changes, code) => {
         const result = await extractState({ approved: await approve(), state: baseState(), control, model: modelFor({ ...goldenDelta(), ...changes }) });
         expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code })]) });
@@ -565,6 +620,8 @@ describe('WORK 11 deterministic extraction contract', () => {
         ['off-screen knower', { epistemicChanges: [{ ...goldenDelta().epistemicChanges[0], characterId: 'c' }] }, 'INVALID_EPISTEMIC_CHANGE'],
         ['future source', { epistemicChanges: [{ ...goldenDelta().epistemicChanges[0], source: { type: 'witnessed', sourceChapter: 3 } }] }, 'INVALID_EXTRACTOR_OUTPUT'],
         ['wrong provenance', { factChanges: [{ ...goldenDelta().factChanges[0], provenance: { sourceChapter: 1, sourceType: 'canon-rule', sourceId: 'fake' } }] }, 'PROVENANCE_VIOLATION'],
+        ['activation wrong provenance', { activationChanges: [{ characterId: 'a', active: true, provenance: { sourceChapter: 1, sourceType: 'canon-rule' } }] }, 'PROVENANCE_VIOLATION'],
+        ['status wrong provenance', { statusChanges: [{ operation: 'add', record: { id: 'a-new-status', characterId: 'a', kind: 'status', state: 'changed', establishedChapter: 2, provenance: provenance(2, 'a-new-status') }, provenance: { sourceChapter: 1, sourceType: 'canon-rule' } }] }, 'PROVENANCE_VIOLATION'],
     ])('blocks %s', async (_label, changes, code) => {
         const result = await extractState({ approved: await approve(), state: baseState(), control, model: modelFor({ ...goldenDelta(), ...changes }) });
         expect(result).toMatchObject({ status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code })]) });
@@ -680,7 +737,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
         expect(prepareCanonCommit({ approved, extraction, state: baseState(), control, maxTotalChanges: 9 })).toMatchObject({ status: 'blocked', issues: [{ code: 'REVIEW_CAPACITY_EXCEEDED' }] });
     });
 
-    it('projects activation, foreshadow, and payoff operations without hidden review omissions', async () => {
+    it('accepts one valid response spanning all eleven operation families through Canon proposal', async () => {
         const approved = await approve();
         const expanded = v2(2, 1, {
             ...goldenDelta(),
@@ -689,6 +746,7 @@ describe('WORK 11 representability, review, and explicit Make Canon', () => {
             payoffChanges: [{ operation: 'open', obligation: { id: 'payoff-2', writerLabel: 'The river debt must return.', openedChapter: 2, provenance: provenance(2, 'chapter-2:payoff') } }],
         });
         const extraction = await extractState({ approved, state: baseState(), control, model: modelFor(expanded) });
+        expect(extraction.status).toBe('extracted-not-canon');
         const prepared = prepareCanonCommit({ approved, extraction, state: baseState(), control }) as CanonCommitProposal;
         expect(prepared.status).toBe('ready-for-review');
         expect(prepared.review).toMatchObject({ totalChanges: 13, activations: [{ characterId: 'a' }], foreshadow: [{ operation: 'open' }], payoffs: [{ operation: 'open' }] });
