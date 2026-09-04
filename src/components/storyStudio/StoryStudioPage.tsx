@@ -12,6 +12,7 @@ import { StoryStudioActionBar } from './StoryStudioActionBar';
 import { StoryStudioConfirmModal } from './StoryStudioConfirmModal';
 import { StoryStudioHeader } from './StoryStudioHeader';
 import { StoryStudioOverview } from './StoryStudioOverview';
+import { StoryStudioProjectLibrary } from './StoryStudioProjectLibrary';
 import { ValidationPanel } from './ValidationPanel';
 
 export interface StoryStudioPageProps {
@@ -39,13 +40,16 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
 
     if (studio.loadStatus === 'core-corrupt') return (
         <div className="flex h-full overflow-y-auto p-5">
-            <div className="m-auto max-w-xl rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900">
-                <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
-                <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
-                <p className="mt-2 text-sm leading-relaxed text-slate-500">{studio.errorMessage}</p>
-                <p className="mt-3 text-xs text-slate-400">Dữ liệu lỗi không bị tự động ghi đè. Chỉ xóa khi bạn chắc chắn muốn bỏ riêng dự án V4 này.</p>
-                <button type="button" onClick={() => studio.setDeleteConfirmationOpen(true)} className="mt-6 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white">Xóa dự án V4 lỗi khỏi máy</button>
-                <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4?" message="Thao tác này chỉ xóa khe lưu Story Studio V4 trên trình duyệt này; dữ liệu Sáng Tác cũ và toàn bộ database khác không bị xóa." confirmLabel="Xóa dự án V4" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
+            <div className="m-auto w-full max-w-3xl space-y-4">
+                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />}
+                <div className="rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900">
+                    <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
+                    <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-500">{studio.errorMessage}</p>
+                    <p className="mt-3 text-xs text-slate-400">Dữ liệu lỗi không bị tự động ghi đè. Chỉ xóa khi bạn chắc chắn muốn bỏ riêng dự án V4 này.</p>
+                    <button type="button" onClick={() => studio.setDeleteConfirmationOpen(true)} className="mt-6 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white">Xóa dự án V4 lỗi khỏi máy</button>
+                    <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4 lỗi?" message="Thao tác này chỉ xóa dự án Story Studio đang chọn. Các dự án Story Studio khác, dữ liệu Sáng Tác cũ và database khác không bị xóa." confirmLabel="Xóa dự án lỗi" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
+                </div>
             </div>
         </div>
     );
@@ -53,9 +57,8 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     if (studio.preparedImport) return (
         <div className="h-full overflow-y-auto p-4 sm:p-7">
             <div className="mx-auto max-w-5xl">
-                <StorySetupReviewPanel prepared={studio.preparedImport} displayName={studio.importDisplayName} disabled={disabled} onDisplayNameChange={studio.setImportDisplayName} onCreate={() => void studio.finishCreate(false)} onCancel={studio.cancelImport} />
+                <StorySetupReviewPanel prepared={studio.preparedImport} displayName={studio.importDisplayName} disabled={disabled} onDisplayNameChange={studio.setImportDisplayName} onCreate={() => void studio.finishCreate()} onCancel={studio.cancelImport} />
             </div>
-            <StoryStudioConfirmModal open={studio.replacementConfirmationOpen} title="Thay thế dự án hiện tại?" message="Một dự án V4 đang được lưu cục bộ. Chỉ xác nhận nếu bạn muốn thay thế toàn bộ khe dự án hiện tại bằng setup vừa review." confirmLabel="Thay thế dự án hiện tại" danger onCancel={() => studio.setReplacementConfirmationOpen(false)} onConfirm={() => void studio.finishCreate(true)} />
         </div>
     );
 
@@ -75,6 +78,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     return (
         <div className="h-full overflow-y-auto custom-scrollbar">
             <div className="mx-auto max-w-[1600px] space-y-6 p-4 pb-10 sm:p-6 lg:p-8">
+                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />}
                 {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
                 <StoryStudioHeader project={viewModel.project} onExitDemo={() => studio.setShowDemo(false)} />
                 <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${viewModel.project.isDemo ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>
@@ -91,7 +95,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
                 {project && <CanonicalChapterHistoryPanel project={project} />}
             </div>
             <StoryStudioConfirmModal open={studio.makeCanonConfirmationOpen} title={`Make Canon chương ${proposal?.targetChapter ?? ''}?`} message={`Bạn đang xác nhận ${proposal?.review.totalChanges ?? 0} thay đổi. Canon sẽ tiến đúng một chương và chương này không còn được coi là bản nháp sau khi lưu thành công.`} confirmLabel="Xác nhận Make Canon" onCancel={() => studio.setMakeCanonConfirmationOpen(false)} onConfirm={() => void studio.confirmMakeCanon()} />
-            <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4 khỏi máy?" message="Toàn bộ Canon, bộ nhớ và chương đã lưu của dự án V4 hiện tại sẽ bị xóa khỏi trình duyệt này. Dữ liệu Sáng Tác cũ không bị ảnh hưởng." confirmLabel="Xóa dự án V4" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
+            <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4 khỏi máy?" message="Toàn bộ Canon, bộ nhớ và chương đã lưu của dự án V4 hiện tại sẽ bị xóa khỏi trình duyệt này. Các dự án Story Studio khác và dữ liệu Sáng Tác cũ không bị ảnh hưởng." confirmLabel="Xóa dự án V4" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
         </div>
     );
 };

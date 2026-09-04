@@ -3,7 +3,11 @@ import { createGeminiProductionStoryRuntime } from '../../services/storyEngine';
 import { buildStoryStudioViewModel } from '../../storyStudio/storyStudioPresenter';
 import { EMPTY_STORY_STUDIO_SESSION, STORY_STUDIO_DEMO_VIEW_MODEL } from '../../storyStudio/storyStudioDemoViewModel';
 import { StoryStudioProjectController } from '../../storyStudio/production/storyStudioProjectController';
-import type { StoryStudioRuntimeProject } from '../../storyStudio/production/storyStudioProjectTypes';
+import type {
+    StoryStudioProjectId,
+    StoryStudioProjectLibraryViewEntry,
+    StoryStudioRuntimeProject,
+} from '../../storyStudio/production/storyStudioProjectTypes';
 import { buildConnectedStoryStudioSession } from '../../storyStudio/production/storyStudioSession';
 import {
     prepareAuthorTextStorySetupImport,
@@ -58,6 +62,12 @@ export const getStoryStudioSafeMessage = (error: unknown): string => {
         CANCELLED: 'Đã dừng an toàn. Canon và bộ nhớ không thay đổi.',
         SAVE_FAILED: 'Không thể lưu dự án vào trình duyệt. Trạng thái bền vững trước đó vẫn được giữ nguyên.',
         LOAD_FAILED: 'Không thể đọc dự án V4 đã lưu trên trình duyệt này.',
+        INVALID_LIBRARY: 'Thư viện dự án Story Studio không vượt qua kiểm tra toàn vẹn.',
+        MIGRATION_FAILED: 'Không thể nâng cấp dự án Story Studio cũ. Dữ liệu cũ vẫn được giữ nguyên để thử lại.',
+        LEGACY_CLEANUP_FAILED: 'Dự án đã được nâng cấp an toàn, nhưng bản lưu cũ chưa thể dọn. Hãy tải lại trang.',
+        PROJECT_NOT_FOUND: 'Dự án đã chọn không còn trong thư viện.',
+        PROJECT_UNAVAILABLE: 'Dự án đã chọn bị thiếu hoặc không hợp lệ. Canon khác không bị thay đổi.',
+        PROJECT_OPERATION_BLOCKED: 'Hãy chờ bước model hoặc lưu hiện tại hoàn tất trước khi đổi thư viện.',
         MALFORMED_JSON: 'Gemini trả về JSON không hợp lệ; dự án chưa được tạo.',
         EMPTY_RESPONSE: 'Gemini không trả về bản biên dịch setup.',
         SETUP_SOURCE_SIZE_INVALID: 'Tệp setup trống hoặc vượt giới hạn an toàn 2 MiB.',
@@ -86,6 +96,8 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
 
     const [loadStatus, setLoadStatus] = useState<StoryStudioLoadStatus>('loading');
     const [project, setProject] = useState<StoryStudioRuntimeProject>();
+    const [projectLibrary, setProjectLibrary] = useState<readonly StoryStudioProjectLibraryViewEntry[]>([]);
+    const [activeProjectId, setActiveProjectId] = useState<StoryStudioProjectId>();
     const [showDemo, setShowDemo] = useState(false);
     const [saveStatus, setSaveStatus] = useState<StoryStudioSaveStatus>('saved');
     const [operation, setOperation] = useState<StoryStudioOperation>();
@@ -93,7 +105,6 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     const [recoveryWarning, setRecoveryWarning] = useState(false);
     const [preparedImport, setPreparedImport] = useState<PreparedStorySetupImport>();
     const [importDisplayName, setImportDisplayName] = useState('');
-    const [replacementConfirmationOpen, setReplacementConfirmationOpen] = useState(false);
     const [makeCanonConfirmationOpen, setMakeCanonConfirmationOpen] = useState(false);
     const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
     const [batchSize, setBatchSizeState] = useState<StoryStudioBatchSize>(2);
@@ -102,6 +113,8 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         mountedRef.current = true;
         void controller.load().then((result) => {
             if (!mountedRef.current) return;
+            setProjectLibrary(result.library?.entries ?? []);
+            setActiveProjectId(result.library?.index.activeProjectId);
             if (result.status === 'empty') {
                 setLoadStatus('empty');
                 return;
@@ -127,7 +140,9 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         setProject(next);
         setLoadStatus('connected');
         setSaveStatus('saved');
-    }, []);
+        setProjectLibrary(controller.projectLibrary);
+        setActiveProjectId(controller.activeProjectId);
+    }, [controller]);
 
     const handleError = useCallback((error: unknown) => {
         logSafeStorySetupImportDiagnostic(error);
@@ -204,23 +219,16 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         }
     }, [enabledModels, handleError, operation]);
 
-    const finishCreate = useCallback(async (confirmReplacement: boolean) => {
+    const finishCreate = useCallback(async () => {
         if (!preparedImport || preparedImport.review.criticalIssues.length > 0) return;
         setSaveStatus('saving');
         try {
-            const next = await controller.createProject(preparedImport.setupDocument, importDisplayName, confirmReplacement);
+            const next = await controller.createProject(preparedImport.setupDocument, importDisplayName);
             publish(next);
             setPreparedImport(undefined);
-            setReplacementConfirmationOpen(false);
             setShowDemo(false);
             addToast('Đã tạo và lưu dự án Story Engine V4.', 'success');
-        } catch (error) {
-            const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
-            if (code === 'PROJECT_REPLACEMENT_CONFIRMATION_REQUIRED') {
-                setSaveStatus('saved');
-                setReplacementConfirmationOpen(true);
-            } else handleError(error);
-        }
+        } catch (error) { handleError(error); }
     }, [addToast, controller, handleError, importDisplayName, preparedImport, publish]);
 
     const startBatch = useCallback(async () => {
@@ -295,32 +303,62 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         setDeleteConfirmationOpen(false);
         try {
             setSaveStatus('saving');
-            await controller.deleteProject();
-            setProject(undefined);
+            const result = await controller.deleteProject();
             setPreparedImport(undefined);
-            setLoadStatus('empty');
-            setRecoveryWarning(false);
+            setProjectLibrary(result.library?.entries ?? []);
+            setActiveProjectId(result.library?.index.activeProjectId);
+            if (result.status === 'loaded' || result.status === 'workflow-recovered') {
+                setProject(result.project);
+                setBatchSizeState(result.project.batchQueue.requestedSize);
+                setLoadStatus('connected');
+                setRecoveryWarning(result.status === 'workflow-recovered');
+            } else {
+                setProject(undefined);
+                setLoadStatus(result.status === 'core-corrupt' ? 'core-corrupt' : 'empty');
+                setRecoveryWarning(false);
+            }
             setSaveStatus('saved');
             addToast('Đã xóa riêng dự án V4 khỏi trình duyệt này.', 'info');
         } catch (error) { handleError(error); }
     }, [addToast, controller, handleError]);
 
+    const switchProject = useCallback(async (projectId: StoryStudioProjectId) => {
+        setSaveStatus('saving');
+        try {
+            const next = await controller.switchProject(projectId);
+            publish(next);
+            setBatchSizeState(next.batchQueue.requestedSize);
+            setRecoveryWarning(false);
+        } catch (error) { handleError(error); }
+    }, [controller, handleError, publish]);
+
+    const renameActiveProject = useCallback(async (displayName: string) => {
+        setSaveStatus('saving');
+        try {
+            publish(await controller.updateDisplayName(displayName));
+            addToast('Đã đổi tên dự án Story Studio.', 'success');
+        } catch (error) { handleError(error); }
+    }, [addToast, controller, handleError, publish]);
+
     const viewModel = useMemo(() => {
         if (showDemo) return STORY_STUDIO_DEMO_VIEW_MODEL;
-        if (project) return buildStoryStudioViewModel(buildConnectedStoryStudioSession(project));
+        if (project) {
+            const catalogDisplayName = projectLibrary.find(entry => entry.projectId === activeProjectId)?.displayName;
+            return buildStoryStudioViewModel(buildConnectedStoryStudioSession(project, catalogDisplayName));
+        }
         return buildStoryStudioViewModel(EMPTY_STORY_STUDIO_SESSION);
-    }, [project, showDemo]);
+    }, [activeProjectId, project, projectLibrary, showDemo]);
 
     const setBatchSize = useCallback((value: number) => {
         if (value === 1 || value === 2 || value === 3) setBatchSizeState(value);
     }, []);
 
     return {
-        loadStatus, project, showDemo, setShowDemo, viewModel, saveStatus, operation,
+        loadStatus, project, projectLibrary, activeProjectId, showDemo, setShowDemo, viewModel, saveStatus, operation,
         errorMessage, setErrorMessage, recoveryWarning,
         preparedImport, importDisplayName, setImportDisplayName, importFile,
-        cancelImport: () => { setPreparedImport(undefined); setReplacementConfirmationOpen(false); },
-        finishCreate, replacementConfirmationOpen, setReplacementConfirmationOpen,
+        cancelImport: () => { setPreparedImport(undefined); },
+        finishCreate, switchProject, renameActiveProject,
         batchSize, setBatchSize, startBatch, resume, stop, rewriteFromSamePlan, replan,
         makeCanonConfirmationOpen, setMakeCanonConfirmationOpen, confirmMakeCanon,
         deleteConfirmationOpen, setDeleteConfirmationOpen, deleteProject, onOpenGeminiSettings,
