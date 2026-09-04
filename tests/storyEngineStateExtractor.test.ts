@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     applyStoryStateDelta,
     buildPlannerContext,
+    buildStateExtractorPrompt,
     buildValidatorStrategicView,
     buildCanonCommitReview,
     createInitialStoryState,
@@ -421,6 +422,37 @@ describe('WORK 11 untrusted V2 extractor protocol', () => {
 });
 
 describe('WORK 11 deterministic extraction contract', () => {
+    it('states the exact extraction-valid factChanges contract without exposing author truth', () => {
+        const prompt = buildStateExtractorPrompt(37);
+        expect(prompt).toContain('FACT CHANGES');
+        expect(prompt).toContain('actually establishes a new canonical fact');
+        expect(prompt).toContain('establishedChapter=37');
+        expect(prompt).toContain('visibility="writer"');
+        expect(prompt).toContain('status="active"');
+        expect(prompt).toContain('provenance.sourceChapter=37');
+        expect(prompt).toContain('provenance.sourceType="chapter"');
+        expect(prompt).toContain('provenance.sourceId is optional');
+        expect(prompt).toContain('Do not add extra fields');
+        expect(prompt).toContain('return factChanges: []');
+        expect(prompt).toContain('stable machine IDs');
+        expect(prompt).not.toContain(RAW_VAULT);
+    });
+
+    it('keeps strict fact parsing authoritative when provider schema is bypassed', () => {
+        const base = goldenDelta();
+        const fact = base.factChanges[0];
+        const malformed = [
+            { ...base, factChanges: [{ ...fact, id: undefined }] },
+            { ...base, factChanges: [{ ...fact, text: undefined }] },
+            { ...base, factChanges: [{ ...fact, unexpected: 'not allowed' }] },
+            { ...base, factChanges: [{ ...fact, id: '' }] },
+            { ...base, factChanges: [{ ...fact, text: '' }] },
+            { ...base, factChanges: [{ ...fact, provenance: { ...fact.provenance, sourceType: 'not-a-source' } }] },
+        ];
+        malformed.forEach(value => expect(() => parseStoryStateDelta(value))
+            .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
+    });
+
     it('accepts the exact resource, relationship, reveal, clue, and continuity contract', async () => {
         expect(await extractGolden(await approve())).toMatchObject({ status: 'extracted-not-canon', delta: goldenDelta() });
     });

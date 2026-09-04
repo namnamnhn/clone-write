@@ -26,9 +26,36 @@ const operationArray = () => ({
     items: { type: 'object', additionalProperties: true },
 } as const);
 
+const factChangesArray = (chapterNumber: number) => ({
+    type: 'array',
+    items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'text', 'establishedChapter', 'visibility', 'status', 'provenance'],
+        properties: {
+            id: { type: 'string' },
+            text: { type: 'string' },
+            establishedChapter: { type: 'integer', enum: [chapterNumber] },
+            visibility: { type: 'string', enum: ['writer'] },
+            status: { type: 'string', enum: ['active'] },
+            provenance: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['sourceChapter', 'sourceType'],
+                properties: {
+                    sourceChapter: { type: 'integer', enum: [chapterNumber] },
+                    sourceType: { type: 'string', enum: ['chapter'] },
+                    sourceId: { type: 'string' },
+                },
+            },
+        },
+    },
+} as const);
+
 /**
- * Compact Gemini guidance for the StateDelta V2 envelope and exact durable cursor.
- * Deep operation parsing, reconciliation, and Canon representability remain runtime-owned.
+ * Compact Gemini guidance for the StateDelta V2 envelope, exact durable cursor, and
+ * extraction-valid new facts. All other deep operation parsing, reconciliation, and
+ * Canon representability remain runtime-owned.
  */
 export const buildStoryStateDeltaResponseJsonSchema = (
     chapterNumber: number,
@@ -57,7 +84,7 @@ export const buildStoryStateDeltaResponseJsonSchema = (
             schemaVersion: { type: 'integer', enum: [2] },
             chapterNumber: { type: 'integer', enum: [chapterNumber] },
             expectedRevision: { type: 'integer', enum: [expectedRevision] },
-            factChanges: operationArray(),
+            factChanges: factChangesArray(chapterNumber),
             epistemicChanges: operationArray(),
             locationChanges: operationArray(),
             statusChanges: operationArray(),

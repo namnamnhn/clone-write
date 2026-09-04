@@ -531,7 +531,32 @@ describe('WORK 12 role-specific Gemini serialization', () => {
             'kind', 'schemaVersion', 'chapterNumber', 'expectedRevision',
             ...STORY_STATE_DELTA_V2_OPERATION_FIELDS,
         ]);
-        STORY_STATE_DELTA_V2_OPERATION_FIELDS.forEach(field => {
+        expect(schema.properties.factChanges).toEqual({
+            type: 'array',
+            items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['id', 'text', 'establishedChapter', 'visibility', 'status', 'provenance'],
+                properties: {
+                    id: { type: 'string' },
+                    text: { type: 'string' },
+                    establishedChapter: { type: 'integer', enum: [chapterNumber] },
+                    visibility: { type: 'string', enum: ['writer'] },
+                    status: { type: 'string', enum: ['active'] },
+                    provenance: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['sourceChapter', 'sourceType'],
+                        properties: {
+                            sourceChapter: { type: 'integer', enum: [chapterNumber] },
+                            sourceType: { type: 'string', enum: ['chapter'] },
+                            sourceId: { type: 'string' },
+                        },
+                    },
+                },
+            },
+        });
+        STORY_STATE_DELTA_V2_OPERATION_FIELDS.filter(field => field !== 'factChanges').forEach(field => {
             expect(schema.properties[field]).toEqual({
                 type: 'array', items: { type: 'object', additionalProperties: true },
             });
@@ -580,9 +605,9 @@ describe('WORK 12 role-specific Gemini serialization', () => {
             hasObjectCycle: false, hasReferenceCycle: false, definitionCount: 0,
         });
         // Conservative internal maintenance budget, not a claimed Google API hard limit.
-        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(30);
-        expect(complexity.maxDepth).toBeLessThanOrEqual(3);
-        expect(complexity.serializedBytes).toBeLessThanOrEqual(3_000);
+        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(40);
+        expect(complexity.maxDepth).toBeLessThanOrEqual(5);
+        expect(complexity.serializedBytes).toBeLessThanOrEqual(4_000);
     });
 
     it('keeps the Planner provider schema inside the supported Gemini subset', () => {
