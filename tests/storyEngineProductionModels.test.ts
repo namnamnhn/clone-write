@@ -55,6 +55,10 @@ const plannerPromptContext = (): PlannerContext => ({
 const plannerSchema = (context: PlannerContext = plannerPromptContext()) =>
     buildInternalChapterPlanResponseJsonSchema(buildPlannerValidationAffordances(context).allowedPovIds);
 
+const extractorParticipantIds = ['participant-a', 'participant-b'] as const;
+const extractorSchema = (chapterNumber = 1, expectedRevision = 0) =>
+    buildStoryStateDeltaResponseJsonSchema(chapterNumber, expectedRevision, extractorParticipantIds);
+
 const extractorRequest = (
     chapterNumber = 1,
     baseRevision = 0,
@@ -63,7 +67,11 @@ const extractorRequest = (
     kind: 'state-extractor-model-request',
     chapterNumber,
     prompt: 'EXTRACT',
-    context: { targetChapter: contextTargetChapter, baseRevision },
+    context: {
+        targetChapter: contextTargetChapter,
+        baseRevision,
+        chapterPlan: { participantIds: [...extractorParticipantIds] },
+    },
     candidate: { prose: 'chapter' },
 } as unknown as StateExtractorModelRequest);
 
@@ -479,7 +487,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
 
         expect(configs[0]).toMatchObject({ responseJsonSchema: plannerSchema() });
         configs.slice(1, 4).forEach(config => expect(config).not.toHaveProperty('responseJsonSchema'));
-        expect(configs[4]).toMatchObject({ responseJsonSchema: buildStoryStateDeltaResponseJsonSchema(1, 0) });
+        expect(configs[4]).toMatchObject({ responseJsonSchema: extractorSchema() });
     });
 
     it('keeps Writer prompt-only and preserves distinct privileged/safe envelopes', async () => {
@@ -508,13 +516,18 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         expect(JSON.parse(captures.get('repair')!)).toEqual({ prompt: 'REPAIR', context: { safe: 'ISSUE_SAFE' } });
         expect(JSON.parse(captures.get('stateExtractor')!)).toEqual({
             prompt: 'EXTRACT',
-            context: { targetChapter: 1, baseRevision: 0, safe: 'EXTRACTION_SAFE' },
+            context: {
+                targetChapter: 1,
+                baseRevision: 0,
+                chapterPlan: { participantIds: [...extractorParticipantIds] },
+                safe: 'EXTRACTION_SAFE',
+            },
             candidate: { prose: 'chapter' },
         });
         expect(captures.get('repair')).not.toContain('SECRET_EVIDENCE');
         expect(captures.get('stateExtractor')).not.toContain('SECRET_EVIDENCE');
         expect(schemaCaptures.get('planner')).toEqual(plannerSchema());
-        expect(schemaCaptures.get('stateExtractor')).toEqual(buildStoryStateDeltaResponseJsonSchema(1, 0));
+        expect(schemaCaptures.get('stateExtractor')).toEqual(extractorSchema());
         expect(['writer', 'semanticValidator', 'repair'].every(role => schemaCaptures.get(role) === undefined)).toBe(true);
     });
 
@@ -522,7 +535,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         [1, 0],
         [37, 36],
     ])('builds the exact compact StateDelta cursor schema for C%s/rev%s', (chapterNumber, expectedRevision) => {
-        const schema = buildStoryStateDeltaResponseJsonSchema(chapterNumber, expectedRevision);
+        const schema = extractorSchema(chapterNumber, expectedRevision);
         expect(schema.properties.kind).toEqual({ type: 'string', enum: ['story-state-delta'] });
         expect(schema.properties.schemaVersion).toEqual({ type: 'integer', enum: [2] });
         expect(schema.properties.chapterNumber).toEqual({ type: 'integer', enum: [chapterNumber] });
@@ -556,7 +569,32 @@ describe('WORK 12 role-specific Gemini serialization', () => {
                 },
             },
         });
-        STORY_STATE_DELTA_V2_OPERATION_FIELDS.filter(field => field !== 'factChanges').forEach(field => {
+        expect(schema.properties.locationChanges).toEqual({
+            type: 'array',
+            items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['id', 'characterId', 'location', 'sinceChapter', 'provenance'],
+                properties: {
+                    id: { type: 'string' },
+                    characterId: { type: 'string', enum: [...extractorParticipantIds] },
+                    location: { type: 'string' },
+                    sinceChapter: { type: 'integer', enum: [chapterNumber] },
+                    provenance: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['sourceChapter', 'sourceType'],
+                        properties: {
+                            sourceChapter: { type: 'integer', enum: [chapterNumber] },
+                            sourceType: { type: 'string', enum: ['chapter'] },
+                            sourceId: { type: 'string' },
+                        },
+                    },
+                },
+            },
+        });
+        STORY_STATE_DELTA_V2_OPERATION_FIELDS
+            .filter(field => field !== 'factChanges' && field !== 'locationChanges').forEach(field => {
             expect(schema.properties[field]).toEqual({
                 type: 'array', items: { type: 'object', additionalProperties: true },
             });
@@ -574,7 +612,7 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         const adapter = createGeminiStoryEngineAdapters(runtime).stateExtractor;
         await adapter.extract(extractorRequest(37, 36));
         expect(captured).toMatchObject({
-            role: 'stateExtractor', responseJsonSchema: buildStoryStateDeltaResponseJsonSchema(37, 36),
+            role: 'stateExtractor', responseJsonSchema: extractorSchema(37, 36),
         });
         expect((adapter as typeof adapter & { getLastSelectedModelId(): string | undefined })
             .getLastSelectedModelId()).toBe('gemini-state-extractor');
@@ -584,6 +622,10 @@ describe('WORK 12 role-specific Gemini serialization', () => {
         ['mismatched target chapter', extractorRequest(2, 1, 3)],
         ['non-positive chapter', extractorRequest(0, 0, 0)],
         ['negative base revision', extractorRequest(1, -1)],
+        ['missing participant allow-list', {
+            ...extractorRequest(),
+            context: { ...extractorRequest().context, chapterPlan: { participantIds: [] } as never },
+        }],
     ])('fails closed before runtime.run for an invalid extractor cursor: %s', async (_label, request) => {
         const run = vi.fn<GeminiStoryEngineGenerationRuntime['run']>();
         await expect(createGeminiStoryEngineAdapters({ run }).stateExtractor.extract(request))
@@ -594,8 +636,13 @@ describe('WORK 12 role-specific Gemini serialization', () => {
     });
 
     it('keeps the StateDelta envelope schema provider-compatible and well below its maintenance budget', () => {
-        const schema = buildStoryStateDeltaResponseJsonSchema(37, 36);
+        const realisticParticipantIds = Array.from(
+            { length: 24 }, (_, index) => `chapter-participant-${String(index + 1).padStart(2, '0')}`,
+        );
+        const schema = buildStoryStateDeltaResponseJsonSchema(37, 36, realisticParticipantIds);
         expect(auditGeminiResponseSchema(schema)).toEqual([]);
+        expect(schema.properties.locationChanges.items.properties.characterId.enum)
+            .toEqual(realisticParticipantIds);
         const serialized = JSON.stringify(schema);
         ['oneOf', 'anyOf', 'allOf', 'const', 'pattern', 'minLength'].forEach(keyword => {
             expect(serialized).not.toContain(`"${keyword}"`);
@@ -605,9 +652,9 @@ describe('WORK 12 role-specific Gemini serialization', () => {
             hasObjectCycle: false, hasReferenceCycle: false, definitionCount: 0,
         });
         // Conservative internal maintenance budget, not a claimed Google API hard limit.
-        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(40);
+        expect(complexity.schemaNodeCount).toBeLessThanOrEqual(50);
         expect(complexity.maxDepth).toBeLessThanOrEqual(5);
-        expect(complexity.serializedBytes).toBeLessThanOrEqual(4_000);
+        expect(complexity.serializedBytes).toBeLessThanOrEqual(5_000);
     });
 
     it('keeps the Planner provider schema inside the supported Gemini subset', () => {

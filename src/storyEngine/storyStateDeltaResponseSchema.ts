@@ -26,6 +26,17 @@ const operationArray = () => ({
     items: { type: 'object', additionalProperties: true },
 } as const);
 
+const chapterProvenance = (chapterNumber: number) => ({
+    type: 'object',
+    additionalProperties: false,
+    required: ['sourceChapter', 'sourceType'],
+    properties: {
+        sourceChapter: { type: 'integer', enum: [chapterNumber] },
+        sourceType: { type: 'string', enum: ['chapter'] },
+        sourceId: { type: 'string' },
+    },
+} as const);
+
 const factChangesArray = (chapterNumber: number) => ({
     type: 'array',
     items: {
@@ -38,31 +49,42 @@ const factChangesArray = (chapterNumber: number) => ({
             establishedChapter: { type: 'integer', enum: [chapterNumber] },
             visibility: { type: 'string', enum: ['writer'] },
             status: { type: 'string', enum: ['active'] },
-            provenance: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['sourceChapter', 'sourceType'],
-                properties: {
-                    sourceChapter: { type: 'integer', enum: [chapterNumber] },
-                    sourceType: { type: 'string', enum: ['chapter'] },
-                    sourceId: { type: 'string' },
-                },
-            },
+            provenance: chapterProvenance(chapterNumber),
+        },
+    },
+} as const);
+
+const locationChangesArray = (chapterNumber: number, participantIds: readonly string[]) => ({
+    type: 'array',
+    items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'characterId', 'location', 'sinceChapter', 'provenance'],
+        properties: {
+            id: { type: 'string' },
+            characterId: { type: 'string', enum: [...participantIds] },
+            location: { type: 'string' },
+            sinceChapter: { type: 'integer', enum: [chapterNumber] },
+            provenance: chapterProvenance(chapterNumber),
         },
     },
 } as const);
 
 /**
  * Compact Gemini guidance for the StateDelta V2 envelope, exact durable cursor, and
- * extraction-valid new facts. All other deep operation parsing, reconciliation, and
- * Canon representability remain runtime-owned.
+ * extraction-valid new facts/location changes. All other deep operation parsing,
+ * reconciliation, and Canon representability remain runtime-owned.
  */
 export const buildStoryStateDeltaResponseJsonSchema = (
     chapterNumber: number,
     expectedRevision: number,
+    participantIds: readonly string[],
 ) => {
     if (!Number.isSafeInteger(chapterNumber) || chapterNumber < 1
-        || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+        || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0
+        || !Array.isArray(participantIds) || participantIds.length < 1
+        || participantIds.some(id => typeof id !== 'string' || id.trim().length === 0)
+        || new Set(participantIds).size !== participantIds.length) {
         throw new StoryStateDeltaResponseSchemaError();
     }
     return {
@@ -86,7 +108,7 @@ export const buildStoryStateDeltaResponseJsonSchema = (
             expectedRevision: { type: 'integer', enum: [expectedRevision] },
             factChanges: factChangesArray(chapterNumber),
             epistemicChanges: operationArray(),
-            locationChanges: operationArray(),
+            locationChanges: locationChangesArray(chapterNumber, participantIds),
             statusChanges: operationArray(),
             activationChanges: operationArray(),
             relationshipChanges: operationArray(),

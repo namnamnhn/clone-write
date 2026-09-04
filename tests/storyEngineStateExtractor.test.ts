@@ -438,6 +438,20 @@ describe('WORK 11 deterministic extraction contract', () => {
         expect(prompt).not.toContain(RAW_VAULT);
     });
 
+    it('states the exact extraction-valid locationChanges contract without inventing movement', () => {
+        const prompt = buildStateExtractorPrompt(37);
+        expect(prompt).toContain('LOCATION CHANGES');
+        expect(prompt).toContain('actually establishes that a participant is now at a new or current canonical location');
+        expect(prompt).toContain('exactly id, characterId, location, sinceChapter, and provenance');
+        expect(prompt).toContain('sinceChapter=37');
+        expect(prompt).toContain('provenance.sourceChapter=37');
+        expect(prompt).toContain('provenance.sourceType="chapter"');
+        expect(prompt).toContain('provenance.sourceId is optional');
+        expect(prompt).toContain('return locationChanges: []');
+        expect(prompt).toContain('Never infer hidden or off-page movement');
+        expect(prompt).not.toContain(RAW_VAULT);
+    });
+
     it('keeps strict fact parsing authoritative when provider schema is bypassed', () => {
         const base = goldenDelta();
         const fact = base.factChanges[0];
@@ -451,6 +465,60 @@ describe('WORK 11 deterministic extraction contract', () => {
         ];
         malformed.forEach(value => expect(() => parseStoryStateDelta(value))
             .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
+    });
+
+    it('keeps strict location parsing authoritative when provider schema is bypassed', () => {
+        const base = goldenDelta();
+        const location = base.locationChanges[0];
+        const malformed = [
+            { ...base, locationChanges: [{ ...location, id: undefined }] },
+            { ...base, locationChanges: [{ ...location, characterId: undefined }] },
+            { ...base, locationChanges: [{ ...location, location: undefined }] },
+            { ...base, locationChanges: [{ ...location, location: '' }] },
+            { ...base, locationChanges: [{ ...location, unexpected: 'not allowed' }] },
+            { ...base, locationChanges: [{ ...location, provenance: { sourceChapter: 2 } }] },
+            { ...base, locationChanges: [{
+                ...location, provenance: { ...location.provenance, sourceType: 'not-a-source' },
+            }] },
+        ];
+        malformed.forEach(value => expect(() => parseStoryStateDelta(value))
+            .toThrowError(expect.objectContaining({ code: 'INVALID_DELTA' })));
+    });
+
+    it('keeps runtime temporal, provenance, identity, and participant checks for location changes', async () => {
+        const location = goldenDelta().locationChanges[0];
+        const wrongChapter = await extractState({
+            approved: await approve(), state: baseState(), control,
+            model: modelFor({ ...goldenDelta(), locationChanges: [{ ...location, sinceChapter: 3 }] }),
+        });
+        expect(wrongChapter).toMatchObject({
+            status: 'blocked', issues: [{
+                code: 'INVALID_EXTRACTOR_OUTPUT', parseCode: 'TEMPORAL_VIOLATION',
+                parsePathFamily: 'locationChanges',
+            }],
+        });
+
+        const wrongProvenance = await extractState({
+            approved: await approve(), state: baseState(), control,
+            model: modelFor({ ...goldenDelta(), locationChanges: [{
+                ...location, provenance: { sourceChapter: 2, sourceType: 'canon-rule' },
+            }] }),
+        });
+        expect(wrongProvenance).toMatchObject({
+            status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code: 'PROVENANCE_VIOLATION' })]),
+        });
+
+        const unknownCharacterDelta = {
+            ...goldenDelta(), locationChanges: [{ ...location, characterId: 'unknown-character' }],
+        };
+        const unauthorized = await extractState({
+            approved: await approve(), state: baseState(), control, model: modelFor(unknownCharacterDelta),
+        });
+        expect(unauthorized).toMatchObject({
+            status: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code: 'UNAUTHORIZED_CHARACTER_MUTATION' })]),
+        });
+        expect(() => applyStoryStateDelta(control, baseState(), unknownCharacterDelta))
+            .toThrowError(expect.objectContaining({ code: 'UNKNOWN_CHARACTER' }));
     });
 
     it('accepts the exact resource, relationship, reveal, clue, and continuity contract', async () => {
