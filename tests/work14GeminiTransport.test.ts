@@ -5,7 +5,11 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GenerateContentParameters, GenerateContentResponse } from '@google/genai';
-import { createGeminiBridgeMiddleware, normalizeGeminiBridgeError } from '../server/geminiBridge';
+import {
+    createGeminiBridgeMiddleware,
+    isSupportedGeminiApiModelId,
+    normalizeGeminiBridgeError,
+} from '../server/geminiBridge';
 import { resolveGeminiTransportMode } from '../server/geminiBridgeMode';
 import {
     createGeminiServerBridgeClient,
@@ -47,6 +51,26 @@ const textResponse = (text: string): GenerateContentResponse => ({
 } as unknown as GenerateContentResponse);
 
 describe('WORK14 Gemini transport selection', () => {
+    it.each([
+        'gemini-3.7-flash',
+        'gemma-4-31b-it',
+        'gemma-4-26b-a4b-it',
+    ])('accepts supported Google Gemini API model ID %s', modelId => {
+        expect(isSupportedGeminiApiModelId(modelId)).toBe(true);
+    });
+
+    it.each([
+        'deepseek:deepseek-chat',
+        'deepseek-chat',
+        'openrouter/google/gemini',
+        'untrusted-model',
+        '../gemini-3.7-flash',
+        'gemma_4_31b_it',
+        '',
+    ])('rejects non-Google or untrusted model ID %s', modelId => {
+        expect(isSupportedGeminiApiModelId(modelId)).toBe(false);
+    });
+
     it('keeps local Vite direct by default and selects the server bridge from explicit/server-secret configuration', () => {
         expect(resolveGeminiTransportMode({})).toBe('direct');
         expect(resolveGeminiTransportMode({ GEMINI_TRANSPORT_MODE: 'direct', GEMINI_API_KEY: 'secret' })).toBe('direct');
@@ -124,6 +148,56 @@ describe('WORK14 Gemini transport selection', () => {
 });
 
 describe('WORK14 same-origin Node bridge', () => {
+    it('forwards a supported Gemma request without altering its model ID', async () => {
+        const observedModels: string[] = [];
+        const baseUrl = await startBridge(() => ({
+            models: {
+                generateContent: async request => {
+                    observedModels.push(request.model);
+                    return textResponse('gemma response');
+                },
+                generateContentStream: async () => (async function* () { /* unused */ })(),
+            },
+        }));
+        const response = await fetch(`${baseUrl}${GEMINI_BRIDGE_GENERATE_PATH}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                request: { model: 'gemma-4-31b-it', contents: 'Hi' },
+            }),
+        });
+        expect(response.status).toBe(200);
+        expect(observedModels).toEqual(['gemma-4-31b-it']);
+        expect(await response.text()).toContain('gemma response');
+    });
+
+    it.each([
+        'deepseek:deepseek-chat',
+        'untrusted-model',
+    ])('rejects unsupported hosted model %s before provider execution', async modelId => {
+        const createAi = vi.fn(() => ({
+            models: {
+                generateContent: async () => textResponse('must not run'),
+                generateContentStream: async () => (async function* () { /* unused */ })(),
+            },
+        }));
+        const baseUrl = await startBridge(createAi);
+        const response = await fetch(`${baseUrl}${GEMINI_BRIDGE_GENERATE_PATH}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ request: { model: modelId, contents: 'Hi' } }),
+        });
+        expect(response.status).toBe(400);
+        expect(createAi).not.toHaveBeenCalled();
+        expect(await response.json()).toEqual({
+            error: {
+                code: 'GEMINI_BRIDGE_REQUEST_FAILED',
+                httpStatus: 400,
+                apiStatus: 'INVALID_ARGUMENT',
+            },
+        });
+    });
+
     it('uses the server secret in memory and never returns either server or personal keys', async () => {
         const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);

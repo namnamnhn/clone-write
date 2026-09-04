@@ -11,7 +11,7 @@ import {
 } from '../src/services/api/geminiBridgeProtocol';
 
 const MAX_BRIDGE_REQUEST_BYTES = 20 * 1024 * 1024;
-const MODEL_ID_PATTERN = /^gemini-[a-z0-9][a-z0-9.-]*$/;
+const MODEL_ID_PATTERN = /^(?:gemini|gemma)-[a-z0-9][a-z0-9.-]*$/;
 const API_STATUS_SET = new Set<string>(GEMINI_BRIDGE_API_STATUSES);
 
 type Next = () => void;
@@ -106,6 +106,9 @@ const readBody = async (request: IncomingMessage): Promise<string> => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === 'object' && !Array.isArray(value);
 
+export const isSupportedGeminiApiModelId = (value: unknown): value is string =>
+    typeof value === 'string' && MODEL_ID_PATTERN.test(value);
+
 const parsePayload = (raw: string): GeminiBridgeRequestPayload | undefined => {
     let value: unknown;
     try {
@@ -115,7 +118,7 @@ const parsePayload = (raw: string): GeminiBridgeRequestPayload | undefined => {
     }
     if (!isRecord(value) || !isRecord(value.request)) return undefined;
     const request = value.request;
-    if (typeof request.model !== 'string' || !MODEL_ID_PATTERN.test(request.model)) return undefined;
+    if (!isSupportedGeminiApiModelId(request.model)) return undefined;
     if (!Object.prototype.hasOwnProperty.call(request, 'contents')) return undefined;
     if (request.config !== undefined && !isRecord(request.config)) return undefined;
     if (value.personalApiKey !== undefined && (typeof value.personalApiKey !== 'string' || value.personalApiKey.length === 0 || value.personalApiKey.length > 512)) {
