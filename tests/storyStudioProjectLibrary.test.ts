@@ -348,9 +348,64 @@ describe('WORK15A lossless legacy migration', () => {
         const { adapter, controller } = environment(['corrupt']);
         const corrupt = { ...withoutRuntimeControl(createStoryStudioProject(blueprint('corrupt'), 'Corrupt', FIXED_TIME)), coreIdentity: 'tampered' };
         adapter.values.set(STORY_STUDIO_STORAGE_KEY, corrupt);
-        expect(await controller.load()).toMatchObject({ status: 'core-corrupt', error: { code: 'CORE_IDENTITY_MISMATCH' } });
+        expect(await controller.load()).toMatchObject({
+            status: 'core-corrupt', error: { code: 'CORE_IDENTITY_MISMATCH' },
+            recoveryTarget: { kind: 'legacy-single-project' },
+        });
         expect(adapter.values.get(STORY_STUDIO_STORAGE_KEY)).toEqual(corrupt);
         expect(adapter.values.has(STORY_STUDIO_PROJECT_LIBRARY_KEY)).toBe(false);
+    });
+
+    it('explicitly deletes only a corrupt legacy record and reloads an empty valid library', async () => {
+        const { adapter, controller } = environment(['corrupt-recovery']);
+        const creativeSentinelKey = 'creative_legacy_sentinel';
+        const creativeSentinel = { untouched: true };
+        const unrelatedProjectKey = storyStudioProjectStorageKey(parseStoryStudioProjectId('unrelated-orphan'));
+        const unrelatedProjectSentinel = { untouched: 'project-record' };
+        const corrupt = {
+            ...withoutRuntimeControl(createStoryStudioProject(blueprint('corrupt-recovery'), 'Corrupt', FIXED_TIME)),
+            coreIdentity: 'tampered',
+        };
+        adapter.values.set(STORY_STUDIO_STORAGE_KEY, corrupt);
+        adapter.values.set(creativeSentinelKey, creativeSentinel);
+        adapter.values.set(unrelatedProjectKey, unrelatedProjectSentinel);
+        const loaded = await controller.load();
+        expect(loaded).toMatchObject({
+            status: 'core-corrupt', recoveryTarget: { kind: 'legacy-single-project' },
+        });
+        expect(adapter.values.get(STORY_STUDIO_STORAGE_KEY)).toEqual(corrupt);
+
+        const recovered = await controller.deleteCorruptLegacyProject();
+        expect(recovered).toMatchObject({ status: 'empty', library: { index: { entries: [] } } });
+        expect(adapter.values.has(STORY_STUDIO_STORAGE_KEY)).toBe(false);
+        expect(adapter.values.get(creativeSentinelKey)).toEqual(creativeSentinel);
+        expect(adapter.values.get(unrelatedProjectKey)).toEqual(unrelatedProjectSentinel);
+        expect((await new StoryStudioProjectController(new StoryStudioProjectRepository(adapter)).load()).status)
+            .toBe('empty');
+    });
+
+    it('failed explicit legacy recovery preserves the corrupt source and publishes no empty library', async () => {
+        const { adapter, controller } = environment(['corrupt-recovery-failure']);
+        const corrupt = { kind: 'corrupt-legacy' };
+        adapter.values.set(STORY_STUDIO_STORAGE_KEY, corrupt);
+        expect((await controller.load()).status).toBe('core-corrupt');
+        adapter.failNextCommit = true;
+        await expect(controller.deleteCorruptLegacyProject()).rejects.toMatchObject({ code: 'SAVE_FAILED' });
+        expect(adapter.values.get(STORY_STUDIO_STORAGE_KEY)).toEqual(corrupt);
+        expect(adapter.values.has(STORY_STUDIO_PROJECT_LIBRARY_KEY)).toBe(false);
+        expect(controller.projectLibrary).toEqual([]);
+        expect(controller.currentProject).toBeUndefined();
+    });
+
+    it('does not offer a recovery target for an invalid new index with no trustworthy active ID', async () => {
+        const { adapter, controller } = environment();
+        adapter.values.set(STORY_STUDIO_PROJECT_LIBRARY_KEY, { kind: 'not-a-library' });
+        const result = await controller.load();
+        expect(result).toMatchObject({ status: 'core-corrupt', error: { code: 'INVALID_LIBRARY' } });
+        if (result.status !== 'core-corrupt') throw new Error('expected corrupt library');
+        expect(result.recoveryTarget).toBeUndefined();
+        await expect(controller.deleteProject()).rejects.toMatchObject({ code: 'NO_PROJECT' });
+        expect(adapter.values.get(STORY_STUDIO_PROJECT_LIBRARY_KEY)).toEqual({ kind: 'not-a-library' });
     });
 
     it('is idempotent once the new library index exists', async () => {
@@ -544,6 +599,30 @@ describe('WORK15A multi-project durability and isolation', () => {
         expect(controller.currentProject?.batchQueue.remaining).toBe(1);
     });
 
+    it('surfaces workflow recovery on switch while preserving Canon core and clears it on a normal switch', async () => {
+        const { adapter, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        await controller.createProject(blueprint('b'), 'B');
+        const b = controller.activeProjectId!;
+        const bBefore = controller.currentProject!;
+        await controller.switchProject(a);
+        const storedB = adapter.values.get(storyStudioProjectStorageKey(b)) as Record<string, unknown>;
+        adapter.values.set(storyStudioProjectStorageKey(b), { ...storedB, workflowIdentity: 'stale-workflow' });
+
+        const recovered = await controller.switchProject(b);
+        expect(recovered.workflowRecovered).toBe(true);
+        expect(recovered.project.state).toEqual(bBefore.state);
+        expect(recovered.project.memory).toEqual(bBefore.memory);
+        expect(recovered.project.coreIdentity).toBe(bBefore.coreIdentity);
+        expect(recovered.project.state).toMatchObject({ currentChapter: 0, revision: 0 });
+        expect(recovered.project.memory.records).toEqual([]);
+
+        const normal = await controller.switchProject(a);
+        expect(normal.workflowRecovered).toBe(false);
+    });
+
     it('failed atomic save publishes neither new in-memory Canon nor new durable Canon', async () => {
         const { adapter, repository, controller } = environment();
         await controller.load();
@@ -583,6 +662,8 @@ describe('WORK15A multi-project durability and isolation', () => {
         expect(result.status).toBe('loaded');
         expect(reloaded.currentProject?.displayName).toBe('B');
         expect(reloaded.projectLibrary.find(entry => entry.projectId === a)?.availability).toBe('corrupt');
+        await reloaded.startBatch(1);
+        expect(reloaded.projectLibrary.find(entry => entry.projectId === a)?.availability).toBe('corrupt');
     });
 
     it('fails closed for a missing active record and does not silently select another Canon', async () => {
@@ -594,9 +675,82 @@ describe('WORK15A multi-project durability and isolation', () => {
         adapter.values.delete(storyStudioProjectStorageKey(active));
         const reloaded = new StoryStudioProjectController(repository);
         const result = await reloaded.load();
-        expect(result).toMatchObject({ status: 'core-corrupt', error: { code: 'PROJECT_UNAVAILABLE' } });
+        expect(result).toMatchObject({
+            status: 'core-corrupt', error: { code: 'PROJECT_UNAVAILABLE' },
+            recoveryTarget: { kind: 'active-library-project', projectId: active },
+        });
         expect(reloaded.currentProject).toBeUndefined();
         expect(reloaded.activeProjectId).toBe(active);
+    });
+
+    it('can explicitly delete an unavailable active namespaced project from a valid library', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('active-corrupt'), 'Active corrupt');
+        const active = controller.activeProjectId!;
+        adapter.values.set(storyStudioProjectStorageKey(active), { corrupt: true });
+        const reloaded = new StoryStudioProjectController(repository);
+        expect(await reloaded.load()).toMatchObject({
+            status: 'core-corrupt', recoveryTarget: { kind: 'active-library-project', projectId: active },
+        });
+        expect(await reloaded.deleteProject(active)).toMatchObject({ status: 'empty' });
+        expect(adapter.values.has(storyStudioProjectStorageKey(active))).toBe(false);
+    });
+
+    it('validates all projects on load, only the switch target on switch, and no project records on active save', async () => {
+        class CountingAdapter extends InMemoryStoryStudioStorageAdapter {
+            readonly reads = new Map<string, number>();
+            override async load(key: string) {
+                this.reads.set(key, (this.reads.get(key) ?? 0) + 1);
+                return super.load(key);
+            }
+            resetReads() { this.reads.clear(); }
+        }
+        const adapter = new CountingAdapter();
+        const seed = new StoryStudioProjectController(
+            new StoryStudioProjectRepository(adapter, () => FIXED_TIME, ids('project-a', 'project-b', 'project-c')),
+            () => FIXED_TIME,
+        );
+        await seed.load();
+        await seed.createProject(blueprint('a'), 'A');
+        const a = seed.activeProjectId!;
+        await seed.createProject(blueprint('b'), 'B');
+        await seed.createProject(blueprint('c'), 'C');
+
+        adapter.resetReads();
+        const controller = new StoryStudioProjectController(
+            new StoryStudioProjectRepository(adapter, () => FIXED_TIME, ids('unused')),
+            () => FIXED_TIME,
+        );
+        await controller.load();
+        const projectReadsAfterLoad = [...adapter.reads.entries()]
+            .filter(([key]) => key.startsWith('story_studio_v4_project_v1:'));
+        expect(projectReadsAfterLoad).toHaveLength(3);
+        expect(projectReadsAfterLoad.every(([, count]) => count === 1)).toBe(true);
+
+        adapter.resetReads();
+        await controller.startBatch(1);
+        expect([...adapter.reads.keys()].filter(key => key.startsWith('story_studio_v4_project_v1:'))).toEqual([]);
+
+        adapter.resetReads();
+        await controller.switchProject(a);
+        expect([...adapter.reads.entries()].filter(([key]) => key.startsWith('story_studio_v4_project_v1:')))
+            .toEqual([[storyStudioProjectStorageKey(a), 1]]);
+    });
+
+    it('failed active save retains the prior verified availability snapshot', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        await controller.createProject(blueprint('b'), 'B');
+        adapter.values.set(storyStudioProjectStorageKey(a), { corrupt: true });
+        const reloaded = new StoryStudioProjectController(repository);
+        await reloaded.load();
+        const before = structuredClone(reloaded.projectLibrary);
+        adapter.failNextCommit = true;
+        await expect(reloaded.startBatch(1)).rejects.toMatchObject({ code: 'SAVE_FAILED' });
+        expect(reloaded.projectLibrary).toEqual(before);
     });
 
     it('keeps StoryState revision equal to chapter and prevents project A consuming project B memory/checkpoint', async () => {

@@ -40,6 +40,10 @@ export interface StoryStudioProjectLibrarySnapshot {
     readonly entries: readonly StoryStudioProjectLibraryViewEntry[];
 }
 
+export type StoryStudioProjectRecoveryTarget =
+    | { readonly kind: 'legacy-single-project' }
+    | { readonly kind: 'active-library-project'; readonly projectId: StoryStudioProjectId };
+
 export interface CanonicalChapterMetadata {
     readonly kind: 'canonical-chapter-metadata';
     readonly chapterNumber: number;
@@ -92,6 +96,7 @@ export type StoryStudioProjectLoadResult =
         readonly status: 'core-corrupt';
         readonly error: StoryStudioProjectError;
         readonly library?: StoryStudioProjectLibrarySnapshot;
+        readonly recoveryTarget?: StoryStudioProjectRecoveryTarget;
     };
 
 export type StoryStudioProjectErrorCode =

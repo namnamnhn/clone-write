@@ -17,6 +17,7 @@ import type {
     StoryStudioProjectLibrarySnapshot,
     StoryStudioProjectLibraryViewEntry,
     StoryStudioProjectLoadResult,
+    StoryStudioProjectRecoveryTarget,
     StoryStudioRuntimeProject,
 } from './storyStudioProjectTypes';
 import {
@@ -190,6 +191,16 @@ interface InspectedProject {
     readonly workflowRecovered?: boolean;
 }
 
+class StoryStudioRepositoryLoadError extends Error {
+    constructor(
+        readonly projectError: StoryStudioProjectError,
+        readonly recoveryTarget?: StoryStudioProjectRecoveryTarget,
+    ) {
+        super(projectError.message);
+        this.name = 'StoryStudioRepositoryLoadError';
+    }
+}
+
 export interface StoryStudioProjectRepositoryResult {
     readonly projectId: StoryStudioProjectId;
     readonly project: StoryStudioRuntimeProject;
@@ -200,6 +211,8 @@ export interface StoryStudioProjectRepositoryResult {
 /** A single serialized lane orders all project and index mutations. */
 export class StoryStudioProjectRepository {
     private writeLane: Promise<void> = Promise.resolve();
+    /** Last verified availability; refreshed by load and explicit target inspection. */
+    private readonly inspectedProjects = new Map<StoryStudioProjectId, InspectedProject>();
 
     constructor(
         private readonly adapter: StoryStudioStorageAdapter = STORY_STUDIO_INDEXED_DB_ADAPTER,
@@ -246,7 +259,10 @@ export class StoryStudioProjectRepository {
         try {
             parsed = parseStoryStudioProjectDocument(legacyValue);
         } catch (error) {
-            throw error instanceof StoryStudioProjectError ? error : new StoryStudioProjectError('INVALID_PROJECT');
+            throw new StoryStudioRepositoryLoadError(
+                error instanceof StoryStudioProjectError ? error : new StoryStudioProjectError('INVALID_PROJECT'),
+                { kind: 'legacy-single-project' },
+            );
         }
         const projectId = parseStoryStudioProjectId(this.generateProjectId());
         const projectDocument = withoutRuntimeControl(parsed.project);
@@ -272,14 +288,26 @@ export class StoryStudioProjectRepository {
         try {
             value = await this.adapter.load(storyStudioProjectStorageKey(projectId));
         } catch {
-            return { availability: 'corrupt' };
+            const result: InspectedProject = { availability: 'corrupt' };
+            this.inspectedProjects.set(projectId, result);
+            return result;
         }
-        if (value === null || value === undefined) return { availability: 'missing' };
+        if (value === null || value === undefined) {
+            const result: InspectedProject = { availability: 'missing' };
+            this.inspectedProjects.set(projectId, result);
+            return result;
+        }
         try {
             const parsed = parseStoryStudioProjectDocument(value);
-            return { availability: 'available', project: parsed.project, workflowRecovered: parsed.workflowRecovered };
+            const result: InspectedProject = {
+                availability: 'available', project: parsed.project, workflowRecovered: parsed.workflowRecovered,
+            };
+            this.inspectedProjects.set(projectId, result);
+            return result;
         } catch {
-            return { availability: 'corrupt' };
+            const result: InspectedProject = { availability: 'corrupt' };
+            this.inspectedProjects.set(projectId, result);
+            return result;
         }
     }
 
@@ -294,7 +322,21 @@ export class StoryStudioProjectRepository {
             inspected.set(entry.projectId, result);
             entries.push({ ...entry, availability: result.availability });
         }
+        [...this.inspectedProjects.keys()]
+            .filter(projectId => !index.entries.some(entry => entry.projectId === projectId))
+            .forEach(projectId => this.inspectedProjects.delete(projectId));
         return { library: { index, entries }, inspected };
+    }
+
+    private cachedSnapshot(index: StoryStudioProjectLibraryIndexV1): StoryStudioProjectLibrarySnapshot {
+        return {
+            index,
+            entries: index.entries.map(entry => ({
+                ...entry,
+                // An unseen record is never claimed as verified. Normal controller use populates this on load.
+                availability: this.inspectedProjects.get(entry.projectId)?.availability ?? 'corrupt',
+            })),
+        };
     }
 
     async load(): Promise<StoryStudioProjectLoadResult> {
@@ -309,6 +351,7 @@ export class StoryStudioProjectRepository {
                     return {
                         status: 'core-corrupt', library,
                         error: new StoryStudioProjectError('PROJECT_UNAVAILABLE'),
+                        recoveryTarget: { kind: 'active-library-project', projectId: activeProjectId },
                     };
                 }
                 return (loaded.workflowRecovered || active.workflowRecovered)
@@ -318,11 +361,32 @@ export class StoryStudioProjectRepository {
                     }
                     : { status: 'loaded', projectId: activeProjectId, project: active.project, library };
             } catch (error) {
+                const repositoryError = error instanceof StoryStudioRepositoryLoadError ? error : undefined;
                 return {
                     status: 'core-corrupt',
-                    error: error instanceof StoryStudioProjectError ? error : new StoryStudioProjectError('LOAD_FAILED'),
+                    error: repositoryError?.projectError
+                        ?? (error instanceof StoryStudioProjectError ? error : new StoryStudioProjectError('LOAD_FAILED')),
+                    ...(repositoryError?.recoveryTarget === undefined
+                        ? {} : { recoveryTarget: repositoryError.recoveryTarget }),
                 };
             }
+        });
+    }
+
+    deleteCorruptLegacyProject(): Promise<StoryStudioProjectLoadResult> {
+        return this.enqueue(async () => {
+            const storedIndex = await this.loadValue(STORY_STUDIO_PROJECT_LIBRARY_KEY);
+            if (storedIndex !== null && storedIndex !== undefined) {
+                // Never erase around a present index: it may name records that need a future recovery tool.
+                throw new StoryStudioProjectError('INVALID_LIBRARY');
+            }
+            const index = createEmptyStoryStudioProjectLibraryIndex(this.now());
+            await this.commit(
+                [{ key: STORY_STUDIO_PROJECT_LIBRARY_KEY, value: index }],
+                [STORY_STUDIO_STORAGE_KEY],
+            );
+            this.inspectedProjects.clear();
+            return { status: 'empty', library: { index, entries: [] } };
         });
     }
 
@@ -348,16 +412,14 @@ export class StoryStudioProjectRepository {
         }
     }
 
-    private async resultFor(
+    private resultFor(
         index: StoryStudioProjectLibraryIndexV1,
         projectId: StoryStudioProjectId,
         project: StoryStudioRuntimeProject,
         workflowRecovered = false,
-    ): Promise<StoryStudioProjectRepositoryResult> {
-        const { library } = await this.snapshot(index);
-        const entries = library.entries.map(entry => entry.projectId === projectId
-            ? { ...entry, availability: 'available' as const } : entry);
-        return { projectId, project, workflowRecovered, library: { index, entries } };
+    ): StoryStudioProjectRepositoryResult {
+        this.inspectedProjects.set(projectId, { availability: 'available', project, workflowRecovered });
+        return { projectId, project, workflowRecovered, library: this.cachedSnapshot(index) };
     }
 
     createProject(project: StoryStudioRuntimeProject): Promise<StoryStudioProjectRepositoryResult> {
@@ -419,6 +481,7 @@ export class StoryStudioProjectRepository {
 
     renameProject(
         projectIdValue: StoryStudioProjectId | string,
+        project: StoryStudioRuntimeProject,
         displayName: string,
         updatedAt: string,
     ): Promise<StoryStudioProjectRepositoryResult> {
@@ -428,9 +491,7 @@ export class StoryStudioProjectRepository {
             if (!current.entries.some(entry => entry.projectId === projectId)) {
                 throw new StoryStudioProjectError('PROJECT_NOT_FOUND');
             }
-            const inspected = await this.inspectProject(projectId);
-            if (!inspected.project) throw new StoryStudioProjectError('PROJECT_UNAVAILABLE');
-            const normalizedDisplayName = secretSafeCatalogDisplayName(inspected.project, displayName);
+            const normalizedDisplayName = secretSafeCatalogDisplayName(project, displayName);
             const index: StoryStudioProjectLibraryIndexV1 = {
                 ...current,
                 entries: current.entries.map(existing => existing.projectId === projectId
@@ -439,7 +500,7 @@ export class StoryStudioProjectRepository {
                 updatedAt: this.now(),
             };
             await this.commit([{ key: STORY_STUDIO_PROJECT_LIBRARY_KEY, value: index }]);
-            return this.resultFor(index, projectId, inspected.project, inspected.workflowRecovered);
+            return this.resultFor(index, projectId, project);
         });
     }
 
@@ -482,7 +543,8 @@ export class StoryStudioProjectRepository {
                 [{ key: STORY_STUDIO_PROJECT_LIBRARY_KEY, value: normalizedIndex }],
                 [storyStudioProjectStorageKey(projectId)],
             );
-            const { library } = await this.snapshot(normalizedIndex);
+            this.inspectedProjects.delete(projectId);
+            const library = this.cachedSnapshot(normalizedIndex);
             if (activeProjectId === undefined || !selected?.project) return { status: 'empty', library };
             return selected.workflowRecovered
                 ? {

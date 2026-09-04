@@ -46,9 +46,25 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
                     <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
                     <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
                     <p className="mt-2 text-sm leading-relaxed text-slate-500">{studio.errorMessage}</p>
-                    <p className="mt-3 text-xs text-slate-400">Dữ liệu lỗi không bị tự động ghi đè. Chỉ xóa khi bạn chắc chắn muốn bỏ riêng dự án V4 này.</p>
-                    <button type="button" onClick={() => studio.setDeleteConfirmationOpen(true)} className="mt-6 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white">Xóa dự án V4 lỗi khỏi máy</button>
-                    <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4 lỗi?" message="Thao tác này chỉ xóa dự án Story Studio đang chọn. Các dự án Story Studio khác, dữ liệu Sáng Tác cũ và database khác không bị xóa." confirmLabel="Xóa dự án lỗi" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
+                    <p className="mt-3 text-xs text-slate-400">
+                        {studio.recoveryTarget
+                            ? 'Dữ liệu lỗi không bị tự động ghi đè. Chỉ xóa khi bạn xác nhận rõ bên dưới.'
+                            : 'Không có định danh dự án đáng tin cậy để xóa an toàn. Story Studio giữ nguyên toàn bộ dữ liệu để có thể phục hồi bằng một cơ chế riêng.'}
+                    </p>
+                    {studio.recoveryTarget && <button type="button" onClick={() => studio.setDeleteConfirmationOpen(true)} className="mt-6 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white">
+                        {studio.recoveryTarget.kind === 'legacy-single-project' ? 'Xóa bản lưu Story Studio cũ bị lỗi' : 'Xóa dự án Story Studio đang chọn bị lỗi'}
+                    </button>}
+                    {studio.recoveryTarget && <StoryStudioConfirmModal
+                        open={studio.deleteConfirmationOpen}
+                        title={studio.recoveryTarget.kind === 'legacy-single-project' ? 'Xóa bản lưu Story Studio cũ bị lỗi?' : 'Xóa dự án Story Studio đang chọn bị lỗi?'}
+                        message={studio.recoveryTarget.kind === 'legacy-single-project'
+                            ? 'Thao tác này chỉ xóa khóa lưu Story Studio một dự án đời cũ. Dữ liệu Sáng Tác, thư viện mới và database khác không bị xóa.'
+                            : 'Thao tác này chỉ xóa dự án Story Studio đang chọn. Các dự án Story Studio khác, dữ liệu Sáng Tác cũ và database khác không bị xóa.'}
+                        confirmLabel="Xác nhận xóa dữ liệu lỗi"
+                        danger
+                        onCancel={() => studio.setDeleteConfirmationOpen(false)}
+                        onConfirm={() => void studio.deleteProject()}
+                    />}
                 </div>
             </div>
         </div>

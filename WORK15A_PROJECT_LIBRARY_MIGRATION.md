@@ -33,6 +33,8 @@ The strict version-1 index contains one active ID, when available, and compact e
 
 Normal project mutations atomically write the isolated project record and matching index metadata in one IndexedDB transaction. All repository mutations also share one serialized request lane, so a later requested snapshot cannot be overtaken by an older write.
 
+Initial library load strictly reads every project record and caches the resulting availability snapshot. A normal active-project save updates only the successfully committed project in that snapshot; it does not read or parse unrelated full novels. Explicit switches still strictly validate their target, and delete/recovery candidate selection validates records when correctness requires it. A reload refreshes all availability, so cached status never claims an externally changed record was newly verified.
+
 Rename is deliberately catalog-only. It changes the index display name and catalog update time without rewriting the project document or changing `coreIdentity`, StoryControl identity, Canon identity, memory identities, or workflow identity.
 
 ## Legacy migration order
@@ -54,14 +56,18 @@ An empty legacy key creates an empty version-1 index. Migration does not call a 
 - A project-record or index write failure returns `MIGRATION_FAILED`, preserves the legacy key, and remains retryable. A project record left before an index-write failure is an unreachable orphan and is never exposed as active.
 - A legacy cleanup failure returns `LEGACY_CLEANUP_FAILED`. The complete new record and index remain durable. On reload, the valid new index wins, so migration is idempotent and no duplicate entry is created.
 - Corrupt legacy core is left byte-for-byte untouched and no index is created over it.
+- Corrupt legacy storage exposes one explicit, confirmed recovery action that atomically creates an empty valid index and clears only `story_studio_v4_current_project_v1`. A failed transaction leaves the legacy source untouched and publishes no empty library.
+- An invalid new index with no trustworthy active project ID exposes no delete action. WORK15A does not blindly clear the index or orphan namespaced records.
 - Existing WORK13 workflow recovery remains per-project. It discards only a corrupt/stale workflow checkpoint, pauses the queue, and preserves validated Canon core.
 
 ## Active-project and recovery rules
 
 - Creating/importing a reviewed TXT, MD, or V4 JSON setup always creates a new isolated project and makes it active. It never replaces or deletes the prior project.
 - Switching first loads and validates the target project; only then is the active ID durably changed. Failure leaves the prior active project selected and usable.
+- A switch that invokes WORK13 workflow recovery returns that signal to the UI, which shows the existing Canon-safe recovery warning; a normal switch clears the warning.
 - Switching, creating, and deleting are blocked while a model stage or durability transition is active.
 - A corrupt or missing active record fails closed. WORK15A does not silently select a different Canon.
+- When a valid index supplies a trustworthy active ID, the user may explicitly delete that unavailable namespaced project. Without such an ID, no active-project deletion is inferred.
 - A corrupt non-active record is marked unavailable; valid projects remain loadable and switchable.
 - Deleting a non-active project leaves the active project untouched.
 - Deleting the active project selects the valid remaining entry with the newest catalog `updatedAt`. Ties use ascending project ID. Corrupt/missing candidates are skipped rather than invented or repaired.

@@ -48,6 +48,11 @@ export interface StoryStudioCanonCommitResult {
     readonly shouldContinueBatch: boolean;
 }
 
+export interface StoryStudioProjectSwitchResult {
+    readonly project: StoryStudioRuntimeProject;
+    readonly workflowRecovered: boolean;
+}
+
 export class StoryStudioProjectController {
     private durableProject?: StoryStudioRuntimeProject;
     private durableProjectId?: StoryStudioProjectId;
@@ -287,7 +292,7 @@ export class StoryStudioProjectController {
         if (!projectId) throw new StoryStudioProjectError('NO_PROJECT');
         this.transitionActive = true;
         try {
-            const result = await this.repository.renameProject(projectId, displayName.trim(), this.now());
+            const result = await this.repository.renameProject(projectId, this.requireProject(), displayName.trim(), this.now());
             this.durableProject = result.project;
             this.librarySnapshot = result.library;
             return result.project;
@@ -296,7 +301,7 @@ export class StoryStudioProjectController {
         }
     }
 
-    async switchProject(projectId: StoryStudioProjectId | string): Promise<StoryStudioRuntimeProject> {
+    async switchProject(projectId: StoryStudioProjectId | string): Promise<StoryStudioProjectSwitchResult> {
         this.requireLibraryOperationAllowed();
         this.transitionActive = true;
         try {
@@ -304,7 +309,7 @@ export class StoryStudioProjectController {
             this.durableProject = result.project;
             this.durableProjectId = result.projectId;
             this.librarySnapshot = result.library;
-            return result.project;
+            return { project: result.project, workflowRecovered: result.workflowRecovered };
         } finally {
             this.transitionActive = false;
         }
@@ -321,6 +326,20 @@ export class StoryStudioProjectController {
                 ? result.project : undefined;
             this.durableProjectId = result.status === 'loaded' || result.status === 'workflow-recovered'
                 ? result.projectId : undefined;
+            return result;
+        } finally {
+            this.transitionActive = false;
+        }
+    }
+
+    async deleteCorruptLegacyProject(): Promise<StoryStudioProjectLoadResult> {
+        this.requireLibraryOperationAllowed();
+        this.transitionActive = true;
+        try {
+            const result = await this.repository.deleteCorruptLegacyProject();
+            this.librarySnapshot = result.library;
+            this.durableProject = undefined;
+            this.durableProjectId = undefined;
             return result;
         } finally {
             this.transitionActive = false;

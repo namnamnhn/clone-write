@@ -6,6 +6,7 @@ import { StoryStudioProjectController } from '../../storyStudio/production/story
 import type {
     StoryStudioProjectId,
     StoryStudioProjectLibraryViewEntry,
+    StoryStudioProjectRecoveryTarget,
     StoryStudioRuntimeProject,
 } from '../../storyStudio/production/storyStudioProjectTypes';
 import { buildConnectedStoryStudioSession } from '../../storyStudio/production/storyStudioSession';
@@ -103,6 +104,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     const [operation, setOperation] = useState<StoryStudioOperation>();
     const [errorMessage, setErrorMessage] = useState<string>();
     const [recoveryWarning, setRecoveryWarning] = useState(false);
+    const [recoveryTarget, setRecoveryTarget] = useState<StoryStudioProjectRecoveryTarget>();
     const [preparedImport, setPreparedImport] = useState<PreparedStorySetupImport>();
     const [importDisplayName, setImportDisplayName] = useState('');
     const [makeCanonConfirmationOpen, setMakeCanonConfirmationOpen] = useState(false);
@@ -122,8 +124,10 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             if (result.status === 'core-corrupt') {
                 setLoadStatus('core-corrupt');
                 setErrorMessage(getStoryStudioSafeMessage(result.error));
+                setRecoveryTarget(result.recoveryTarget);
                 return;
             }
+            setRecoveryTarget(undefined);
             setProject(result.project);
             setBatchSizeState(result.project.batchQueue.requestedSize);
             setRecoveryWarning(result.status === 'workflow-recovered');
@@ -303,10 +307,16 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         setDeleteConfirmationOpen(false);
         try {
             setSaveStatus('saving');
-            const result = await controller.deleteProject();
+            const result = recoveryTarget?.kind === 'legacy-single-project'
+                ? await controller.deleteCorruptLegacyProject()
+                : await controller.deleteProject(
+                    recoveryTarget?.kind === 'active-library-project' ? recoveryTarget.projectId : undefined,
+                );
             setPreparedImport(undefined);
             setProjectLibrary(result.library?.entries ?? []);
             setActiveProjectId(result.library?.index.activeProjectId);
+            setRecoveryTarget(result.status === 'core-corrupt' ? result.recoveryTarget : undefined);
+            if (result.status !== 'core-corrupt') setErrorMessage(undefined);
             if (result.status === 'loaded' || result.status === 'workflow-recovered') {
                 setProject(result.project);
                 setBatchSizeState(result.project.batchQueue.requestedSize);
@@ -320,15 +330,15 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             setSaveStatus('saved');
             addToast('Đã xóa riêng dự án V4 khỏi trình duyệt này.', 'info');
         } catch (error) { handleError(error); }
-    }, [addToast, controller, handleError]);
+    }, [addToast, controller, handleError, recoveryTarget]);
 
     const switchProject = useCallback(async (projectId: StoryStudioProjectId) => {
         setSaveStatus('saving');
         try {
-            const next = await controller.switchProject(projectId);
-            publish(next);
-            setBatchSizeState(next.batchQueue.requestedSize);
-            setRecoveryWarning(false);
+            const result = await controller.switchProject(projectId);
+            publish(result.project);
+            setBatchSizeState(result.project.batchQueue.requestedSize);
+            setRecoveryWarning(result.workflowRecovered);
         } catch (error) { handleError(error); }
     }, [controller, handleError, publish]);
 
@@ -355,7 +365,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
 
     return {
         loadStatus, project, projectLibrary, activeProjectId, showDemo, setShowDemo, viewModel, saveStatus, operation,
-        errorMessage, setErrorMessage, recoveryWarning,
+        errorMessage, setErrorMessage, recoveryWarning, recoveryTarget,
         preparedImport, importDisplayName, setImportDisplayName, importFile,
         cancelImport: () => { setPreparedImport(undefined); },
         finishCreate, switchProject, renameActiveProject,
