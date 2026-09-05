@@ -19,6 +19,17 @@ import {
 import type { PreparedStorySetupImport } from '../../storyStudio/production/storySetupImport';
 import type { StoryStudioBatchSize } from '../../storyStudio/production/storyStudioWorkflowTypes';
 import { logSafeStoryStudioRuntimeDiagnostic } from '../../storyStudio/production/storyStudioRuntimeDiagnostics';
+import {
+    STORY_SETUP_BLANK_TEMPLATE_MARKDOWN,
+    StorySetupWizardDraftRepository,
+    completeDurableWizardCreate,
+    createEmptyStorySetupWizardDraft,
+    downloadStorySetupMarkdown,
+    renderExistingProjectSetupMarkdown,
+    renderStorySetupWizardMarkdown,
+    validateStorySetupWizardDraft,
+} from '../../storyStudio/setup/storySetupWizard';
+import type { StorySetupWizardDraftV1 } from '../../storyStudio/setup/storySetupWizard';
 
 export type StoryStudioSaveStatus = 'saved' | 'saving' | 'error';
 export type StoryStudioLoadStatus = 'loading' | 'empty' | 'connected' | 'core-corrupt';
@@ -33,7 +44,7 @@ export interface UseStoryStudioProps {
 
 export type StoryStudioExplicitAttempt = 'startBatch' | 'resume' | 'rewriteFromSamePlan' | 'replan';
 export type StoryStudioPreparedImportOrigin = 'normal' | 'verified-core-corrupt-library';
-export type StoryStudioPageView = 'loading' | 'setup-review' | 'core-corrupt' | 'no-active' | 'studio';
+export type StoryStudioPageView = 'loading' | 'wizard' | 'setup-review' | 'core-corrupt' | 'no-active' | 'studio';
 
 export interface StoryStudioRecoveryUiState {
     readonly recoveryTarget?: StoryStudioProjectRecoveryTarget;
@@ -83,6 +94,8 @@ export const getStoryStudioPageView = (input: {
     readonly hasValidProjectLibrary: boolean;
     readonly hasPreparedImport: boolean;
     readonly preparedImportOrigin?: StoryStudioPreparedImportOrigin;
+    readonly hasOpenWizard?: boolean;
+    readonly wizardOrigin?: StoryStudioPreparedImportOrigin;
     readonly hasProject: boolean;
     readonly showDemo: boolean;
 }): StoryStudioPageView => {
@@ -92,6 +105,11 @@ export const getStoryStudioPageView = (input: {
         || (input.hasValidProjectLibrary && input.preparedImportOrigin === 'verified-core-corrupt-library')
     );
     if (reviewAllowed) return 'setup-review';
+    const wizardAllowed = input.hasOpenWizard && (
+        input.loadStatus !== 'core-corrupt'
+        || (input.hasValidProjectLibrary && input.wizardOrigin === 'verified-core-corrupt-library')
+    );
+    if (wizardAllowed) return 'wizard';
     if (input.loadStatus === 'core-corrupt') return 'core-corrupt';
     if (!input.hasProject && !input.showDemo) return 'no-active';
     return 'studio';
@@ -155,6 +173,7 @@ const operationForStage = (stage: StoryStudioRuntimeProject['workflow']['stage']
 
 export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }: UseStoryStudioProps) => {
     const [controller] = useState(() => new StoryStudioProjectController());
+    const [wizardDraftRepository] = useState(() => new StorySetupWizardDraftRepository());
     const abortRef = useRef<AbortController | null>(null);
     const stopRequestedRef = useRef(false);
     const mountedRef = useRef(true);
@@ -175,19 +194,37 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         dispatchRecoveryUi({ type: 'clear-error' });
     }, []);
     const [preparedImport, setPreparedImport] = useState<PreparedStorySetupImport>();
+    const [preparedImportFromWizard, setPreparedImportFromWizard] = useState(false);
     const [preparedImportOrigin, setPreparedImportOrigin] = useState<StoryStudioPreparedImportOrigin>();
     const [importDisplayName, setImportDisplayName] = useState('');
     const [makeCanonConfirmationOpen, setMakeCanonConfirmationOpen] = useState(false);
     const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
     const [batchSize, setBatchSizeState] = useState<StoryStudioBatchSize>(2);
+    const [wizardDraft, setWizardDraft] = useState<StorySetupWizardDraftV1>();
+    const [wizardOpen, setWizardOpen] = useState(false);
+    const [wizardOrigin, setWizardOrigin] = useState<StoryStudioPreparedImportOrigin>();
+    const [wizardDraftLoadStatus, setWizardDraftLoadStatus] = useState<'loading' | 'empty' | 'loaded' | 'corrupt'>('loading');
+    const [wizardDraftSaveStatus, setWizardDraftSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
 
     useEffect(() => {
         mountedRef.current = true;
-        void controller.load().then((result) => {
+        void Promise.all([controller.load(), wizardDraftRepository.load()]).then(([result, draftResult]) => {
             if (!mountedRef.current) return;
             setProjectLibrary(result.library?.entries ?? []);
             setHasValidProjectLibrary(result.library !== undefined);
             setActiveProjectId(result.library?.index.activeProjectId);
+            setWizardDraftLoadStatus(draftResult.status);
+            if (draftResult.status === 'loaded') {
+                setWizardDraft(draftResult.draft);
+                const restoredOrigin = getStoryStudioPreparedImportOrigin(
+                    result.status === 'core-corrupt' ? 'core-corrupt' : result.status === 'empty' ? 'empty' : 'connected',
+                    result.library !== undefined,
+                );
+                if (restoredOrigin) {
+                    setWizardOrigin(restoredOrigin);
+                    setWizardOpen(true);
+                }
+            }
             if (result.status === 'empty') {
                 setLoadStatus('empty');
                 return;
@@ -211,7 +248,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             mountedRef.current = false;
             abortRef.current?.abort();
         };
-    }, [controller]);
+    }, [controller, wizardDraftRepository]);
 
     const publish = useCallback((next: StoryStudioRuntimeProject) => {
         if (!mountedRef.current) return;
@@ -292,6 +329,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                 throw new StorySetupImportError('UNSUPPORTED_SETUP_FILE');
             }
             setPreparedImport(prepared);
+            setPreparedImportFromWizard(false);
             setPreparedImportOrigin(origin);
             setImportDisplayName(prepared.review.displayName);
         } catch (error) {
@@ -302,18 +340,124 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         }
     }, [enabledModels, handleError, hasValidProjectLibrary, loadStatus, operation, setErrorMessage]);
 
+    const openWizard = useCallback(async () => {
+        if (abortRef.current || operation) return;
+        const origin = getStoryStudioPreparedImportOrigin(loadStatus, hasValidProjectLibrary);
+        if (!origin) return;
+        if (wizardDraftLoadStatus === 'corrupt') {
+            const confirmed = window.confirm('Bản nháp tạo truyện đã lưu bị lỗi và không thể mở. Bạn có muốn chỉ xóa bản nháp này để bắt đầu lại?');
+            if (!confirmed) return;
+            try {
+                await wizardDraftRepository.clear();
+                setWizardDraftLoadStatus('empty');
+            } catch (error) {
+                handleError(error);
+                return;
+            }
+        }
+        const next = wizardDraft ?? createEmptyStorySetupWizardDraft();
+        if (!wizardDraft) {
+            setWizardDraftSaveStatus('saving');
+            try {
+                await wizardDraftRepository.save(next);
+                setWizardDraft(next);
+                setWizardDraftLoadStatus('loaded');
+                setWizardDraftSaveStatus('saved');
+            } catch (error) {
+                setWizardDraftSaveStatus('error');
+                handleError(error);
+                return;
+            }
+        }
+        setWizardOrigin(origin);
+        setWizardOpen(true);
+        if (origin === 'normal') setErrorMessage(undefined);
+    }, [handleError, hasValidProjectLibrary, loadStatus, operation, setErrorMessage, wizardDraft, wizardDraftLoadStatus, wizardDraftRepository]);
+
+    const updateWizardDraft = useCallback((next: StorySetupWizardDraftV1) => {
+        setWizardDraft(next);
+        setWizardDraftSaveStatus('saving');
+        void wizardDraftRepository.save(next).then(() => {
+            if (mountedRef.current) {
+                setWizardDraftLoadStatus('loaded');
+                setWizardDraftSaveStatus('saved');
+            }
+        }).catch(() => {
+            if (mountedRef.current) setWizardDraftSaveStatus('error');
+            addToast('Không thể lưu bản nháp tạo truyện. Dữ liệu dự án hiện tại không thay đổi.', 'error');
+        });
+    }, [addToast, wizardDraftRepository]);
+
+    const discardWizardDraft = useCallback(async () => {
+        if (!window.confirm('Xóa riêng bản nháp tạo truyện này? Các dự án Story Studio không bị ảnh hưởng.')) return;
+        try {
+            await wizardDraftRepository.clear();
+            setWizardDraft(undefined);
+            setWizardDraftLoadStatus('empty');
+            setWizardDraftSaveStatus('saved');
+            setWizardOpen(false);
+            setWizardOrigin(undefined);
+        } catch (error) { handleError(error); }
+    }, [handleError, wizardDraftRepository]);
+
+    const compileWizardDraft = useCallback(async () => {
+        if (!wizardDraft || validateStorySetupWizardDraft(wizardDraft).length > 0 || abortRef.current || operation) return;
+        const origin = wizardOrigin ?? getStoryStudioPreparedImportOrigin(loadStatus, hasValidProjectLibrary);
+        if (!origin) return;
+        const compilerAbortController = new AbortController();
+        abortRef.current = compilerAbortController;
+        setOperation('compiling-setup');
+        try {
+            const prepared = await prepareAuthorTextStorySetupImport(
+                renderStorySetupWizardMarkdown(wizardDraft),
+                'story-setup-wizard.md',
+                { availableModelIds: enabledModels, signal: compilerAbortController.signal },
+            );
+            if (compilerAbortController.signal.aborted) return;
+            setPreparedImport(prepared);
+            setPreparedImportFromWizard(true);
+            setPreparedImportOrigin(origin);
+            setImportDisplayName(wizardDraft.basic.title.trim() || prepared.review.displayName);
+            setWizardOpen(false);
+        } catch (error) {
+            handleError(error);
+            if (origin === 'verified-core-corrupt-library') setWizardOpen(false);
+        } finally {
+            if (abortRef.current === compilerAbortController) abortRef.current = null;
+            setOperation(undefined);
+        }
+    }, [enabledModels, handleError, hasValidProjectLibrary, loadStatus, operation, wizardDraft, wizardOrigin]);
+
     const finishCreate = useCallback(async () => {
         if (!preparedImport || preparedImport.review.criticalIssues.length > 0) return;
         setSaveStatus('saving');
         try {
-            const next = await controller.createProject(preparedImport.setupDocument, importDisplayName);
-            publish(next);
+            if (preparedImportFromWizard) {
+                const result = await completeDurableWizardCreate(
+                    () => controller.createProject(preparedImport.setupDocument, importDisplayName),
+                    publish,
+                    () => wizardDraftRepository.clear(),
+                );
+                if (result.draftCleared) {
+                    setWizardDraft(undefined);
+                    setWizardDraftLoadStatus('empty');
+                    setWizardDraftSaveStatus('saved');
+                } else {
+                    addToast('Dự án đã được tạo an toàn, nhưng bản nháp cục bộ chưa thể xóa.', 'info');
+                }
+            } else {
+                const next = await controller.createProject(preparedImport.setupDocument, importDisplayName);
+                publish(next);
+            }
+            setWizardOpen(false);
+            setWizardOrigin(undefined);
             setPreparedImport(undefined);
+            setPreparedImportFromWizard(false);
             setPreparedImportOrigin(undefined);
             setShowDemo(false);
-            addToast('Đã tạo và lưu dự án Story Engine V4.', 'success');
+            addToast(preparedImportFromWizard ? 'Đã tạo và lưu truyện mới.' : 'Đã tạo và lưu dự án Story Engine V4.', 'success');
         } catch (error) { handleError(error); }
-    }, [addToast, controller, handleError, importDisplayName, preparedImport, publish]);
+    }, [addToast, controller, handleError, importDisplayName, preparedImport, preparedImportFromWizard, publish, wizardDraftRepository]);
 
     const startBatch = useCallback(async () => {
         if (abortRef.current) return;
@@ -394,6 +538,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                     recoveryDeleteTarget?.kind === 'active-library-project' ? recoveryDeleteTarget.projectId : undefined,
                 );
             setPreparedImport(undefined);
+            setPreparedImportFromWizard(false);
             setPreparedImportOrigin(undefined);
             setProjectLibrary(result.library?.entries ?? []);
             setHasValidProjectLibrary(result.library !== undefined);
@@ -453,11 +598,36 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         if (value === 1 || value === 2 || value === 3) setBatchSizeState(value);
     }, []);
 
+    const downloadBlankTemplate = useCallback(() => {
+        downloadStorySetupMarkdown('MAU-STORY-SETUP', STORY_SETUP_BLANK_TEMPLATE_MARKDOWN);
+    }, []);
+
+    const downloadWizardMarkdown = useCallback(() => {
+        if (wizardDraft) downloadStorySetupMarkdown(wizardDraft.basic.title || 'story-setup-wizard', renderStorySetupWizardMarkdown(wizardDraft));
+    }, [wizardDraft]);
+
+    const exportActiveSetup = useCallback(() => {
+        const current = controller.currentProject;
+        if (!current) return;
+        const confirmed = window.confirm('Tệp Setup có thể chứa spoiler và Bí mật chỉ dành cho tác giả. Đây chỉ là thiết kế truyện; nhập lại sẽ tạo dự án mới từ C0, không phải bản sao lưu tiếp tục. Tiếp tục tải?');
+        if (!confirmed) return;
+        const displayName = projectLibrary.find(entry => entry.projectId === activeProjectId)?.displayName ?? current.displayName;
+        downloadStorySetupMarkdown(displayName + '-setup', renderExistingProjectSetupMarkdown(current.setupDocument, displayName));
+    }, [activeProjectId, controller, projectLibrary]);
+
     return {
         loadStatus, project, projectLibrary, activeProjectId, showDemo, setShowDemo, viewModel, saveStatus, operation,
         errorMessage, setErrorMessage, recoveryWarning, recoveryTarget,
         preparedImport, preparedImportOrigin, hasValidProjectLibrary, importDisplayName, setImportDisplayName, importFile,
-        cancelImport: () => { setPreparedImport(undefined); setPreparedImportOrigin(undefined); },
+        cancelImport: () => {
+            if (preparedImportFromWizard && preparedImportOrigin === 'normal') setWizardOpen(true);
+            setPreparedImport(undefined);
+            setPreparedImportOrigin(undefined);
+            setPreparedImportFromWizard(false);
+        },
+        wizardDraft, wizardOpen, wizardOrigin, wizardDraftLoadStatus, wizardDraftSaveStatus,
+        openWizard, updateWizardDraft, closeWizard: () => setWizardOpen(false), discardWizardDraft, compileWizardDraft,
+        downloadBlankTemplate, downloadWizardMarkdown, exportActiveSetup,
         finishCreate, switchProject, renameActiveProject,
         batchSize, setBatchSize, startBatch, resume, stop, rewriteFromSamePlan, replan,
         makeCanonConfirmationOpen, setMakeCanonConfirmationOpen, confirmMakeCanon,

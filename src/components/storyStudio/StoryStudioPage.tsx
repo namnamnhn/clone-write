@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, FileJson, FileText, FlaskConical, Loader2, Settings, ShieldCheck, Workflow } from 'lucide-react';
+import { AlertTriangle, Download, FileJson, FileText, FlaskConical, Loader2, Settings, ShieldCheck, Sparkles, Workflow } from 'lucide-react';
 import {
     getStoryStudioNoActiveProjectViewState,
     getStoryStudioPageView,
@@ -12,6 +12,7 @@ import { DraftPanel } from './DraftPanel';
 import { PlanPanel } from './PlanPanel';
 import { StoryIntelligencePanel } from './StoryIntelligencePanel';
 import { StorySetupReviewPanel } from './StorySetupReviewPanel';
+import { StorySetupWizard } from './StorySetupWizard';
 import { StoryStudioActionBar } from './StoryStudioActionBar';
 import { StoryStudioConfirmModal } from './StoryStudioConfirmModal';
 import { StoryStudioHeader } from './StoryStudioHeader';
@@ -45,16 +46,34 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
         hasValidProjectLibrary: studio.hasValidProjectLibrary,
         hasPreparedImport: studio.preparedImport !== undefined,
         preparedImportOrigin: studio.preparedImportOrigin,
+        hasOpenWizard: studio.wizardOpen && studio.wizardDraft !== undefined,
+        wizardOrigin: studio.wizardOrigin,
         hasProject: studio.project !== undefined,
         showDemo: studio.showDemo,
     });
 
     if (pageView === 'loading') return <div className="flex h-full items-center justify-center gap-3 text-sm font-bold text-slate-500"><Loader2 className="h-6 w-6 animate-spin text-indigo-500" /> Đang mở dự án Story Studio…</div>;
 
+    if (pageView === 'wizard' && studio.wizardDraft) return (
+        <div className="h-full overflow-y-auto p-4 sm:p-7">
+            <StorySetupWizard
+                draft={studio.wizardDraft}
+                compiling={studio.operation === 'compiling-setup'}
+                draftStatus={studio.wizardDraftSaveStatus}
+                onChange={studio.updateWizardDraft}
+                onCancel={studio.closeWizard}
+                onDiscard={() => void studio.discardWizardDraft()}
+                onCompile={() => void studio.compileWizardDraft()}
+                onDownloadMarkdown={studio.downloadWizardMarkdown}
+                onDownloadTemplate={studio.downloadBlankTemplate}
+            />
+        </div>
+    );
+
     if (pageView === 'core-corrupt') return (
         <div className="flex h-full overflow-y-auto p-5">
             <div className="m-auto w-full max-w-3xl space-y-4">
-                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />}
+                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} />}
                 <div className="rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900">
                     <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
                     <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
@@ -94,11 +113,13 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     if (pageView === 'no-active') return (
         <StoryStudioEmptyState
             projectLibrary={noActiveProjectView.showProjectLibrary
-                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />
+                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} />
                 : undefined}
             compiling={studio.operation === 'compiling-setup'}
             errorMessage={studio.errorMessage}
             onImport={file => void studio.importFile(file)}
+            onNewStory={() => void studio.openWizard()}
+            onDownloadTemplate={studio.downloadBlankTemplate}
             onDemo={() => studio.setShowDemo(true)}
             onSettings={studio.onOpenGeminiSettings}
         />
@@ -110,8 +131,8 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     return (
         <div className="h-full overflow-y-auto custom-scrollbar">
             <div className="mx-auto max-w-[1600px] space-y-6 p-4 pb-10 sm:p-6 lg:p-8">
-                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />}
-                {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
+                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} />}
+                {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onExportSetup={studio.exportActiveSetup} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
                 <StoryStudioHeader project={viewModel.project} onExitDemo={() => studio.setShowDemo(false)} />
                 <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${viewModel.project.isDemo ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>
                     {viewModel.project.isDemo ? 'Dữ liệu minh họa — không gọi model, không lưu, không đổi Canon.' : 'Dự án thật / đã lưu cục bộ. Dự án V4 được lưu cục bộ trên trình duyệt này.'}
@@ -132,7 +153,16 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     );
 };
 
-const StoryStudioEmptyState: React.FC<{ projectLibrary?: React.ReactNode; compiling: boolean; errorMessage?: string; onImport: (file: File) => void; onDemo: () => void; onSettings: () => void }> = ({ projectLibrary, compiling, errorMessage, onImport, onDemo, onSettings }) => (
+const StoryStudioEmptyState: React.FC<{
+    projectLibrary?: React.ReactNode;
+    compiling: boolean;
+    errorMessage?: string;
+    onImport: (file: File) => void;
+    onNewStory: () => void;
+    onDownloadTemplate: () => void;
+    onDemo: () => void;
+    onSettings: () => void;
+}> = ({ projectLibrary, compiling, errorMessage, onImport, onNewStory, onDownloadTemplate, onDemo, onSettings }) => (
     <div className="flex h-full overflow-y-auto custom-scrollbar">
         <div className="m-auto w-full max-w-4xl space-y-4 p-5 sm:p-8">
             {projectLibrary}
@@ -141,8 +171,10 @@ const StoryStudioEmptyState: React.FC<{ projectLibrary?: React.ReactNode; compil
                 <div className="p-6 sm:p-8">
                     {errorMessage && <div className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">{errorMessage}</div>}
                     {compiling ? <div className="flex items-center justify-center gap-3 py-8 text-sm font-black text-indigo-600"><Loader2 className="h-6 w-6 animate-spin" /> Đang biên dịch setup bằng Gemini…</div> : <div className="grid gap-4 sm:grid-cols-2">
-                        <ImportCard icon={FileText} title="Import Author Setup" text="TXT/MD dài, có thể chứa Author Secret. Gemini hỗ trợ chuyển đổi; kết quả luôn qua parser và review." accept=".txt,.md,text/plain,text/markdown" onImport={onImport} />
-                        <ImportCard icon={FileJson} title="Import V4 JSON" text="Đường nhập offline cho StoryBlueprintDocument hợp lệ. Không gọi model." accept=".json,application/json" onImport={onImport} />
+                        <ActionCard icon={Sparkles} title="Tạo truyện mới" text="Wizard 9 bước bằng ngôn ngữ tác giả; tự lưu bản nháp và chỉ gọi Gemini khi bạn yêu cầu biên dịch." action="Mở wizard" onClick={onNewStory} />
+                        <ImportCard icon={FileText} title="Nhập Setup TXT/MD" text="Setup tác giả có thể chứa bí mật. Gemini chuyển đổi; kết quả luôn qua parser và Review Setup V4." accept=".txt,.md,text/plain,text/markdown" onImport={onImport} />
+                        <ImportCard icon={FileJson} title="Nhập V4 JSON (nâng cao / offline)" text="Đường nhập offline cho StoryBlueprintDocument hợp lệ. Không gọi model." accept=".json,application/json" onImport={onImport} />
+                        <ActionCard icon={Download} title="Tải mẫu Setup" text="Mẫu Markdown tiếng Việt để tự điền hoặc nhờ ChatGPT, Gemini, Claude và công cụ khác hỗ trợ." action="Tải tệp .md" onClick={onDownloadTemplate} />
                     </div>}
                     <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row"><button type="button" onClick={onDemo} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 dark:border-slate-700 dark:text-slate-300"><FlaskConical className="h-4 w-4" /> Xem dữ liệu demo</button><button type="button" onClick={onSettings} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 dark:border-slate-700 dark:text-slate-300"><Settings className="h-4 w-4" /> Mở Cài đặt Gemini</button></div>
                     <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400"><ShieldCheck className="h-4 w-4" /> Dự án V4 được lưu cục bộ trên trình duyệt này; không có cloud backup.</div>
@@ -153,6 +185,7 @@ const StoryStudioEmptyState: React.FC<{ projectLibrary?: React.ReactNode; compil
 );
 
 const ImportCard: React.FC<{ icon: React.ComponentType<{ className?: string }>; title: string; text: string; accept: string; onImport: (file: File) => void }> = ({ icon: Icon, title, text, accept, onImport }) => <label className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-200 p-6 text-center transition hover:border-indigo-400 hover:bg-indigo-50/50 dark:border-slate-700 dark:hover:bg-indigo-950/20"><Icon className="mx-auto h-8 w-8 text-indigo-500" /><div className="mt-3 font-black text-slate-900 dark:text-white">{title}</div><p className="mt-2 text-xs leading-relaxed text-slate-500">{text}</p><span className="mt-4 inline-block rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white">Chọn tệp</span><input type="file" accept={accept} className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) onImport(file); event.currentTarget.value = ''; }} /></label>;
+const ActionCard: React.FC<{ icon: React.ComponentType<{ className?: string }>; title: string; text: string; action: string; onClick: () => void }> = ({ icon: Icon, title, text, action, onClick }) => <button type="button" onClick={onClick} className="rounded-2xl border-2 border-dashed border-slate-200 p-6 text-center transition hover:border-indigo-400 hover:bg-indigo-50/50 dark:border-slate-700 dark:hover:bg-indigo-950/20"><Icon className="mx-auto h-8 w-8 text-indigo-500" /><div className="mt-3 font-black text-slate-900 dark:text-white">{title}</div><p className="mt-2 text-xs leading-relaxed text-slate-500">{text}</p><span className="mt-4 inline-block rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white">{action}</span></button>;
 
 const SafeFailure: React.FC<{ message: string }> = ({ message }) => <div className="flex h-full items-center justify-center p-6"><div className="max-w-lg rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900"><AlertTriangle className="mx-auto h-10 w-10 text-rose-500" /><h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể hiển thị Story Studio</h1><p className="mt-2 text-sm text-slate-500">{message}</p></div></div>;
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileJson, FileText, Loader2, Pause, Play, RotateCcw, Settings, Trash2 } from 'lucide-react';
+import { Download, FileJson, FileText, Loader2, Pause, Play, RotateCcw, Settings, Trash2 } from 'lucide-react';
 import type { StoryStudioRuntimeProject } from '../../storyStudio/production/storyStudioProjectTypes';
 import type { StoryStudioOperation, StoryStudioSaveStatus } from '../../hooks/pages/useStoryStudio';
 
@@ -23,8 +23,9 @@ export const StoryStudioActionBar: React.FC<{
     onReplan: () => void;
     onImport: (file: File) => void;
     onOpenSettings: () => void;
+    onExportSetup: () => void;
     onDelete: () => void;
-}> = ({ project, batchSize, saveStatus, operation, disabled, onBatchSize, onStart, onResume, onStop, onRewrite, onReplan, onImport, onOpenSettings, onDelete }) => {
+}> = ({ project, batchSize, saveStatus, operation, disabled, onBatchSize, onStart, onResume, onStop, onRewrite, onReplan, onImport, onOpenSettings, onExportSetup, onDelete }) => {
     const workflow = project.workflow;
     const storyComplete = project.state.currentChapter >= project.control.engine.plannedChapterCount;
     const approvedRecoveryStage = workflow.stage === 'validated' || workflow.stage === 'extracted';
@@ -60,8 +61,9 @@ export const StoryStudioActionBar: React.FC<{
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                     {operation && <span className="inline-flex items-center gap-2 font-bold text-indigo-600 dark:text-indigo-300"><Loader2 className="h-4 w-4 animate-spin" /> {operationLabels[operation]}</span>}
                     <SaveBadge status={saveStatus} />
-                    <label className="cursor-pointer rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 dark:border-slate-700" title="Nhập JSON khác"><FileJson className="h-4 w-4" /><input type="file" accept=".json,application/json" className="hidden" disabled={disabled} onChange={event => { const file = event.target.files?.[0]; if (file) onImport(file); event.currentTarget.value = ''; }} /></label>
-                    <label className="cursor-pointer rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 dark:border-slate-700" title="Nhập TXT/MD khác"><FileText className="h-4 w-4" /><input type="file" accept=".txt,.md,text/plain,text/markdown" className="hidden" disabled={disabled} onChange={event => { const file = event.target.files?.[0]; if (file) onImport(file); event.currentTarget.value = ''; }} /></label>
+                    <label className="cursor-pointer rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 dark:border-slate-700" title="Nhập V4 JSON khác (nâng cao / offline)"><FileJson className="h-4 w-4" /><input type="file" accept=".json,application/json" className="hidden" disabled={disabled} onChange={event => { const file = event.target.files?.[0]; if (file) onImport(file); event.currentTarget.value = ''; }} /></label>
+                    <label className="cursor-pointer rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 dark:border-slate-700" title="Nhập Setup TXT/MD khác"><FileText className="h-4 w-4" /><input type="file" accept=".txt,.md,text/plain,text/markdown" className="hidden" disabled={disabled} onChange={event => { const file = event.target.files?.[0]; if (file) onImport(file); event.currentTarget.value = ''; }} /></label>
+                    <button type="button" onClick={onExportSetup} disabled={disabled} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 disabled:opacity-40 dark:border-slate-700" title="Xuất Setup Markdown (có thể chứa bí mật tác giả)"><Download className="h-4 w-4" /></button>
                     <button type="button" onClick={onOpenSettings} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 dark:border-slate-700" title="Mở Cài đặt Gemini"><Settings className="h-4 w-4" /></button>
                     <button type="button" onClick={onDelete} disabled={disabled} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-rose-600 dark:border-slate-700" title="Xóa dự án V4 khỏi máy"><Trash2 className="h-4 w-4" /></button>
                 </div>
