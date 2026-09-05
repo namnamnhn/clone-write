@@ -75,6 +75,10 @@ An empty legacy key creates an empty version-1 index. Migration does not call a 
 - Deleting the last project leaves an empty library.
 - If deleting the last valid active project leaves only corrupt or missing entries, the index has no active ID. The UI still shows those unavailable entries and the normal import/create path without selecting, repairing, or deleting any Canon automatically.
 
+### Story Studio view precedence
+
+The page resolves view state in this order: loading, authorized setup review, core-corrupt recovery, no-active library/empty state, then connected project or demo. Setup review may precede a core-corrupt screen only when the prepared import was initiated while a valid new-library snapshot was present; the hook records that origin explicitly. Canceling review clears only the prepared import and returns to the unchanged typed recovery target/error. A corrupt legacy record or invalid new index has no valid-library authority, so neither can use setup review to bypass fail-closed recovery. Successful creation clears the old recovery context only after the new isolated project and index are durably committed.
+
 ## Compatibility and intentional omissions
 
 - Legacy **Sáng Tác / Creative** storage and behavior are not changed.

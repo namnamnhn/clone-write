@@ -1,6 +1,10 @@
 import React from 'react';
 import { AlertTriangle, FileJson, FileText, FlaskConical, Loader2, Settings, ShieldCheck, Workflow } from 'lucide-react';
-import { getStoryStudioNoActiveProjectViewState, useStoryStudio } from '../../hooks/pages/useStoryStudio';
+import {
+    getStoryStudioNoActiveProjectViewState,
+    getStoryStudioPageView,
+    useStoryStudio,
+} from '../../hooks/pages/useStoryStudio';
 import { CanonicalChapterHistoryPanel } from './CanonicalChapterHistoryPanel';
 import { CanonReviewPanel } from './CanonReviewPanel';
 import { ChapterWorkflowPanel } from './ChapterWorkflowPanel';
@@ -36,10 +40,18 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     const studio = useStoryStudio(props);
     const disabled = Boolean(studio.operation) || studio.saveStatus === 'saving';
     const noActiveProjectView = getStoryStudioNoActiveProjectViewState(studio.projectLibrary);
+    const pageView = getStoryStudioPageView({
+        loadStatus: studio.loadStatus,
+        hasValidProjectLibrary: studio.hasValidProjectLibrary,
+        hasPreparedImport: studio.preparedImport !== undefined,
+        preparedImportOrigin: studio.preparedImportOrigin,
+        hasProject: studio.project !== undefined,
+        showDemo: studio.showDemo,
+    });
 
-    if (studio.loadStatus === 'loading') return <div className="flex h-full items-center justify-center gap-3 text-sm font-bold text-slate-500"><Loader2 className="h-6 w-6 animate-spin text-indigo-500" /> Đang mở dự án Story Studio…</div>;
+    if (pageView === 'loading') return <div className="flex h-full items-center justify-center gap-3 text-sm font-bold text-slate-500"><Loader2 className="h-6 w-6 animate-spin text-indigo-500" /> Đang mở dự án Story Studio…</div>;
 
-    if (studio.loadStatus === 'core-corrupt') return (
+    if (pageView === 'core-corrupt') return (
         <div className="flex h-full overflow-y-auto p-5">
             <div className="m-auto w-full max-w-3xl space-y-4">
                 {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />}
@@ -71,7 +83,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
         </div>
     );
 
-    if (studio.preparedImport) return (
+    if (pageView === 'setup-review' && studio.preparedImport) return (
         <div className="h-full overflow-y-auto p-4 sm:p-7">
             <div className="mx-auto max-w-5xl">
                 <StorySetupReviewPanel prepared={studio.preparedImport} displayName={studio.importDisplayName} disabled={disabled} onDisplayNameChange={studio.setImportDisplayName} onCreate={() => void studio.finishCreate()} onCancel={studio.cancelImport} />
@@ -79,7 +91,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
         </div>
     );
 
-    if (!studio.project && !studio.showDemo) return (
+    if (pageView === 'no-active') return (
         <StoryStudioEmptyState
             projectLibrary={noActiveProjectView.showProjectLibrary
                 ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />

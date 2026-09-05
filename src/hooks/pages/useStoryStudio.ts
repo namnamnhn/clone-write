@@ -32,6 +32,8 @@ export interface UseStoryStudioProps {
 }
 
 export type StoryStudioExplicitAttempt = 'startBatch' | 'resume' | 'rewriteFromSamePlan' | 'replan';
+export type StoryStudioPreparedImportOrigin = 'normal' | 'verified-core-corrupt-library';
+export type StoryStudioPageView = 'loading' | 'setup-review' | 'core-corrupt' | 'no-active' | 'studio';
 
 export interface StoryStudioRecoveryUiState {
     readonly recoveryTarget?: StoryStudioProjectRecoveryTarget;
@@ -66,6 +68,34 @@ export const getStoryStudioNoActiveProjectViewState = (
     showProjectLibrary: entries.length > 0,
     showImportCreation: true,
 });
+
+export const getStoryStudioPreparedImportOrigin = (
+    loadStatus: StoryStudioLoadStatus,
+    hasValidProjectLibrary: boolean,
+): StoryStudioPreparedImportOrigin | undefined => {
+    if (loadStatus !== 'core-corrupt') return 'normal';
+    return hasValidProjectLibrary ? 'verified-core-corrupt-library' : undefined;
+};
+
+/** Explicit precedence prevents setup review from bypassing an untrusted corrupt storage state. */
+export const getStoryStudioPageView = (input: {
+    readonly loadStatus: StoryStudioLoadStatus;
+    readonly hasValidProjectLibrary: boolean;
+    readonly hasPreparedImport: boolean;
+    readonly preparedImportOrigin?: StoryStudioPreparedImportOrigin;
+    readonly hasProject: boolean;
+    readonly showDemo: boolean;
+}): StoryStudioPageView => {
+    if (input.loadStatus === 'loading') return 'loading';
+    const reviewAllowed = input.hasPreparedImport && (
+        input.loadStatus !== 'core-corrupt'
+        || (input.hasValidProjectLibrary && input.preparedImportOrigin === 'verified-core-corrupt-library')
+    );
+    if (reviewAllowed) return 'setup-review';
+    if (input.loadStatus === 'core-corrupt') return 'core-corrupt';
+    if (!input.hasProject && !input.showDemo) return 'no-active';
+    return 'studio';
+};
 
 export const runStoryStudioProductionAttempt = async <T>(
     attempt: StoryStudioExplicitAttempt,
@@ -132,6 +162,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     const [loadStatus, setLoadStatus] = useState<StoryStudioLoadStatus>('loading');
     const [project, setProject] = useState<StoryStudioRuntimeProject>();
     const [projectLibrary, setProjectLibrary] = useState<readonly StoryStudioProjectLibraryViewEntry[]>([]);
+    const [hasValidProjectLibrary, setHasValidProjectLibrary] = useState(false);
     const [activeProjectId, setActiveProjectId] = useState<StoryStudioProjectId>();
     const [showDemo, setShowDemo] = useState(false);
     const [saveStatus, setSaveStatus] = useState<StoryStudioSaveStatus>('saved');
@@ -144,6 +175,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         dispatchRecoveryUi({ type: 'clear-error' });
     }, []);
     const [preparedImport, setPreparedImport] = useState<PreparedStorySetupImport>();
+    const [preparedImportOrigin, setPreparedImportOrigin] = useState<StoryStudioPreparedImportOrigin>();
     const [importDisplayName, setImportDisplayName] = useState('');
     const [makeCanonConfirmationOpen, setMakeCanonConfirmationOpen] = useState(false);
     const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
@@ -154,6 +186,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         void controller.load().then((result) => {
             if (!mountedRef.current) return;
             setProjectLibrary(result.library?.entries ?? []);
+            setHasValidProjectLibrary(result.library !== undefined);
             setActiveProjectId(result.library?.index.activeProjectId);
             if (result.status === 'empty') {
                 setLoadStatus('empty');
@@ -186,6 +219,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         setLoadStatus('connected');
         setSaveStatus('saved');
         setProjectLibrary(controller.projectLibrary);
+        setHasValidProjectLibrary(true);
         setActiveProjectId(controller.activeProjectId);
         dispatchRecoveryUi({ type: 'connected' });
     }, [controller]);
@@ -235,7 +269,9 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
 
     const importFile = useCallback(async (file: File) => {
         if (abortRef.current || operation) return;
-        setErrorMessage(undefined);
+        const origin = getStoryStudioPreparedImportOrigin(loadStatus, hasValidProjectLibrary);
+        if (!origin) return;
+        if (origin === 'normal') setErrorMessage(undefined);
         let compilerAbortController: AbortController | undefined;
         try {
             const source = await file.text();
@@ -256,6 +292,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                 throw new StorySetupImportError('UNSUPPORTED_SETUP_FILE');
             }
             setPreparedImport(prepared);
+            setPreparedImportOrigin(origin);
             setImportDisplayName(prepared.review.displayName);
         } catch (error) {
             handleError(error);
@@ -263,7 +300,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             if (compilerAbortController && abortRef.current === compilerAbortController) abortRef.current = null;
             setOperation(undefined);
         }
-    }, [enabledModels, handleError, operation, setErrorMessage]);
+    }, [enabledModels, handleError, hasValidProjectLibrary, loadStatus, operation, setErrorMessage]);
 
     const finishCreate = useCallback(async () => {
         if (!preparedImport || preparedImport.review.criticalIssues.length > 0) return;
@@ -272,6 +309,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             const next = await controller.createProject(preparedImport.setupDocument, importDisplayName);
             publish(next);
             setPreparedImport(undefined);
+            setPreparedImportOrigin(undefined);
             setShowDemo(false);
             addToast('Đã tạo và lưu dự án Story Engine V4.', 'success');
         } catch (error) { handleError(error); }
@@ -356,7 +394,9 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                     recoveryDeleteTarget?.kind === 'active-library-project' ? recoveryDeleteTarget.projectId : undefined,
                 );
             setPreparedImport(undefined);
+            setPreparedImportOrigin(undefined);
             setProjectLibrary(result.library?.entries ?? []);
+            setHasValidProjectLibrary(result.library !== undefined);
             setActiveProjectId(result.library?.index.activeProjectId);
             if (result.status === 'core-corrupt') {
                 dispatchRecoveryUi({
@@ -416,8 +456,8 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     return {
         loadStatus, project, projectLibrary, activeProjectId, showDemo, setShowDemo, viewModel, saveStatus, operation,
         errorMessage, setErrorMessage, recoveryWarning, recoveryTarget,
-        preparedImport, importDisplayName, setImportDisplayName, importFile,
-        cancelImport: () => { setPreparedImport(undefined); },
+        preparedImport, preparedImportOrigin, hasValidProjectLibrary, importDisplayName, setImportDisplayName, importFile,
+        cancelImport: () => { setPreparedImport(undefined); setPreparedImportOrigin(undefined); },
         finishCreate, switchProject, renameActiveProject,
         batchSize, setBatchSize, startBatch, resume, stop, rewriteFromSamePlan, replan,
         makeCanonConfirmationOpen, setMakeCanonConfirmationOpen, confirmMakeCanon,

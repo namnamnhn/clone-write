@@ -11,6 +11,8 @@ import {
 import type { StoryBlueprintDocument } from '../src/storyEngine';
 import {
     getStoryStudioNoActiveProjectViewState,
+    getStoryStudioPageView,
+    getStoryStudioPreparedImportOrigin,
     getStoryStudioRecoveryDeleteTarget,
     reduceStoryStudioRecoveryUiState,
 } from '../src/hooks/pages/useStoryStudio';
@@ -39,6 +41,7 @@ import {
     rebuildRuntimeProject,
     withoutRuntimeControl,
 } from '../src/storyStudio/production/storyStudioProjectRuntime';
+import { prepareJsonStorySetupImport } from '../src/storyStudio/production/storySetupImport';
 
 const SECRET = 'WORK15A_AUTHOR_SECRET_MUST_NOT_ENTER_INDEX';
 const FIXED_TIME = '2026-09-04T00:00:00.000Z';
@@ -717,6 +720,116 @@ describe('WORK15A multi-project durability and isolation', () => {
         expect(adapter.values.has(storyStudioProjectStorageKey(a))).toBe(true);
     });
 
+    it('allows prepared setup review from a verified corrupt-active library and cancel returns safely', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        adapter.values.set(storyStudioProjectStorageKey(a), { corrupt: true });
+        const recoveredController = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        const corruptLoad = await recoveredController.load();
+        if (corruptLoad.status !== 'core-corrupt') throw new Error('expected corrupt active project');
+        const recoveryUi = reduceStoryStudioRecoveryUiState({}, {
+            type: 'core-corrupt', recoveryTarget: corruptLoad.recoveryTarget, errorMessage: 'original corrupt error',
+        });
+        const storedA = structuredClone(adapter.values.get(storyStudioProjectStorageKey(a)));
+        const origin = getStoryStudioPreparedImportOrigin('core-corrupt', corruptLoad.library !== undefined);
+        const prepared = prepareJsonStorySetupImport(JSON.stringify(blueprint('c')), 'C.json');
+
+        expect(origin).toBe('verified-core-corrupt-library');
+        expect(getStoryStudioPageView({
+            loadStatus: 'core-corrupt', hasValidProjectLibrary: true, hasPreparedImport: Boolean(prepared),
+            preparedImportOrigin: origin, hasProject: false, showDemo: false,
+        })).toBe('setup-review');
+
+        // Cancel clears only prepared review state; corrupt recovery authority/error and storage stay intact.
+        expect(getStoryStudioPageView({
+            loadStatus: 'core-corrupt', hasValidProjectLibrary: true, hasPreparedImport: false,
+            preparedImportOrigin: undefined, hasProject: false, showDemo: false,
+        })).toBe('core-corrupt');
+        expect(recoveryUi).toEqual({
+            recoveryTarget: { kind: 'active-library-project', projectId: a },
+            errorMessage: 'original corrupt error',
+        });
+        expect(adapter.values.get(storyStudioProjectStorageKey(a))).toEqual(storedA);
+    });
+
+    it('creates C from authorized corrupt-library review, preserves A, clears recovery, and ordinary delete targets C', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        adapter.values.set(storyStudioProjectStorageKey(a), { corrupt: true });
+        const recoveredController = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        const corruptLoad = await recoveredController.load();
+        if (corruptLoad.status !== 'core-corrupt') throw new Error('expected corrupt active project');
+        let recoveryUi = reduceStoryStudioRecoveryUiState({}, {
+            type: 'core-corrupt', recoveryTarget: corruptLoad.recoveryTarget, errorMessage: 'original corrupt error',
+        });
+        const origin = getStoryStudioPreparedImportOrigin('core-corrupt', corruptLoad.library !== undefined);
+        const prepared = prepareJsonStorySetupImport(JSON.stringify(blueprint('c')), 'C.json');
+        expect(getStoryStudioPageView({
+            loadStatus: 'core-corrupt', hasValidProjectLibrary: true, hasPreparedImport: true,
+            preparedImportOrigin: origin, hasProject: false, showDemo: false,
+        })).toBe('setup-review');
+
+        await recoveredController.createProject(prepared.setupDocument, prepared.review.displayName);
+        const c = recoveredController.activeProjectId!;
+        recoveryUi = reduceStoryStudioRecoveryUiState(recoveryUi, { type: 'connected' });
+        expect(recoveredController.currentProject?.setupDocument).toEqual(prepared.setupDocument);
+        expect(adapter.values.has(storyStudioProjectStorageKey(a))).toBe(true);
+        expect(recoveryUi).toEqual({});
+        expect(getStoryStudioRecoveryDeleteTarget('connected', recoveryUi.recoveryTarget)).toBeUndefined();
+
+        await recoveredController.deleteProject();
+        expect(adapter.values.has(storyStudioProjectStorageKey(c))).toBe(false);
+        expect(adapter.values.has(storyStudioProjectStorageKey(a))).toBe(true);
+    });
+
+    it('failed preparation preserves corrupt recovery authority and all durable library/project data', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        adapter.values.set(storyStudioProjectStorageKey(a), { corrupt: true });
+        const recoveredController = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        const corruptLoad = await recoveredController.load();
+        if (corruptLoad.status !== 'core-corrupt') throw new Error('expected corrupt active project');
+        const durableBefore = structuredClone([...adapter.values.entries()]);
+        let recoveryUi = reduceStoryStudioRecoveryUiState({}, {
+            type: 'core-corrupt', recoveryTarget: corruptLoad.recoveryTarget, errorMessage: 'original corrupt error',
+        });
+        expect(() => prepareJsonStorySetupImport('{"kind":"not-v4"}', 'broken.json')).toThrow();
+        recoveryUi = reduceStoryStudioRecoveryUiState(recoveryUi, {
+            type: 'operation-error', errorMessage: 'Dự án chưa được tạo; dữ liệu cũ vẫn an toàn.',
+        });
+
+        expect(recoveryUi.recoveryTarget).toEqual({ kind: 'active-library-project', projectId: a });
+        expect(recoveryUi.errorMessage).toContain('dữ liệu cũ vẫn an toàn');
+        expect(getStoryStudioPageView({
+            loadStatus: 'core-corrupt', hasValidProjectLibrary: true, hasPreparedImport: false,
+            hasProject: false, showDemo: false,
+        })).toBe('core-corrupt');
+        expect([...adapter.values.entries()]).toEqual(durableBefore);
+    });
+
+    it('does not allow prepared-review bypass for corrupt legacy or an invalid new index', () => {
+        expect(getStoryStudioPreparedImportOrigin('core-corrupt', false)).toBeUndefined();
+        for (const recoveryTarget of [
+            { kind: 'legacy-single-project' as const },
+            undefined,
+        ]) {
+            const recoveryUi = reduceStoryStudioRecoveryUiState({}, {
+                type: 'core-corrupt', recoveryTarget, errorMessage: 'fail closed',
+            });
+            expect(getStoryStudioPageView({
+                loadStatus: 'core-corrupt', hasValidProjectLibrary: false, hasPreparedImport: true,
+                preparedImportOrigin: undefined, hasProject: false, showDemo: false,
+            })).toBe('core-corrupt');
+            expect(recoveryUi.recoveryTarget).toEqual(recoveryTarget);
+        }
+    });
+
     it('failed atomic save publishes neither new in-memory Canon nor new durable Canon', async () => {
         const { adapter, repository, controller } = environment();
         await controller.load();
@@ -813,6 +926,10 @@ describe('WORK15A multi-project durability and isolation', () => {
         expect(getStoryStudioNoActiveProjectViewState(verified.projectLibrary)).toEqual({
             showProjectLibrary: true, showImportCreation: true,
         });
+        expect(getStoryStudioPageView({
+            loadStatus: 'empty', hasValidProjectLibrary: true, hasPreparedImport: false,
+            hasProject: false, showDemo: false,
+        })).toBe('no-active');
         expect(adapter.values.has(storyStudioProjectStorageKey(b))).toBe(true);
 
         const reloaded = new StoryStudioProjectController(repository, () => FIXED_TIME);
