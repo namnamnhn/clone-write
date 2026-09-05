@@ -1,7 +1,10 @@
 import type { StoryStudioSession } from '../storyStudioTypes';
 import type { StoryStudioRuntimeProject } from './storyStudioProjectTypes';
 
-export const buildConnectedStoryStudioSession = (project: StoryStudioRuntimeProject): StoryStudioSession => {
+export const buildConnectedStoryStudioSession = (
+    project: StoryStudioRuntimeProject,
+    catalogDisplayName = project.displayName,
+): StoryStudioSession => {
     const workflow = project.workflow;
     const plan = workflow.stage === 'idle' ? undefined : workflow.plan;
     const originalDraft = workflow.stage === 'drafted' || workflow.stage === 'validated' || workflow.stage === 'rejected'
@@ -23,7 +26,7 @@ export const buildConnectedStoryStudioSession = (project: StoryStudioRuntimeProj
             : undefined;
     const displayDraft = approvedDraft ?? rejectedDraft ?? originalDraft?.draft;
     return {
-        mode: 'connected', projectTitle: project.displayName, control: project.control, state: project.state,
+        mode: 'connected', projectTitle: catalogDisplayName, control: project.control, state: project.state,
         ...(plan === undefined ? {} : {
             internalPlan: plan.privileged.internalPlan,
             writerPlan: plan.writerPlan,

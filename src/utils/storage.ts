@@ -274,6 +274,40 @@ export const clearSessionRecord = async (key: string): Promise<void> => {
   });
 };
 
+export interface SessionStorageWrite {
+  readonly key: string;
+  readonly value: unknown;
+}
+
+/**
+ * Atomically applies related session-record writes/deletes in one IndexedDB transaction.
+ * Callers use this when publishing an index and its referenced record must be all-or-nothing.
+ */
+export const commitSessionRecords = async (
+  writes: readonly SessionStorageWrite[],
+  clears: readonly string[] = [],
+): Promise<void> => {
+  const db = await initDB();
+  const compressedWrites = await Promise.all(writes.map(async write => ({
+    key: write.key,
+    value: await compressData(write.value),
+  })));
+  return new Promise((resolve, reject) => {
+    try {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      compressedWrites.forEach(write => store.put(write.value, write.key));
+      clears.forEach(key => store.delete(key));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error ?? new Error('session storage transaction aborted'));
+    } catch (error) {
+      dbInstance = null;
+      reject(error);
+    }
+  });
+};
+
 /**
  * Reset App V4: Soft Reset Support
  * Đóng kết nối và xóa Database.

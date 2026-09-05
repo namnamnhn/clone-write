@@ -1,6 +1,10 @@
 import React from 'react';
 import { AlertTriangle, FileJson, FileText, FlaskConical, Loader2, Settings, ShieldCheck, Workflow } from 'lucide-react';
-import { useStoryStudio } from '../../hooks/pages/useStoryStudio';
+import {
+    getStoryStudioNoActiveProjectViewState,
+    getStoryStudioPageView,
+    useStoryStudio,
+} from '../../hooks/pages/useStoryStudio';
 import { CanonicalChapterHistoryPanel } from './CanonicalChapterHistoryPanel';
 import { CanonReviewPanel } from './CanonReviewPanel';
 import { ChapterWorkflowPanel } from './ChapterWorkflowPanel';
@@ -12,6 +16,7 @@ import { StoryStudioActionBar } from './StoryStudioActionBar';
 import { StoryStudioConfirmModal } from './StoryStudioConfirmModal';
 import { StoryStudioHeader } from './StoryStudioHeader';
 import { StoryStudioOverview } from './StoryStudioOverview';
+import { StoryStudioProjectLibrary } from './StoryStudioProjectLibrary';
 import { ValidationPanel } from './ValidationPanel';
 
 export interface StoryStudioPageProps {
@@ -34,33 +39,63 @@ class StoryStudioErrorBoundary extends React.Component<React.PropsWithChildren, 
 const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     const studio = useStoryStudio(props);
     const disabled = Boolean(studio.operation) || studio.saveStatus === 'saving';
+    const noActiveProjectView = getStoryStudioNoActiveProjectViewState(studio.projectLibrary);
+    const pageView = getStoryStudioPageView({
+        loadStatus: studio.loadStatus,
+        hasValidProjectLibrary: studio.hasValidProjectLibrary,
+        hasPreparedImport: studio.preparedImport !== undefined,
+        preparedImportOrigin: studio.preparedImportOrigin,
+        hasProject: studio.project !== undefined,
+        showDemo: studio.showDemo,
+    });
 
-    if (studio.loadStatus === 'loading') return <div className="flex h-full items-center justify-center gap-3 text-sm font-bold text-slate-500"><Loader2 className="h-6 w-6 animate-spin text-indigo-500" /> Đang mở dự án Story Studio…</div>;
+    if (pageView === 'loading') return <div className="flex h-full items-center justify-center gap-3 text-sm font-bold text-slate-500"><Loader2 className="h-6 w-6 animate-spin text-indigo-500" /> Đang mở dự án Story Studio…</div>;
 
-    if (studio.loadStatus === 'core-corrupt') return (
+    if (pageView === 'core-corrupt') return (
         <div className="flex h-full overflow-y-auto p-5">
-            <div className="m-auto max-w-xl rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900">
-                <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
-                <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
-                <p className="mt-2 text-sm leading-relaxed text-slate-500">{studio.errorMessage}</p>
-                <p className="mt-3 text-xs text-slate-400">Dữ liệu lỗi không bị tự động ghi đè. Chỉ xóa khi bạn chắc chắn muốn bỏ riêng dự án V4 này.</p>
-                <button type="button" onClick={() => studio.setDeleteConfirmationOpen(true)} className="mt-6 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white">Xóa dự án V4 lỗi khỏi máy</button>
-                <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4?" message="Thao tác này chỉ xóa khe lưu Story Studio V4 trên trình duyệt này; dữ liệu Sáng Tác cũ và toàn bộ database khác không bị xóa." confirmLabel="Xóa dự án V4" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
+            <div className="m-auto w-full max-w-3xl space-y-4">
+                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />}
+                <div className="rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900">
+                    <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
+                    <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-500">{studio.errorMessage}</p>
+                    <p className="mt-3 text-xs text-slate-400">
+                        {studio.recoveryTarget
+                            ? 'Dữ liệu lỗi không bị tự động ghi đè. Chỉ xóa khi bạn xác nhận rõ bên dưới.'
+                            : 'Không có định danh dự án đáng tin cậy để xóa an toàn. Story Studio giữ nguyên toàn bộ dữ liệu để có thể phục hồi bằng một cơ chế riêng.'}
+                    </p>
+                    {studio.recoveryTarget && <button type="button" onClick={() => studio.setDeleteConfirmationOpen(true)} className="mt-6 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white">
+                        {studio.recoveryTarget.kind === 'legacy-single-project' ? 'Xóa bản lưu Story Studio cũ bị lỗi' : 'Xóa dự án Story Studio đang chọn bị lỗi'}
+                    </button>}
+                    {studio.recoveryTarget && <StoryStudioConfirmModal
+                        open={studio.deleteConfirmationOpen}
+                        title={studio.recoveryTarget.kind === 'legacy-single-project' ? 'Xóa bản lưu Story Studio cũ bị lỗi?' : 'Xóa dự án Story Studio đang chọn bị lỗi?'}
+                        message={studio.recoveryTarget.kind === 'legacy-single-project'
+                            ? 'Thao tác này chỉ xóa khóa lưu Story Studio một dự án đời cũ. Dữ liệu Sáng Tác, thư viện mới và database khác không bị xóa.'
+                            : 'Thao tác này chỉ xóa dự án Story Studio đang chọn. Các dự án Story Studio khác, dữ liệu Sáng Tác cũ và database khác không bị xóa.'}
+                        confirmLabel="Xác nhận xóa dữ liệu lỗi"
+                        danger
+                        onCancel={() => studio.setDeleteConfirmationOpen(false)}
+                        onConfirm={() => void studio.deleteProject()}
+                    />}
+                </div>
             </div>
         </div>
     );
 
-    if (studio.preparedImport) return (
+    if (pageView === 'setup-review' && studio.preparedImport) return (
         <div className="h-full overflow-y-auto p-4 sm:p-7">
             <div className="mx-auto max-w-5xl">
-                <StorySetupReviewPanel prepared={studio.preparedImport} displayName={studio.importDisplayName} disabled={disabled} onDisplayNameChange={studio.setImportDisplayName} onCreate={() => void studio.finishCreate(false)} onCancel={studio.cancelImport} />
+                <StorySetupReviewPanel prepared={studio.preparedImport} displayName={studio.importDisplayName} disabled={disabled} onDisplayNameChange={studio.setImportDisplayName} onCreate={() => void studio.finishCreate()} onCancel={studio.cancelImport} />
             </div>
-            <StoryStudioConfirmModal open={studio.replacementConfirmationOpen} title="Thay thế dự án hiện tại?" message="Một dự án V4 đang được lưu cục bộ. Chỉ xác nhận nếu bạn muốn thay thế toàn bộ khe dự án hiện tại bằng setup vừa review." confirmLabel="Thay thế dự án hiện tại" danger onCancel={() => studio.setReplacementConfirmationOpen(false)} onConfirm={() => void studio.finishCreate(true)} />
         </div>
     );
 
-    if (!studio.project && !studio.showDemo) return (
+    if (pageView === 'no-active') return (
         <StoryStudioEmptyState
+            projectLibrary={noActiveProjectView.showProjectLibrary
+                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />
+                : undefined}
             compiling={studio.operation === 'compiling-setup'}
             errorMessage={studio.errorMessage}
             onImport={file => void studio.importFile(file)}
@@ -75,6 +110,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     return (
         <div className="h-full overflow-y-auto custom-scrollbar">
             <div className="mx-auto max-w-[1600px] space-y-6 p-4 pb-10 sm:p-6 lg:p-8">
+                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />}
                 {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
                 <StoryStudioHeader project={viewModel.project} onExitDemo={() => studio.setShowDemo(false)} />
                 <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${viewModel.project.isDemo ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>
@@ -91,14 +127,15 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
                 {project && <CanonicalChapterHistoryPanel project={project} />}
             </div>
             <StoryStudioConfirmModal open={studio.makeCanonConfirmationOpen} title={`Make Canon chương ${proposal?.targetChapter ?? ''}?`} message={`Bạn đang xác nhận ${proposal?.review.totalChanges ?? 0} thay đổi. Canon sẽ tiến đúng một chương và chương này không còn được coi là bản nháp sau khi lưu thành công.`} confirmLabel="Xác nhận Make Canon" onCancel={() => studio.setMakeCanonConfirmationOpen(false)} onConfirm={() => void studio.confirmMakeCanon()} />
-            <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4 khỏi máy?" message="Toàn bộ Canon, bộ nhớ và chương đã lưu của dự án V4 hiện tại sẽ bị xóa khỏi trình duyệt này. Dữ liệu Sáng Tác cũ không bị ảnh hưởng." confirmLabel="Xóa dự án V4" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
+            <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4 khỏi máy?" message="Toàn bộ Canon, bộ nhớ và chương đã lưu của dự án V4 hiện tại sẽ bị xóa khỏi trình duyệt này. Các dự án Story Studio khác và dữ liệu Sáng Tác cũ không bị ảnh hưởng." confirmLabel="Xóa dự án V4" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
         </div>
     );
 };
 
-const StoryStudioEmptyState: React.FC<{ compiling: boolean; errorMessage?: string; onImport: (file: File) => void; onDemo: () => void; onSettings: () => void }> = ({ compiling, errorMessage, onImport, onDemo, onSettings }) => (
+const StoryStudioEmptyState: React.FC<{ projectLibrary?: React.ReactNode; compiling: boolean; errorMessage?: string; onImport: (file: File) => void; onDemo: () => void; onSettings: () => void }> = ({ projectLibrary, compiling, errorMessage, onImport, onDemo, onSettings }) => (
     <div className="flex h-full overflow-y-auto custom-scrollbar">
-        <div className="m-auto w-full max-w-4xl p-5 sm:p-8">
+        <div className="m-auto w-full max-w-4xl space-y-4 p-5 sm:p-8">
+            {projectLibrary}
             <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 <div className="bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 px-6 py-10 text-center text-white sm:px-10 sm:py-14"><div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-white/15"><Workflow className="h-8 w-8" /></div><div className="mt-5 text-xs font-black uppercase tracking-[0.2em] text-indigo-100">Story Engine V4</div><h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Studio Truyện</h1><p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-indigo-100 sm:text-base">Nhập Blueprint V4 JSON hoặc setup tác giả TXT/MD, review cấu trúc rồi tạo dự án Canon mới.</p></div>
                 <div className="p-6 sm:p-8">
