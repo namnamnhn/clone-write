@@ -438,6 +438,32 @@ export class StoryStudioProjectRepository {
         });
     }
 
+    /** Restores an already strictly validated portable project under a fresh browser-local identity. */
+    restoreContinuationProject(
+        project: StoryStudioRuntimeProject,
+        catalogDisplayName: string,
+    ): Promise<StoryStudioProjectRepositoryResult> {
+        return this.enqueue(async () => {
+            const current = await this.requireIndex();
+            const projectId = this.nextUniqueProjectId(current);
+            const entry = {
+                ...deriveStoryStudioProjectLibraryEntry(projectId, project),
+                displayName: secretSafeCatalogDisplayName(project, catalogDisplayName),
+            };
+            const index: StoryStudioProjectLibraryIndexV1 = {
+                ...current,
+                activeProjectId: projectId,
+                entries: [...current.entries, entry],
+                updatedAt: this.now(),
+            };
+            await this.commit([
+                { key: storyStudioProjectStorageKey(projectId), value: withoutRuntimeControl(project) },
+                { key: STORY_STUDIO_PROJECT_LIBRARY_KEY, value: index },
+            ]);
+            return this.resultFor(index, projectId, project);
+        });
+    }
+
     saveProject(projectId: StoryStudioProjectId, project: StoryStudioRuntimeProject): Promise<StoryStudioProjectRepositoryResult> {
         return this.enqueue(async () => {
             const current = await this.requireIndex();
