@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, Download, FileJson, FileText, FlaskConical, Loader2, Settings, ShieldCheck, Sparkles, Workflow } from 'lucide-react';
+import { AlertTriangle, Download, FileJson, FileText, FlaskConical, Loader2, Settings, ShieldCheck, Sparkles, Upload, Workflow } from 'lucide-react';
 import {
     getStoryStudioNoActiveProjectViewState,
     getStoryStudioPageView,
@@ -73,7 +73,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     if (pageView === 'core-corrupt') return (
         <div className="flex h-full overflow-y-auto p-5">
             <div className="m-auto w-full max-w-3xl space-y-4">
-                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} />}
+                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.restoreContinuationBackup(file)} />}
                 <div className="rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900">
                     <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
                     <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
@@ -113,13 +113,14 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     if (pageView === 'no-active') return (
         <StoryStudioEmptyState
             projectLibrary={noActiveProjectView.showProjectLibrary
-                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} />
+                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.restoreContinuationBackup(file)} />
                 : undefined}
             compiling={studio.operation === 'compiling-setup'}
             errorMessage={studio.errorMessage}
             onImport={file => void studio.importFile(file)}
             onNewStory={() => void studio.openWizard()}
             onDownloadTemplate={studio.downloadBlankTemplate}
+            onRestoreContinuation={file => void studio.restoreContinuationBackup(file)}
             onDemo={() => studio.setShowDemo(true)}
             onSettings={studio.onOpenGeminiSettings}
         />
@@ -131,8 +132,8 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     return (
         <div className="h-full overflow-y-auto custom-scrollbar">
             <div className="mx-auto max-w-[1600px] space-y-6 p-4 pb-10 sm:p-6 lg:p-8">
-                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} />}
-                {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onExportSetup={studio.exportActiveSetup} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
+                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.restoreContinuationBackup(file)} />}
+                {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onExportSetup={studio.exportActiveSetup} onBackupContinuation={studio.exportActiveContinuationBackup} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
                 <StoryStudioHeader project={viewModel.project} onExitDemo={() => studio.setShowDemo(false)} />
                 <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${viewModel.project.isDemo ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>
                     {viewModel.project.isDemo ? 'Dữ liệu minh họa — không gọi model, không lưu, không đổi Canon.' : 'Dự án thật / đã lưu cục bộ. Dự án V4 được lưu cục bộ trên trình duyệt này.'}
@@ -160,9 +161,10 @@ const StoryStudioEmptyState: React.FC<{
     onImport: (file: File) => void;
     onNewStory: () => void;
     onDownloadTemplate: () => void;
+    onRestoreContinuation: (file: File) => void;
     onDemo: () => void;
     onSettings: () => void;
-}> = ({ projectLibrary, compiling, errorMessage, onImport, onNewStory, onDownloadTemplate, onDemo, onSettings }) => (
+}> = ({ projectLibrary, compiling, errorMessage, onImport, onNewStory, onDownloadTemplate, onRestoreContinuation, onDemo, onSettings }) => (
     <div className="flex h-full overflow-y-auto custom-scrollbar">
         <div className="m-auto w-full max-w-4xl space-y-4 p-5 sm:p-8">
             {projectLibrary}
@@ -175,6 +177,7 @@ const StoryStudioEmptyState: React.FC<{
                         <ImportCard icon={FileText} title="Nhập Setup TXT/MD" text="Setup tác giả có thể chứa bí mật. Gemini chuyển đổi; kết quả luôn qua parser và Review Setup V4." accept=".txt,.md,text/plain,text/markdown" onImport={onImport} />
                         <ImportCard icon={FileJson} title="Nhập V4 JSON (nâng cao / offline)" text="Đường nhập offline cho StoryBlueprintDocument hợp lệ. Không gọi model." accept=".json,application/json" onImport={onImport} />
                         <ActionCard icon={Download} title="Tải mẫu Setup" text="Mẫu Markdown tiếng Việt để tự điền hoặc nhờ ChatGPT, Gemini, Claude và công cụ khác hỗ trợ." action="Tải tệp .md" onClick={onDownloadTemplate} />
+                        <ImportCard icon={Upload} title="Khôi phục bản sao tiếp tục" text="Mở bản sao đầy đủ để tiếp tục đúng Canon, Memory, lịch sử chương và workflow; tạo thành một dự án riêng." accept=".json,application/json" onImport={onRestoreContinuation} />
                     </div>}
                     <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row"><button type="button" onClick={onDemo} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 dark:border-slate-700 dark:text-slate-300"><FlaskConical className="h-4 w-4" /> Xem dữ liệu demo</button><button type="button" onClick={onSettings} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 dark:border-slate-700 dark:text-slate-300"><Settings className="h-4 w-4" /> Mở Cài đặt Gemini</button></div>
                     <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400"><ShieldCheck className="h-4 w-4" /> Dự án V4 được lưu cục bộ trên trình duyệt này; không có cloud backup.</div>

@@ -33,6 +33,15 @@ import {
     isStoryStudioBatchSize,
 } from './storyStudioWorkflowTypes';
 import type { PersistedStoryStudioWorkflow, StoryStudioBatchSize } from './storyStudioWorkflowTypes';
+import {
+    createStoryStudioContinuationBackup,
+    parseStoryStudioContinuationBackup,
+    StoryStudioContinuationBackupError,
+} from './storyStudioContinuationBackup';
+import type {
+    ParsedStoryStudioContinuationBackup,
+    StoryStudioContinuationBackupV1,
+} from './storyStudioContinuationBackup';
 
 export type StoryStudioProductionRuntime = ReturnType<typeof createProductionStoryRuntime>;
 
@@ -57,6 +66,7 @@ export class StoryStudioProjectController {
     private durableProject?: StoryStudioRuntimeProject;
     private durableProjectId?: StoryStudioProjectId;
     private librarySnapshot?: StoryStudioProjectLibrarySnapshot;
+    private workflowRecovered = false;
     private transitionActive = false;
     private stageRunActive = false;
 
@@ -88,6 +98,7 @@ export class StoryStudioProjectController {
             ? result.project : undefined;
         this.durableProjectId = result.status === 'loaded' || result.status === 'workflow-recovered'
             ? result.projectId : result.library?.index.activeProjectId;
+        this.workflowRecovered = result.status === 'workflow-recovered';
         return result;
     }
 
@@ -105,10 +116,44 @@ export class StoryStudioProjectController {
             this.durableProject = result.project;
             this.durableProjectId = result.projectId;
             this.librarySnapshot = result.library;
+            this.workflowRecovered = false;
         } finally {
             this.transitionActive = false;
         }
         return next;
+    }
+
+    createContinuationBackup(): StoryStudioContinuationBackupV1 {
+        this.requireLibraryOperationAllowed();
+        if (this.workflowRecovered) {
+            throw new StoryStudioContinuationBackupError('CONTINUATION_BACKUP_WORKFLOW_NOT_EXACT');
+        }
+        const project = this.requireProject();
+        const catalogDisplayName = this.librarySnapshot?.entries
+            .find(entry => entry.projectId === this.durableProjectId)?.displayName ?? project.displayName;
+        return createStoryStudioContinuationBackup(project, catalogDisplayName, this.now());
+    }
+
+    async restoreContinuationBackup(
+        prepared: ParsedStoryStudioContinuationBackup,
+    ): Promise<StoryStudioRuntimeProject> {
+        this.requireLibraryOperationAllowed();
+        // Re-validate at the controller trust boundary; callers cannot forge a parsed wrapper.
+        const validated = parseStoryStudioContinuationBackup(prepared.backup);
+        this.transitionActive = true;
+        try {
+            const result = await this.repository.restoreContinuationProject(
+                validated.project,
+                validated.backup.catalogDisplayName,
+            );
+            this.durableProject = result.project;
+            this.durableProjectId = result.projectId;
+            this.librarySnapshot = result.library;
+            this.workflowRecovered = false;
+            return result.project;
+        } finally {
+            this.transitionActive = false;
+        }
     }
 
     private requireProject(): StoryStudioRuntimeProject {
@@ -125,6 +170,7 @@ export class StoryStudioProjectController {
             const result = await this.repository.saveProject(projectId, next);
             this.durableProject = result.project;
             this.librarySnapshot = result.library;
+            this.workflowRecovered = false;
         } finally {
             this.transitionActive = false;
         }
@@ -309,6 +355,7 @@ export class StoryStudioProjectController {
             this.durableProject = result.project;
             this.durableProjectId = result.projectId;
             this.librarySnapshot = result.library;
+            this.workflowRecovered = result.workflowRecovered;
             return { project: result.project, workflowRecovered: result.workflowRecovered };
         } finally {
             this.transitionActive = false;
@@ -326,6 +373,7 @@ export class StoryStudioProjectController {
                 ? result.project : undefined;
             this.durableProjectId = result.status === 'loaded' || result.status === 'workflow-recovered'
                 ? result.projectId : undefined;
+            this.workflowRecovered = result.status === 'workflow-recovered';
             return result;
         } finally {
             this.transitionActive = false;
@@ -340,6 +388,7 @@ export class StoryStudioProjectController {
             this.librarySnapshot = result.library;
             this.durableProject = undefined;
             this.durableProjectId = undefined;
+            this.workflowRecovered = false;
             return result;
         } finally {
             this.transitionActive = false;

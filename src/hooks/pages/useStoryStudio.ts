@@ -30,11 +30,19 @@ import {
     validateStorySetupWizardDraft,
 } from '../../storyStudio/setup/storySetupWizard';
 import type { StorySetupWizardDraftV1 } from '../../storyStudio/setup/storySetupWizard';
+import {
+    assertStoryStudioContinuationBackupFileSize,
+    downloadStoryStudioContinuationBackup,
+    parseStoryStudioContinuationBackupJson,
+    sanitizeStoryStudioContinuationBackupFilename,
+    serializeStoryStudioContinuationBackup,
+    StoryStudioContinuationBackupError,
+} from '../../storyStudio/production/storyStudioContinuationBackup';
 
 export type StoryStudioSaveStatus = 'saved' | 'saving' | 'error';
 export type StoryStudioLoadStatus = 'loading' | 'empty' | 'connected' | 'core-corrupt';
 export type StoryStudioOperation =
-    | 'compiling-setup' | 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review' | 'stopping';
+    | 'compiling-setup' | 'restoring-continuation' | 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review' | 'stopping';
 
 export interface UseStoryStudioProps {
     readonly enabledModels: readonly string[];
@@ -87,6 +95,12 @@ export const getStoryStudioPreparedImportOrigin = (
     if (loadStatus !== 'core-corrupt') return 'normal';
     return hasValidProjectLibrary ? 'verified-core-corrupt-library' : undefined;
 };
+
+/** Restore writes only through an already parsed, trusted library boundary. */
+export const canRestoreStoryStudioContinuationBackup = (
+    loadStatus: StoryStudioLoadStatus,
+    hasValidProjectLibrary: boolean,
+): boolean => loadStatus !== 'loading' && hasValidProjectLibrary;
 
 /** Explicit precedence prevents setup review from bypassing an untrusted corrupt storage state. */
 export const getStoryStudioPageView = (input: {
@@ -159,6 +173,14 @@ export const getStoryStudioSafeMessage = (error: unknown): string => {
         SETUP_BLUEPRINT_PARSE_FAILED: 'Kết quả Gemini không đúng cấu trúc Blueprint V4 nghiêm ngặt. Dự án chưa được tạo.',
         SETUP_CONTROL_COMPILE_FAILED: 'Blueprint đã đọc được nhưng không vượt qua kiểm tra StoryControl. Dự án chưa được tạo.',
         SETUP_REVIEW_BUILD_FAILED: 'StoryControl hợp lệ nhưng không thể tạo bản review setup an toàn. Dự án chưa được tạo.',
+        CONTINUATION_BACKUP_EMPTY: 'Tệp bản sao tiếp tục đang trống. Các dự án hiện có không thay đổi.',
+        CONTINUATION_BACKUP_TOO_LARGE: 'Tệp bản sao tiếp tục vượt giới hạn an toàn 64 MiB. Các dự án hiện có không thay đổi.',
+        CONTINUATION_BACKUP_MALFORMED_JSON: 'Tệp bản sao tiếp tục không phải JSON hợp lệ. Các dự án hiện có không thay đổi.',
+        CONTINUATION_BACKUP_WRONG_KIND: 'Tệp đã chọn không phải bản sao tiếp tục Story Studio.',
+        CONTINUATION_BACKUP_UNSUPPORTED_VERSION: 'Phiên bản bản sao tiếp tục này chưa được hỗ trợ.',
+        CONTINUATION_BACKUP_INVALID: 'Bản sao tiếp tục bị hỏng hoặc không nhất quán. Các dự án hiện có không thay đổi.',
+        CONTINUATION_BACKUP_WORKFLOW_NOT_EXACT: 'Workflow trong bản sao không thể tiếp tục chính xác nên chưa được khôi phục. Các dự án hiện có không thay đổi.',
+        CONTINUATION_RESTORE_NOT_ALLOWED: 'Thư viện hiện không ở trạng thái an toàn để khôi phục. Không có dữ liệu nào bị thay đổi.',
     };
     return messages[code] ?? 'Không thể hoàn tất thao tác. Canon hiện tại vẫn an toàn.';
 };
@@ -615,6 +637,47 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         downloadStorySetupMarkdown(displayName + '-setup', renderExistingProjectSetupMarkdown(current.setupDocument, displayName));
     }, [activeProjectId, controller, projectLibrary]);
 
+    const exportActiveContinuationBackup = useCallback(() => {
+        const current = controller.currentProject;
+        if (!current || operation || saveStatus === 'saving') return;
+        const confirmed = window.confirm('Bản sao tiếp tục chứa dữ liệu riêng tư của tác giả: bí mật, spoiler, Canon, Memory, lịch sử chương và workflow chưa xuất bản. Hãy lưu tệp ở nơi an toàn. Tiếp tục tải?');
+        if (!confirmed) return;
+        try {
+            const backup = controller.createContinuationBackup();
+            downloadStoryStudioContinuationBackup(
+                sanitizeStoryStudioContinuationBackupFilename(backup.catalogDisplayName),
+                serializeStoryStudioContinuationBackup(backup),
+            );
+        } catch (error) {
+            handleError(error);
+        }
+    }, [controller, handleError, operation, saveStatus]);
+
+    const restoreContinuationBackup = useCallback(async (file: File) => {
+        if (abortRef.current || operation) return;
+        if (!canRestoreStoryStudioContinuationBackup(loadStatus, hasValidProjectLibrary)) {
+            handleError(new StoryStudioContinuationBackupError('CONTINUATION_RESTORE_NOT_ALLOWED'));
+            return;
+        }
+        setOperation('restoring-continuation');
+        setSaveStatus('saving');
+        try {
+            // Reject by browser-provided byte size before allocating the file contents.
+            assertStoryStudioContinuationBackupFileSize(file.size);
+            const prepared = parseStoryStudioContinuationBackupJson(await file.text(), file.size);
+            const next = await controller.restoreContinuationBackup(prepared);
+            publish(next);
+            setBatchSizeState(next.batchQueue.requestedSize);
+            setRecoveryWarning(false);
+            setShowDemo(false);
+            addToast('Đã khôi phục bản sao thành một dự án mới và mở đúng điểm tiếp tục đã lưu.', 'success');
+        } catch (error) {
+            handleError(error);
+        } finally {
+            if (mountedRef.current) setOperation(undefined);
+        }
+    }, [addToast, controller, handleError, hasValidProjectLibrary, loadStatus, operation, publish]);
+
     return {
         loadStatus, project, projectLibrary, activeProjectId, showDemo, setShowDemo, viewModel, saveStatus, operation,
         errorMessage, setErrorMessage, recoveryWarning, recoveryTarget,
@@ -628,6 +691,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         wizardDraft, wizardOpen, wizardOrigin, wizardDraftLoadStatus, wizardDraftSaveStatus,
         openWizard, updateWizardDraft, closeWizard: () => setWizardOpen(false), discardWizardDraft, compileWizardDraft,
         downloadBlankTemplate, downloadWizardMarkdown, exportActiveSetup,
+        exportActiveContinuationBackup, restoreContinuationBackup,
         finishCreate, switchProject, renameActiveProject,
         batchSize, setBatchSize, startBatch, resume, stop, rewriteFromSamePlan, replan,
         makeCanonConfirmationOpen, setMakeCanonConfirmationOpen, confirmMakeCanon,
