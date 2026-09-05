@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle2, FileJson, FileText, FolderOpen, Pencil, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, FileJson, FileText, FolderOpen, Pencil, Sparkles, Trash2 } from 'lucide-react';
 import type {
     StoryStudioProjectId,
     StoryStudioProjectLibraryViewEntry,
@@ -13,7 +13,10 @@ export const StoryStudioProjectLibrary: React.FC<{
     onRenameActive: (displayName: string) => void;
     onDeleteActive: () => void;
     onImport: (file: File) => void;
-}> = ({ entries, activeProjectId, disabled, onSwitch, onRenameActive, onDeleteActive, onImport }) => {
+    onNewStory: () => void;
+    onDownloadTemplate: () => void;
+    onExportActive: () => void;
+}> = ({ entries, activeProjectId, disabled, onSwitch, onRenameActive, onDeleteActive, onImport, onNewStory, onDownloadTemplate, onExportActive }) => {
     const activeEntry = entries.find(entry => entry.projectId === activeProjectId);
     const [nameDraft, setNameDraft] = useState<{ readonly projectId?: StoryStudioProjectId; readonly value: string }>({ value: '' });
     const name = nameDraft.projectId === activeProjectId ? nameDraft.value : activeEntry?.displayName ?? '';
@@ -64,13 +67,16 @@ export const StoryStudioProjectLibrary: React.FC<{
                 {activeEntry && <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row dark:border-slate-800">
                     <input value={name} onChange={event => setNameDraft({ projectId: activeProjectId, value: event.target.value })} disabled={disabled || activeEntry.availability !== 'available'} aria-label="Tên dự án đang mở" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold dark:border-slate-700 dark:bg-slate-950" />
                     <button type="button" disabled={!canRename} onClick={() => onRenameActive(name.trim())} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300"><Pencil className="h-4 w-4" /> Đổi tên</button>
+                    <button type="button" disabled={disabled || activeEntry.availability !== 'available'} onClick={onExportActive} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300"><Download className="h-4 w-4" /> Xuất Setup</button>
                     <button type="button" disabled={disabled} onClick={onDeleteActive} className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 px-4 py-2 text-sm font-bold text-rose-600 disabled:opacity-40 dark:border-rose-900"><Trash2 className="h-4 w-4" /> Xóa dự án đang mở</button>
                 </div>}
 
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                     <span className="mr-1 text-xs font-black text-slate-500">Tạo/import dự án khác:</span>
-                    <ImportButton icon={FileJson} label="V4 JSON" accept=".json,application/json" disabled={disabled} onImport={onImport} />
-                    <ImportButton icon={FileText} label="TXT/MD" accept=".txt,.md,text/plain,text/markdown" disabled={disabled} onImport={onImport} />
+                    <button type="button" disabled={disabled} onClick={onNewStory} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white disabled:opacity-40"><Sparkles className="h-4 w-4" /> Tạo truyện mới</button>
+                    <ImportButton icon={FileText} label="Nhập Setup TXT/MD" accept=".txt,.md,text/plain,text/markdown" disabled={disabled} onImport={onImport} />
+                    <ImportButton icon={FileJson} label="Nhập V4 JSON (offline)" accept=".json,application/json" disabled={disabled} onImport={onImport} />
+                    <button type="button" disabled={disabled} onClick={onDownloadTemplate} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300"><Download className="h-4 w-4" /> Tải mẫu Setup</button>
                     <span className="text-[11px] text-slate-400">Dự án đang mở sẽ không bị xóa.</span>
                 </div>
             </div>
