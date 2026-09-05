@@ -65,6 +65,7 @@ An empty legacy key creates an empty version-1 index. Migration does not call a 
 - Creating/importing a reviewed TXT, MD, or V4 JSON setup always creates a new isolated project and makes it active. It never replaces or deletes the prior project.
 - Switching first loads and validates the target project; only then is the active ID durably changed. Failure leaves the prior active project selected and usable.
 - A switch that invokes WORK13 workflow recovery returns that signal to the UI, which shows the existing Canon-safe recovery warning; a normal switch clears the warning.
+- A successful durable switch or project creation clears any prior corrupt-load recovery target and error together. Recovery deletion authority is consulted only while the UI remains in `core-corrupt`; ordinary connected deletion always targets the durable active project.
 - Switching, creating, and deleting are blocked while a model stage or durability transition is active.
 - A corrupt or missing active record fails closed. WORK15A does not silently select a different Canon.
 - When a valid index supplies a trustworthy active ID, the user may explicitly delete that unavailable namespaced project. Without such an ID, no active-project deletion is inferred.
@@ -72,6 +73,7 @@ An empty legacy key creates an empty version-1 index. Migration does not call a 
 - Deleting a non-active project leaves the active project untouched.
 - Deleting the active project selects the valid remaining entry with the newest catalog `updatedAt`. Ties use ascending project ID. Corrupt/missing candidates are skipped rather than invented or repaired.
 - Deleting the last project leaves an empty library.
+- If deleting the last valid active project leaves only corrupt or missing entries, the index has no active ID. The UI still shows those unavailable entries and the normal import/create path without selecting, repairing, or deleting any Canon automatically.
 
 ## Compatibility and intentional omissions
 

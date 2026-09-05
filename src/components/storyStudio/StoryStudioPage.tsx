@@ -1,6 +1,6 @@
 import React from 'react';
 import { AlertTriangle, FileJson, FileText, FlaskConical, Loader2, Settings, ShieldCheck, Workflow } from 'lucide-react';
-import { useStoryStudio } from '../../hooks/pages/useStoryStudio';
+import { getStoryStudioNoActiveProjectViewState, useStoryStudio } from '../../hooks/pages/useStoryStudio';
 import { CanonicalChapterHistoryPanel } from './CanonicalChapterHistoryPanel';
 import { CanonReviewPanel } from './CanonReviewPanel';
 import { ChapterWorkflowPanel } from './ChapterWorkflowPanel';
@@ -35,6 +35,7 @@ class StoryStudioErrorBoundary extends React.Component<React.PropsWithChildren, 
 const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     const studio = useStoryStudio(props);
     const disabled = Boolean(studio.operation) || studio.saveStatus === 'saving';
+    const noActiveProjectView = getStoryStudioNoActiveProjectViewState(studio.projectLibrary);
 
     if (studio.loadStatus === 'loading') return <div className="flex h-full items-center justify-center gap-3 text-sm font-bold text-slate-500"><Loader2 className="h-6 w-6 animate-spin text-indigo-500" /> Đang mở dự án Story Studio…</div>;
 
@@ -80,6 +81,9 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
 
     if (!studio.project && !studio.showDemo) return (
         <StoryStudioEmptyState
+            projectLibrary={noActiveProjectView.showProjectLibrary
+                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} />
+                : undefined}
             compiling={studio.operation === 'compiling-setup'}
             errorMessage={studio.errorMessage}
             onImport={file => void studio.importFile(file)}
@@ -116,9 +120,10 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     );
 };
 
-const StoryStudioEmptyState: React.FC<{ compiling: boolean; errorMessage?: string; onImport: (file: File) => void; onDemo: () => void; onSettings: () => void }> = ({ compiling, errorMessage, onImport, onDemo, onSettings }) => (
+const StoryStudioEmptyState: React.FC<{ projectLibrary?: React.ReactNode; compiling: boolean; errorMessage?: string; onImport: (file: File) => void; onDemo: () => void; onSettings: () => void }> = ({ projectLibrary, compiling, errorMessage, onImport, onDemo, onSettings }) => (
     <div className="flex h-full overflow-y-auto custom-scrollbar">
-        <div className="m-auto w-full max-w-4xl p-5 sm:p-8">
+        <div className="m-auto w-full max-w-4xl space-y-4 p-5 sm:p-8">
+            {projectLibrary}
             <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 <div className="bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 px-6 py-10 text-center text-white sm:px-10 sm:py-14"><div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-white/15"><Workflow className="h-8 w-8" /></div><div className="mt-5 text-xs font-black uppercase tracking-[0.2em] text-indigo-100">Story Engine V4</div><h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Studio Truyện</h1><p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-indigo-100 sm:text-base">Nhập Blueprint V4 JSON hoặc setup tác giả TXT/MD, review cấu trúc rồi tạo dự án Canon mới.</p></div>
                 <div className="p-6 sm:p-8">

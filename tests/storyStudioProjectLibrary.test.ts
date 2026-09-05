@@ -9,6 +9,11 @@ import {
     recordCanonicalChapterMemory,
 } from '../src/storyEngine';
 import type { StoryBlueprintDocument } from '../src/storyEngine';
+import {
+    getStoryStudioNoActiveProjectViewState,
+    getStoryStudioRecoveryDeleteTarget,
+    reduceStoryStudioRecoveryUiState,
+} from '../src/hooks/pages/useStoryStudio';
 import { StoryStudioProjectController } from '../src/storyStudio/production/storyStudioProjectController';
 import {
     createEmptyStoryStudioProjectLibraryIndex,
@@ -623,6 +628,95 @@ describe('WORK15A multi-project durability and isolation', () => {
         expect(normal.workflowRecovered).toBe(false);
     });
 
+    it('clears corrupt recovery authority and error after switching to a healthy project, then deletes that active project', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        await controller.createProject(blueprint('b'), 'B');
+        const b = controller.activeProjectId!;
+        await controller.switchProject(a);
+        adapter.values.set(storyStudioProjectStorageKey(a), { corrupt: true });
+
+        const recoveredController = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        const corruptLoad = await recoveredController.load();
+        expect(corruptLoad).toMatchObject({
+            status: 'core-corrupt', recoveryTarget: { kind: 'active-library-project', projectId: a },
+        });
+        if (corruptLoad.status !== 'core-corrupt') throw new Error('expected corrupt active project');
+        let recoveryUi = reduceStoryStudioRecoveryUiState({}, {
+            type: 'core-corrupt', recoveryTarget: corruptLoad.recoveryTarget, errorMessage: 'old core-corrupt error',
+        });
+
+        const switched = await recoveredController.switchProject(b);
+        recoveryUi = reduceStoryStudioRecoveryUiState(recoveryUi, { type: 'connected' });
+        expect(switched.project.displayName).toBe('B');
+        expect(recoveredController.activeProjectId).toBe(b);
+        expect(recoveryUi).toEqual({});
+        expect(getStoryStudioRecoveryDeleteTarget('connected', recoveryUi.recoveryTarget)).toBeUndefined();
+
+        await recoveredController.deleteProject();
+        expect(adapter.values.has(storyStudioProjectStorageKey(b))).toBe(false);
+        expect(adapter.values.has(storyStudioProjectStorageKey(a))).toBe(true);
+    });
+
+    it('clears corrupt recovery authority and error after creating C, then ordinary delete targets C', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        adapter.values.set(storyStudioProjectStorageKey(a), { corrupt: true });
+        const recoveredController = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        const corruptLoad = await recoveredController.load();
+        if (corruptLoad.status !== 'core-corrupt') throw new Error('expected corrupt active project');
+        let recoveryUi = reduceStoryStudioRecoveryUiState({}, {
+            type: 'core-corrupt', recoveryTarget: corruptLoad.recoveryTarget, errorMessage: 'old core-corrupt error',
+        });
+
+        await recoveredController.createProject(blueprint('c'), 'C');
+        const c = recoveredController.activeProjectId!;
+        recoveryUi = reduceStoryStudioRecoveryUiState(recoveryUi, { type: 'connected' });
+        expect(recoveryUi).toEqual({});
+        expect(getStoryStudioRecoveryDeleteTarget('connected', recoveryUi.recoveryTarget)).toBeUndefined();
+
+        await recoveredController.deleteProject();
+        expect(adapter.values.has(storyStudioProjectStorageKey(c))).toBe(false);
+        expect(adapter.values.has(storyStudioProjectStorageKey(a))).toBe(true);
+    });
+
+    it('preserves the original corrupt recovery target when switch or create fails', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('a'), 'A');
+        const a = controller.activeProjectId!;
+        await controller.createProject(blueprint('b'), 'B');
+        const b = controller.activeProjectId!;
+        await controller.switchProject(a);
+        adapter.values.set(storyStudioProjectStorageKey(a), { corrupt: true });
+        const recoveredController = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        const corruptLoad = await recoveredController.load();
+        if (corruptLoad.status !== 'core-corrupt') throw new Error('expected corrupt active project');
+        let recoveryUi = reduceStoryStudioRecoveryUiState({}, {
+            type: 'core-corrupt', recoveryTarget: corruptLoad.recoveryTarget, errorMessage: 'core-corrupt',
+        });
+
+        adapter.values.set(storyStudioProjectStorageKey(b), { corrupt: true });
+        await expect(recoveredController.switchProject(b)).rejects.toMatchObject({ code: 'PROJECT_UNAVAILABLE' });
+        recoveryUi = reduceStoryStudioRecoveryUiState(recoveryUi, {
+            type: 'operation-error', errorMessage: 'switch failed',
+        });
+        expect(recoveryUi.recoveryTarget).toEqual({ kind: 'active-library-project', projectId: a });
+        expect(recoveredController.activeProjectId).toBe(a);
+
+        adapter.failNextCommit = true;
+        await expect(recoveredController.createProject(blueprint('c'), 'C')).rejects.toMatchObject({ code: 'SAVE_FAILED' });
+        recoveryUi = reduceStoryStudioRecoveryUiState(recoveryUi, {
+            type: 'operation-error', errorMessage: 'create failed',
+        });
+        expect(recoveryUi.recoveryTarget).toEqual({ kind: 'active-library-project', projectId: a });
+        expect(adapter.values.has(storyStudioProjectStorageKey(a))).toBe(true);
+    });
+
     it('failed atomic save publishes neither new in-memory Canon nor new durable Canon', async () => {
         const { adapter, repository, controller } = environment();
         await controller.load();
@@ -695,6 +789,42 @@ describe('WORK15A multi-project durability and isolation', () => {
         });
         expect(await reloaded.deleteProject(active)).toMatchObject({ status: 'empty' });
         expect(adapter.values.has(storyStudioProjectStorageKey(active))).toBe(false);
+    });
+
+    it('keeps an unavailable entry visible with import available when deleting the only valid active project', async () => {
+        const { adapter, repository, controller } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('b'), 'Unavailable B');
+        const b = controller.activeProjectId!;
+        await controller.createProject(blueprint('a'), 'Valid A');
+        const a = controller.activeProjectId!;
+        adapter.values.set(storyStudioProjectStorageKey(b), { corrupt: true });
+
+        const verified = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        expect((await verified.load()).status).toBe('loaded');
+        expect(verified.projectLibrary.find(entry => entry.projectId === b)?.availability).toBe('corrupt');
+        const result = await verified.deleteProject(a);
+        expect(result).toMatchObject({
+            status: 'empty', library: { entries: [{ projectId: b, availability: 'corrupt' }] },
+        });
+        expect(result.library.index.activeProjectId).toBeUndefined();
+        expect(verified.currentProject).toBeUndefined();
+        expect(verified.activeProjectId).toBeUndefined();
+        expect(getStoryStudioNoActiveProjectViewState(verified.projectLibrary)).toEqual({
+            showProjectLibrary: true, showImportCreation: true,
+        });
+        expect(adapter.values.has(storyStudioProjectStorageKey(b))).toBe(true);
+
+        const reloaded = new StoryStudioProjectController(repository, () => FIXED_TIME);
+        const reload = await reloaded.load();
+        expect(reload).toMatchObject({
+            status: 'empty', library: { entries: [{ projectId: b, availability: 'corrupt' }] },
+        });
+        expect(reloaded.currentProject).toBeUndefined();
+        expect(reloaded.activeProjectId).toBeUndefined();
+        expect(getStoryStudioNoActiveProjectViewState(reloaded.projectLibrary)).toEqual({
+            showProjectLibrary: true, showImportCreation: true,
+        });
     });
 
     it('validates all projects on load, only the switch target on switch, and no project records on active save', async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createGeminiProductionStoryRuntime } from '../../services/storyEngine';
 import { buildStoryStudioViewModel } from '../../storyStudio/storyStudioPresenter';
 import { EMPTY_STORY_STUDIO_SESSION, STORY_STUDIO_DEMO_VIEW_MODEL } from '../../storyStudio/storyStudioDemoViewModel';
@@ -32,6 +32,40 @@ export interface UseStoryStudioProps {
 }
 
 export type StoryStudioExplicitAttempt = 'startBatch' | 'resume' | 'rewriteFromSamePlan' | 'replan';
+
+export interface StoryStudioRecoveryUiState {
+    readonly recoveryTarget?: StoryStudioProjectRecoveryTarget;
+    readonly errorMessage?: string;
+}
+
+export type StoryStudioRecoveryUiAction =
+    | { readonly type: 'core-corrupt'; readonly recoveryTarget?: StoryStudioProjectRecoveryTarget; readonly errorMessage: string }
+    | { readonly type: 'connected' }
+    | { readonly type: 'clear-error' }
+    | { readonly type: 'operation-error'; readonly errorMessage: string };
+
+/** Keeps corrupt-load deletion authority coupled to the UI state that granted it. */
+export const reduceStoryStudioRecoveryUiState = (
+    state: StoryStudioRecoveryUiState,
+    action: StoryStudioRecoveryUiAction,
+): StoryStudioRecoveryUiState => {
+    if (action.type === 'connected') return {};
+    if (action.type === 'clear-error') return { ...state, errorMessage: undefined };
+    if (action.type === 'operation-error') return { ...state, errorMessage: action.errorMessage };
+    return { recoveryTarget: action.recoveryTarget, errorMessage: action.errorMessage };
+};
+
+export const getStoryStudioRecoveryDeleteTarget = (
+    loadStatus: StoryStudioLoadStatus,
+    recoveryTarget?: StoryStudioProjectRecoveryTarget,
+): StoryStudioProjectRecoveryTarget | undefined => loadStatus === 'core-corrupt' ? recoveryTarget : undefined;
+
+export const getStoryStudioNoActiveProjectViewState = (
+    entries: readonly unknown[],
+): { readonly showProjectLibrary: boolean; readonly showImportCreation: true } => ({
+    showProjectLibrary: entries.length > 0,
+    showImportCreation: true,
+});
 
 export const runStoryStudioProductionAttempt = async <T>(
     attempt: StoryStudioExplicitAttempt,
@@ -102,9 +136,13 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     const [showDemo, setShowDemo] = useState(false);
     const [saveStatus, setSaveStatus] = useState<StoryStudioSaveStatus>('saved');
     const [operation, setOperation] = useState<StoryStudioOperation>();
-    const [errorMessage, setErrorMessage] = useState<string>();
     const [recoveryWarning, setRecoveryWarning] = useState(false);
-    const [recoveryTarget, setRecoveryTarget] = useState<StoryStudioProjectRecoveryTarget>();
+    const [recoveryUi, dispatchRecoveryUi] = useReducer(reduceStoryStudioRecoveryUiState, {});
+    const { errorMessage, recoveryTarget } = recoveryUi;
+    const setErrorMessage = useCallback((value: undefined) => {
+        void value;
+        dispatchRecoveryUi({ type: 'clear-error' });
+    }, []);
     const [preparedImport, setPreparedImport] = useState<PreparedStorySetupImport>();
     const [importDisplayName, setImportDisplayName] = useState('');
     const [makeCanonConfirmationOpen, setMakeCanonConfirmationOpen] = useState(false);
@@ -123,11 +161,14 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             }
             if (result.status === 'core-corrupt') {
                 setLoadStatus('core-corrupt');
-                setErrorMessage(getStoryStudioSafeMessage(result.error));
-                setRecoveryTarget(result.recoveryTarget);
+                dispatchRecoveryUi({
+                    type: 'core-corrupt',
+                    errorMessage: getStoryStudioSafeMessage(result.error),
+                    recoveryTarget: result.recoveryTarget,
+                });
                 return;
             }
-            setRecoveryTarget(undefined);
+            dispatchRecoveryUi({ type: 'connected' });
             setProject(result.project);
             setBatchSizeState(result.project.batchQueue.requestedSize);
             setRecoveryWarning(result.status === 'workflow-recovered');
@@ -146,6 +187,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         setSaveStatus('saved');
         setProjectLibrary(controller.projectLibrary);
         setActiveProjectId(controller.activeProjectId);
+        dispatchRecoveryUi({ type: 'connected' });
     }, [controller]);
 
     const handleError = useCallback((error: unknown) => {
@@ -153,7 +195,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         logSafeStoryStudioRuntimeDiagnostic(error);
         const message = getStoryStudioSafeMessage(error);
         if (mountedRef.current) {
-            setErrorMessage(message);
+            dispatchRecoveryUi({ type: 'operation-error', errorMessage: message });
             setSaveStatus((typeof error === 'object' && error !== null && 'code' in error && error.code === 'SAVE_FAILED') ? 'error' : 'saved');
         }
         addToast(message, 'error');
@@ -221,7 +263,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             if (compilerAbortController && abortRef.current === compilerAbortController) abortRef.current = null;
             setOperation(undefined);
         }
-    }, [enabledModels, handleError, operation]);
+    }, [enabledModels, handleError, operation, setErrorMessage]);
 
     const finishCreate = useCallback(async () => {
         if (!preparedImport || preparedImport.review.criticalIssues.length > 0) return;
@@ -244,7 +286,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                 await runPipeline();
             } catch (error) { handleError(error); }
         });
-    }, [batchSize, controller, handleError, publish, runPipeline]);
+    }, [batchSize, controller, handleError, publish, runPipeline, setErrorMessage]);
 
     const resume = useCallback(async () => {
         if (abortRef.current || !controller.currentProject) return;
@@ -257,7 +299,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                 await runPipeline();
             } catch (error) { handleError(error); }
         });
-    }, [controller, handleError, publish, runPipeline]);
+    }, [controller, handleError, publish, runPipeline, setErrorMessage]);
 
     const stop = useCallback(() => {
         if (!abortRef.current) return;
@@ -274,7 +316,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                 await runPipeline();
             } catch (error) { handleError(error); }
         });
-    }, [controller, handleError, publish, runPipeline]);
+    }, [controller, handleError, publish, runPipeline, setErrorMessage]);
 
     const replan = useCallback(async () => {
         await runStoryStudioProductionAttempt('replan', setErrorMessage, async () => {
@@ -284,7 +326,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
                 await runPipeline();
             } catch (error) { handleError(error); }
         });
-    }, [controller, handleError, publish, runPipeline]);
+    }, [controller, handleError, publish, runPipeline, setErrorMessage]);
 
     const confirmMakeCanon = useCallback(async () => {
         setMakeCanonConfirmationOpen(false);
@@ -307,16 +349,24 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         setDeleteConfirmationOpen(false);
         try {
             setSaveStatus('saving');
-            const result = recoveryTarget?.kind === 'legacy-single-project'
+            const recoveryDeleteTarget = getStoryStudioRecoveryDeleteTarget(loadStatus, recoveryTarget);
+            const result = recoveryDeleteTarget?.kind === 'legacy-single-project'
                 ? await controller.deleteCorruptLegacyProject()
                 : await controller.deleteProject(
-                    recoveryTarget?.kind === 'active-library-project' ? recoveryTarget.projectId : undefined,
+                    recoveryDeleteTarget?.kind === 'active-library-project' ? recoveryDeleteTarget.projectId : undefined,
                 );
             setPreparedImport(undefined);
             setProjectLibrary(result.library?.entries ?? []);
             setActiveProjectId(result.library?.index.activeProjectId);
-            setRecoveryTarget(result.status === 'core-corrupt' ? result.recoveryTarget : undefined);
-            if (result.status !== 'core-corrupt') setErrorMessage(undefined);
+            if (result.status === 'core-corrupt') {
+                dispatchRecoveryUi({
+                    type: 'core-corrupt',
+                    errorMessage: getStoryStudioSafeMessage(result.error),
+                    recoveryTarget: result.recoveryTarget,
+                });
+            } else {
+                dispatchRecoveryUi({ type: 'connected' });
+            }
             if (result.status === 'loaded' || result.status === 'workflow-recovered') {
                 setProject(result.project);
                 setBatchSizeState(result.project.batchQueue.requestedSize);
@@ -330,7 +380,7 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
             setSaveStatus('saved');
             addToast('Đã xóa riêng dự án V4 khỏi trình duyệt này.', 'info');
         } catch (error) { handleError(error); }
-    }, [addToast, controller, handleError, recoveryTarget]);
+    }, [addToast, controller, handleError, loadStatus, recoveryTarget]);
 
     const switchProject = useCallback(async (projectId: StoryStudioProjectId) => {
         setSaveStatus('saving');
