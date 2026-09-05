@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, FileJson, FileText, Loader2, Pause, Play, RotateCcw, Settings, ShieldCheck, Trash2 } from 'lucide-react';
+import { BookOpen, Download, FileJson, FileText, Loader2, Pause, Play, RotateCcw, Settings, ShieldCheck, Trash2 } from 'lucide-react';
 import type { StoryStudioRuntimeProject } from '../../storyStudio/production/storyStudioProjectTypes';
 import type { StoryStudioOperation, StoryStudioSaveStatus } from '../../hooks/pages/useStoryStudio';
 
@@ -7,6 +7,7 @@ const operationLabels: Readonly<Record<StoryStudioOperation, string>> = {
     'compiling-setup': 'Đang biên dịch setup bằng Gemini…',
     'preparing-continuation': 'Đang kiểm tra bản sao tiếp tục…',
     'restoring-continuation': 'Đang kiểm tra và lưu bản sao tiếp tục…',
+    'publishing-epub': 'Đang tạo EPUB từ Canon…',
     planning: 'Planner đang chạy', writing: 'Writer đang chạy', validation: 'Validator đang kiểm tra / Repair đang sửa',
     extraction: 'Extractor đang cập nhật đề xuất Canon', 'canon-review': 'Đang chuẩn bị Review Canon',
     stopping: 'Đang dừng an toàn…',
@@ -27,13 +28,16 @@ export const StoryStudioActionBar: React.FC<{
     onOpenSettings: () => void;
     onExportSetup: () => void;
     onBackupContinuation: () => void;
+    onPublishEpub: () => void;
     onDelete: () => void;
-}> = ({ project, batchSize, saveStatus, operation, disabled, onBatchSize, onStart, onResume, onStop, onRewrite, onReplan, onImport, onOpenSettings, onExportSetup, onBackupContinuation, onDelete }) => {
+}> = ({ project, batchSize, saveStatus, operation, disabled, onBatchSize, onStart, onResume, onStop, onRewrite, onReplan, onImport, onOpenSettings, onExportSetup, onBackupContinuation, onPublishEpub, onDelete }) => {
     const workflow = project.workflow;
     const storyComplete = project.state.currentChapter >= project.control.engine.plannedChapterCount;
     const approvedRecoveryStage = workflow.stage === 'validated' || workflow.stage === 'extracted';
     const canStart = workflow.stage === 'idle' && project.batchQueue.remaining === 0 && !storyComplete;
     const canResume = !canStart && !approvedRecoveryStage && workflow.stage !== 'ready-for-canon-review' && workflow.stage !== 'rejected' && !storyComplete;
+    const pendingChapter = workflow.stage === 'idle' ? undefined : project.state.currentChapter + 1;
+    const epubDisabled = disabled || saveStatus !== 'saved' || project.state.currentChapter === 0;
     return (
         <section className="sticky top-0 z-30 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -68,10 +72,16 @@ export const StoryStudioActionBar: React.FC<{
                     <label className="cursor-pointer rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 dark:border-slate-700" title="Nhập Setup TXT/MD khác"><FileText className="h-4 w-4" /><input type="file" accept=".txt,.md,text/plain,text/markdown" className="hidden" disabled={disabled} onChange={event => { const file = event.target.files?.[0]; if (file) onImport(file); event.currentTarget.value = ''; }} /></label>
                     <button type="button" onClick={onExportSetup} disabled={disabled} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 disabled:opacity-40 dark:border-slate-700" title="Xuất Setup Markdown (có thể chứa bí mật tác giả)"><Download className="h-4 w-4" /></button>
                     <button type="button" onClick={onBackupContinuation} disabled={disabled} className="rounded-xl border border-emerald-200 p-2.5 text-emerald-600 hover:text-emerald-700 disabled:opacity-40 dark:border-emerald-900" title="Sao lưu để tiếp tục (chứa dữ liệu riêng tư)"><ShieldCheck className="h-4 w-4" /></button>
+                    <button type="button" onClick={onPublishEpub} disabled={epubDisabled} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-3 py-2.5 font-black text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40" title={project.state.currentChapter === 0 ? 'Chưa có chương Canon để xuất EPUB.' : 'Xuất EPUB từ Canon'}><BookOpen className="h-4 w-4" /> Xuất EPUB từ Canon</button>
                     <button type="button" onClick={onOpenSettings} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-indigo-600 dark:border-slate-700" title="Mở Cài đặt Gemini"><Settings className="h-4 w-4" /></button>
                     <button type="button" onClick={onDelete} disabled={disabled} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:text-rose-600 dark:border-slate-700" title="Xóa dự án V4 khỏi máy"><Trash2 className="h-4 w-4" /></button>
                 </div>
             </div>
+            <p className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                {project.state.currentChapter === 0
+                    ? 'Chưa có chương Canon để xuất EPUB. Chỉ các chương đã Make Canon được đưa vào EPUB.'
+                    : `${project.state.currentChapter} chương Canon sẽ được xuất.${pendingChapter === undefined ? ' Chỉ các chương đã Make Canon được đưa vào EPUB.' : ` Chương ${pendingChapter} ${workflow.stage === 'ready-for-canon-review' ? 'đang chờ Make Canon' : 'chưa Make Canon'} và chưa được đưa vào EPUB.`}`}
+            </p>
         </section>
     );
 };

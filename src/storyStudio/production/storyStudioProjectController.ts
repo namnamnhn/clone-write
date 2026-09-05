@@ -42,6 +42,8 @@ import type {
     ParsedStoryStudioContinuationBackup,
     StoryStudioContinuationBackupV1,
 } from './storyStudioContinuationBackup';
+import { createStoryStudioEpubPublication } from './storyStudioEpubPublication';
+import type { StoryStudioEpubPublicationSnapshot } from './storyStudioEpubPublication';
 
 export type StoryStudioProductionRuntime = ReturnType<typeof createProductionStoryRuntime>;
 
@@ -132,6 +134,14 @@ export class StoryStudioProjectController {
         const catalogDisplayName = this.librarySnapshot?.entries
             .find(entry => entry.projectId === this.durableProjectId)?.displayName ?? project.displayName;
         return createStoryStudioContinuationBackup(project, catalogDisplayName, this.now());
+    }
+
+    createCanonEpubPublication(): StoryStudioEpubPublicationSnapshot {
+        this.requireLibraryOperationAllowed();
+        const project = this.requireProject();
+        const catalogDisplayName = this.librarySnapshot?.entries
+            .find(entry => entry.projectId === this.durableProjectId)?.displayName ?? project.displayName;
+        return createStoryStudioEpubPublication(project, catalogDisplayName);
     }
 
     async restoreContinuationBackup(

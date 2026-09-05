@@ -74,6 +74,9 @@ export interface FileItem {
   // smartFixCore.ts) lượt rồi bỏ cuộc êm, không báo lỗi. Reset về 0 khi file có nội dung dịch mới
   // thực sự (dịch lại toàn bộ, hoặc người dùng tự thay thế nội dung thủ công).
   rawFixAttemptCount?: number;
+  // Tiêu đề EPUB do một nguồn tin cậy cung cấp. Story Studio dùng trường chỉ-đọc này để giữ
+  // tiêu đề Canon tách khỏi văn xuôi; các luồng EPUB cũ không đặt trường nên không đổi hành vi.
+  epubDisplayTitle?: string;
   shortContentKind?: 'story' | 'non_story' | 'uncertain';
   shortContentConfidence?: number;
   shortContentReason?: string;
@@ -123,6 +126,9 @@ export interface StoryInfo {
   tagFormat?: 'auto' | 'bracket' | 'xml'; // Tùy chọn định dạng tag
   translator?: string; // Dịch giả — hiển thị ở trang tựa EPUB (nếu bật)
   publisher?: string;  // NXB/Nhóm dịch — hiển thị ở trang tựa EPUB (nếu bật)
+  // Story Studio không có tác giả công khai đáng tin cậy để suy diễn. Cờ chỉ thuộc snapshot
+  // xuất bản cho phép modal bắt đầu trống và EPUB bỏ metadata tác giả nếu người dùng để trống.
+  epubAllowBlankAuthor?: boolean;
 }
 
 // --- Cấu hình "Thiết Kế" (Design tab) cho xuất bản EPUB — tham khảo cấu trúc advancedStyle

@@ -38,11 +38,19 @@ import {
     StoryStudioContinuationBackupError,
 } from '../../storyStudio/production/storyStudioContinuationBackup';
 import type { PreparedStoryStudioContinuationRestore } from '../../storyStudio/production/storyStudioContinuationBackup';
+import {
+    storyStudioEpubFilename,
+    StoryStudioEpubPublicationError,
+} from '../../storyStudio/production/storyStudioEpubPublication';
+import type { StoryStudioEpubPublicationSnapshot } from '../../storyStudio/production/storyStudioEpubPublication';
+import { downloadEpubFile, generateEpub } from '../../utils/file/exporters';
+import type { EpubDesignAssets, EpubDesignOptions, StoryInfo } from '../../types';
 
 export type StoryStudioSaveStatus = 'saved' | 'saving' | 'error';
 export type StoryStudioLoadStatus = 'loading' | 'empty' | 'connected' | 'core-corrupt';
 export type StoryStudioOperation =
     | 'compiling-setup' | 'preparing-continuation' | 'restoring-continuation'
+    | 'publishing-epub'
     | 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review' | 'stopping';
 
 export interface UseStoryStudioProps {
@@ -82,6 +90,23 @@ export const reduceStoryStudioContinuationRestoreUiState = (
     action: StoryStudioContinuationRestoreUiAction,
 ): StoryStudioContinuationRestoreUiState => action.type === 'prepared'
     ? { prepared: action.prepared }
+    : {};
+
+export interface StoryStudioEpubPublicationUiState {
+    readonly publication?: StoryStudioEpubPublicationSnapshot;
+}
+
+export type StoryStudioEpubPublicationUiAction =
+    | { readonly type: 'prepared'; readonly publication: StoryStudioEpubPublicationSnapshot }
+    | { readonly type: 'cancelled' }
+    | { readonly type: 'downloaded' };
+
+/** EPUB preview is volatile: cancel/download clears it without reaching project persistence. */
+export const reduceStoryStudioEpubPublicationUiState = (
+    _state: StoryStudioEpubPublicationUiState,
+    action: StoryStudioEpubPublicationUiAction,
+): StoryStudioEpubPublicationUiState => action.type === 'prepared'
+    ? { publication: action.publication }
     : {};
 
 /** Keeps corrupt-load deletion authority coupled to the UI state that granted it. */
@@ -204,6 +229,10 @@ export const getStoryStudioSafeMessage = (error: unknown): string => {
         CONTINUATION_BACKUP_INVALID: 'Bản sao tiếp tục bị hỏng hoặc không nhất quán. Các dự án hiện có không thay đổi.',
         CONTINUATION_BACKUP_WORKFLOW_NOT_EXACT: 'Workflow trong bản sao không thể tiếp tục chính xác nên chưa được khôi phục. Các dự án hiện có không thay đổi.',
         CONTINUATION_RESTORE_NOT_ALLOWED: 'Thư viện hiện không ở trạng thái an toàn để khôi phục. Không có dữ liệu nào bị thay đổi.',
+        STORY_STUDIO_EPUB_NO_CANON: 'Chưa có chương Canon để xuất EPUB.',
+        STORY_STUDIO_EPUB_CANON_INCONSISTENT: 'Dữ liệu chương Canon không nhất quán. Không thể xuất EPUB.',
+        STORY_STUDIO_EPUB_NOT_DURABLE: 'Dự án chưa lưu xong, chưa thể xuất EPUB.',
+        STORY_STUDIO_EPUB_GENERATION_FAILED: 'Tạo EPUB thất bại. Dự án và Canon không thay đổi.',
     };
     return messages[code] ?? 'Không thể hoàn tất thao tác. Canon hiện tại vẫn an toàn.';
 };
@@ -255,6 +284,11 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
     const [wizardOrigin, setWizardOrigin] = useState<StoryStudioPreparedImportOrigin>();
     const [wizardDraftLoadStatus, setWizardDraftLoadStatus] = useState<'loading' | 'empty' | 'loaded' | 'corrupt'>('loading');
     const [wizardDraftSaveStatus, setWizardDraftSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+    const [epubPublicationUi, dispatchEpubPublicationUi] = useReducer(
+        reduceStoryStudioEpubPublicationUiState,
+        {},
+    );
+    const epubPublication = epubPublicationUi.publication;
 
     useEffect(() => {
         mountedRef.current = true;
@@ -681,6 +715,53 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         }
     }, [controller, handleError, operation, saveStatus]);
 
+    const openCanonEpubPublication = useCallback(() => {
+        if (operation || saveStatus !== 'saved' || controller.isTransitionActive) {
+            handleError(new StoryStudioEpubPublicationError('STORY_STUDIO_EPUB_NOT_DURABLE'));
+            return;
+        }
+        try {
+            dispatchEpubPublicationUi({ type: 'prepared', publication: controller.createCanonEpubPublication() });
+            setErrorMessage(undefined);
+        } catch (error) {
+            handleError(error);
+        }
+    }, [controller, handleError, operation, saveStatus, setErrorMessage]);
+
+    const confirmCanonEpubPublication = useCallback(async (
+        info: StoryInfo,
+        cover: File | null,
+        font: File | null,
+        designOptions: EpubDesignOptions,
+        designAssets: EpubDesignAssets,
+    ) => {
+        if (!epubPublication) return;
+        if (operation || saveStatus !== 'saved' || controller.isTransitionActive) {
+            handleError(new StoryStudioEpubPublicationError('STORY_STUDIO_EPUB_NOT_DURABLE'));
+            return;
+        }
+        setOperation('publishing-epub');
+        try {
+            const blob = await generateEpub(
+                [...epubPublication.files],
+                info,
+                cover,
+                info.summary || '',
+                undefined,
+                font,
+                designOptions,
+                designAssets,
+            );
+            downloadEpubFile(storyStudioEpubFilename(info.title, epubPublication.catalogDisplayName), blob);
+            dispatchEpubPublicationUi({ type: 'downloaded' });
+            addToast(`Đã xuất ${epubPublication.canonicalChapterCount} chương Canon thành EPUB.`, 'success');
+        } catch {
+            handleError(new StoryStudioEpubPublicationError('STORY_STUDIO_EPUB_GENERATION_FAILED'));
+        } finally {
+            if (mountedRef.current) setOperation(undefined);
+        }
+    }, [addToast, controller, epubPublication, handleError, operation, saveStatus]);
+
     const prepareContinuationRestore = useCallback(async (file: File) => {
         if (abortRef.current || operation) return;
         if (!canRestoreStoryStudioContinuationBackup(loadStatus, hasValidProjectLibrary)) {
@@ -733,6 +814,10 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         openWizard, updateWizardDraft, closeWizard: () => setWizardOpen(false), discardWizardDraft, compileWizardDraft,
         downloadBlankTemplate, downloadWizardMarkdown, exportActiveSetup,
         exportActiveContinuationBackup,
+        epubPublication,
+        openCanonEpubPublication,
+        cancelCanonEpubPublication: () => dispatchEpubPublicationUi({ type: 'cancelled' }),
+        confirmCanonEpubPublication,
         preparedContinuationRestore,
         prepareContinuationRestore,
         cancelContinuationRestore: () => dispatchContinuationRestoreUi({ type: 'cancelled' }),
