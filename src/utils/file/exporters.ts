@@ -294,8 +294,8 @@ const CHAPTER_NUM_GROUP =
 // dịch), khiến 2 định dạng xuất ra hiển thị tiêu đề chương khác nhau/không nhất quán, và DOCX
 // có thể lộ tên file nội bộ không cần thiết ra bản đọc cuối cùng. `file.name` chỉ còn dùng khi
 // nội dung không khớp được mẫu tiêu đề nào (fallback "Chương {index}", giống EPUB).
-const resolveChapterDisplay = (content: string, index: number): { displayTitle: string; bodyLines: string[] } => {
-  let displayTitle = `Chương ${index + 1}`;
+const resolveChapterDisplay = (content: string, index: number, explicitTitle?: string): { displayTitle: string; bodyLines: string[] } => {
+  let displayTitle = explicitTitle || `Chương ${index + 1}`;
   const lines = content.split('\n').map(l => l.trim()).filter(l => l);
   let bodyLines = lines;
   const isChapterTitle = lines.length > 0 && new RegExp(
@@ -303,7 +303,7 @@ const resolveChapterDisplay = (content: string, index: number): { displayTitle: 
     'i'
   ).test(lines[0]);
   if (isChapterTitle) {
-    displayTitle = lines[0];
+    if (!explicitTitle) displayTitle = lines[0];
     bodyLines = lines.slice(1);
   }
   return { displayTitle, bodyLines };
@@ -396,7 +396,7 @@ export const generateEpub = async (
   if (sortedFiles.length === 0) throw new Error("Không có chương nào để tạo EPUB");
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
   const title = storyInfo.title || "Unknown Title";
-  const author = storyInfo.author || "Unknown Author";
+  const author = storyInfo.author || (storyInfo.epubAllowBlankAuthor ? "" : "Unknown Author");
   const uuidVal = crypto.randomUUID();
   // Tên asset bìa duy nhất cho mỗi EPUB. Một số trình đọc cache nhầm đường dẫn tương đối cố
   // định `Images/cover.jpg` giữa nhiều sách, dẫn tới thumbnail là bìa mới nhưng trang trong
@@ -554,7 +554,7 @@ export const generateEpub = async (
       if (storyInfo.translator) metaLines.push(`Dịch giả: ${escapeXml(storyInfo.translator)}`);
       if (storyInfo.publisher) metaLines.push(escapeXml(storyInfo.publisher));
       const titlePageFilename = "Text/title-page.xhtml";
-      const titlePageXhtml = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="vi"><head><title>${escapeXml(title)}</title><link href="../Styles/style.css" rel="stylesheet" type="text/css"/></head><body class="titlepage-body"><section epub:type="titlepage" class="title-page tp-${tpStyle}"><p class="tp-title">${escapeXml(title)}</p>${tpStyle === 'classic' ? '<div class="tp-rule"></div>' : ''}<p class="tp-author">${escapeXml(author)}</p>${metaLines.length > 0 ? `<p class="tp-meta">${metaLines.join('<br/>')}</p>` : ''}</section></body></html>`;
+      const titlePageXhtml = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="vi"><head><title>${escapeXml(title)}</title><link href="../Styles/style.css" rel="stylesheet" type="text/css"/></head><body class="titlepage-body"><section epub:type="titlepage" class="title-page tp-${tpStyle}"><p class="tp-title">${escapeXml(title)}</p>${tpStyle === 'classic' ? '<div class="tp-rule"></div>' : ''}${author ? `<p class="tp-author">${escapeXml(author)}</p>` : ''}${metaLines.length > 0 ? `<p class="tp-meta">${metaLines.join('<br/>')}</p>` : ''}</section></body></html>`;
       oebps.file(titlePageFilename, assertWellFormedXml(titlePageXhtml, "title-page.xhtml"));
       manifestItems.push(`<item id="title-page" href="${titlePageFilename}" media-type="application/xhtml+xml"/>`);
       spineItems.push(`<itemref idref="title-page" linear="yes"/>`);
@@ -566,7 +566,7 @@ export const generateEpub = async (
   // Không chèn bìa lần hai vào trang Giới Thiệu. Bìa chuẩn đã nằm trong metadata và, nếu bật
   // "Trang bìa đầu sách", trong Text/cover.xhtml. Việc lặp lại ở đây vừa tạo hai bìa vừa khiến
   // một số trình đọc hiển thị ảnh intro từ cache cũ sau khi người dùng thay bìa.
-  const introXhtml = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" lang="vi"><head><title>Giới Thiệu</title><link href="../Styles/style.css" rel="stylesheet" type="text/css"/></head><body><section class="intro-container"><h1 class="intro-title">${escapeXml(title)}</h1><div class="intro-author">${escapeXml(author)}</div><div class="intro-genres">${tagsHtml}</div><hr/><h3>Giới Thiệu</h3><div style="text-align: justify; margin-top: 1.5em;">${formattedDescription}</div></section></body></html>`;
+  const introXhtml = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" lang="vi"><head><title>Giới Thiệu</title><link href="../Styles/style.css" rel="stylesheet" type="text/css"/></head><body><section class="intro-container"><h1 class="intro-title">${escapeXml(title)}</h1>${author ? `<div class="intro-author">${escapeXml(author)}</div>` : ''}<div class="intro-genres">${tagsHtml}</div><hr/><h3>Giới Thiệu</h3><div style="text-align: justify; margin-top: 1.5em;">${formattedDescription}</div></section></body></html>`;
   oebps.file(introFilename, assertWellFormedXml(introXhtml, "intro.xhtml"));
   manifestItems.push(`<item id="intro" href="${introFilename}" media-type="application/xhtml+xml"/>`);
   const introSpineIndex = spineItems.length;
@@ -591,7 +591,7 @@ export const generateEpub = async (
       // và mở rộng CHAPTER_NUM_GROUP để nhận cả số La Mã / số đếm bằng chữ, và cho phép 3 từ khóa
       // "Ngoại chương/Phụ chương/Phiên ngoại" không cần số theo sau (chương dạng "Phiên ngoại:
       // Kết thúc câu chuyện" vẫn được nhận diện đúng là tiêu đề).
-      const { displayTitle, bodyLines: bodyLinesResolved } = resolveChapterDisplay(content, i);
+      const { displayTitle, bodyLines: bodyLinesResolved } = resolveChapterDisplay(content, i, file.epubDisplayTitle);
       let bodyLines = bodyLinesResolved;
 
       // --- Chú thích gốc tác giả (bán tự động) ---
@@ -687,7 +687,7 @@ export const generateEpub = async (
   const tocNcx = `<?xml version="1.0" encoding="UTF-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:${uuidVal}"/><meta name="dtb:depth" content="1"/><meta name="dtb:totalPageCount" content="0"/><meta name="dtb:maxPageNumber" content="0"/></head><docTitle><text>${escapeXml(title)}</text></docTitle><navMap>${ncxNavPoints.join('')}</navMap></ncx>`;
   oebps.file(ncxFilename, assertWellFormedXml(tocNcx, "toc.ncx"));
   manifestItems.push(`<item id="ncx" href="${ncxFilename}" media-type="application/x-dtbncx+xml"/>`);
-  const contentOpf = `<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><dc:title>${escapeXml(title)}</dc:title><dc:creator>${escapeXml(author)}</dc:creator>${storyInfo.translator ? `<dc:contributor>${escapeXml(storyInfo.translator)}</dc:contributor>` : ''}${storyInfo.publisher ? `<dc:publisher>${escapeXml(storyInfo.publisher)}</dc:publisher>` : ''}<dc:language>vi</dc:language><dc:identifier id="BookId">urn:uuid:${uuidVal}</dc:identifier><meta property="dcterms:modified">${timestamp}</meta><dc:date>${date}</dc:date>${coverMeta}</metadata><manifest><item id="style" href="Styles/style.css" media-type="text/css"/>${fontManifest}${coverManifest}${manifestItems.join('')}</manifest><spine toc="ncx">${spineItems.join('')}</spine>${design.enableCoverPage && coverImgFilename ? '<guide>\n    <reference type="cover" title="Cover" href="Text/cover.xhtml"/>\n  </guide>' : ''}</package>`;
+  const contentOpf = `<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><dc:title>${escapeXml(title)}</dc:title>${author ? `<dc:creator>${escapeXml(author)}</dc:creator>` : ''}${storyInfo.translator ? `<dc:contributor>${escapeXml(storyInfo.translator)}</dc:contributor>` : ''}${storyInfo.publisher ? `<dc:publisher>${escapeXml(storyInfo.publisher)}</dc:publisher>` : ''}<dc:language>vi</dc:language><dc:identifier id="BookId">urn:uuid:${uuidVal}</dc:identifier><meta property="dcterms:modified">${timestamp}</meta><dc:date>${date}</dc:date>${coverMeta}</metadata><manifest><item id="style" href="Styles/style.css" media-type="text/css"/>${fontManifest}${coverManifest}${manifestItems.join('')}</manifest><spine toc="ncx">${spineItems.join('')}</spine>${design.enableCoverPage && coverImgFilename ? '<guide>\n    <reference type="cover" title="Cover" href="Text/cover.xhtml"/>\n  </guide>' : ''}</package>`;
   oebps.file("content.opf", assertWellFormedXml(contentOpf, "content.opf"));
   // FIX (xuất EPUB rất chậm ở đoạn 80-99% với truyện nhiều chương — báo cáo người dùng, đối
   // chiếu với app epub riêng): JSZip gọi callback tiến trình của generateAsync RẤT nhiều lần

@@ -1,16 +1,17 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Book, User, FileText, Upload, Type, Sparkles, Image as ImageIcon } from 'lucide-react';
+import { X, Book, User, FileText, Loader2, Upload, Type, Sparkles, Image as ImageIcon } from 'lucide-react';
 import { StoryInfo, EpubDesignOptions, EpubDesignAssets, DEFAULT_EPUB_DESIGN_OPTIONS, EMPTY_EPUB_DESIGN_ASSETS } from '../types';
 
 interface EpubPreviewModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onConfirm: (info: StoryInfo, cover: File | null, font: File | null, designOptions: EpubDesignOptions, designAssets: EpubDesignAssets) => void;
+    onConfirm: (info: StoryInfo, cover: File | null, font: File | null, designOptions: EpubDesignOptions, designAssets: EpubDesignAssets) => void | Promise<void>;
     onRegenerateCover?: (info: StoryInfo) => Promise<File | null>;
     storyInfo: StoryInfo;
     coverImage: File | null;
     totalFiles: number;
+    publicationNotice?: string;
 }
 
 type EpubTab = 'info' | 'font' | 'design';
@@ -46,7 +47,7 @@ const FilePicker: React.FC<{
 );
 
 export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({ 
-    isOpen, onClose, onConfirm, onRegenerateCover, storyInfo, coverImage, totalFiles 
+    isOpen, onClose, onConfirm, onRegenerateCover, storyInfo, coverImage, totalFiles, publicationNotice
 }) => {
     const [activeTab, setActiveTab] = useState<EpubTab>('info');
     const [localInfo, setLocalInfo] = useState<StoryInfo>(storyInfo);
@@ -54,6 +55,7 @@ export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({
     const [coverPreview, setCoverPreview] = useState<string | null>(null);
     const [localFont, setLocalFont] = useState<File | null>(null); // giữ tương thích cũ (dùng làm content font nếu chưa chọn contentFont riêng)
     const [isRegenerating, setIsRegenerating] = useState(false);
+    const [isConfirming, setIsConfirming] = useState(false);
 
     const [design, setDesign] = useState<EpubDesignOptions>(DEFAULT_EPUB_DESIGN_OPTIONS);
     const [assets, setAssets] = useState<EpubDesignAssets>(EMPTY_EPUB_DESIGN_ASSETS);
@@ -101,6 +103,21 @@ export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({
         } finally {
             setIsRegenerating(false);
         }
+    };
+
+    const handleConfirm = async () => {
+        if (isConfirming) return;
+        setIsConfirming(true);
+        try {
+            await onConfirm(localInfo, localCover, localFont, design, assets);
+        } finally {
+            setIsConfirming(false);
+        }
+    };
+
+    const handleClose = () => {
+        if (isConfirming) return;
+        onClose();
     };
 
     if (!isOpen) return null;
@@ -174,8 +191,9 @@ export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({
                                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                                     Chuẩn Google Play Books & Kindle. Tự động làm sạch & tạo mục lục.
                                 </p>
+                                {publicationNotice && <p className="mt-2 max-w-xl text-xs font-bold leading-relaxed text-rose-700 dark:text-rose-300">{publicationNotice}</p>}
                             </div>
-                            <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-400"><X className="w-5 h-5" /></button>
+                            <button onClick={handleClose} disabled={isConfirming} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-400 disabled:opacity-40"><X className="w-5 h-5" /></button>
                         </div>
                         <div className="flex gap-1 mt-4">
                             {tabs.map(t => (
@@ -458,14 +476,15 @@ export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({
                     </div>
 
                     <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex justify-end gap-3 shrink-0">
-                        <button onClick={onClose} className="px-6 py-3 text-slate-500 dark:text-slate-400 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors text-sm">
+                        <button onClick={handleClose} disabled={isConfirming} className="px-6 py-3 text-slate-500 dark:text-slate-400 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors text-sm disabled:opacity-40">
                             Hủy Bỏ
                         </button>
                         <button 
-                            onClick={() => onConfirm(localInfo, localCover, localFont, design, assets)}
-                            className="px-8 py-3 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl font-bold shadow-lg shadow-rose-200/50 dark:shadow-none transition-all flex items-center gap-2 text-sm"
+                            onClick={() => void handleConfirm()}
+                            disabled={isConfirming}
+                            className="px-8 py-3 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl font-bold shadow-lg shadow-rose-200/50 dark:shadow-none transition-all flex items-center gap-2 text-sm disabled:opacity-50"
                         >
-                            <Book className="w-4 h-4" /> Xuất Bản Ngay
+                            {isConfirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Book className="w-4 h-4" />} {isConfirming ? 'Đang tạo EPUB…' : 'Xuất Bản Ngay'}
                         </button>
                     </div>
                 </div>

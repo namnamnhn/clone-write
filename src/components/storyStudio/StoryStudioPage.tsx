@@ -20,6 +20,8 @@ import { StoryStudioHeader } from './StoryStudioHeader';
 import { StoryStudioOverview } from './StoryStudioOverview';
 import { StoryStudioProjectLibrary } from './StoryStudioProjectLibrary';
 import { ValidationPanel } from './ValidationPanel';
+import { EpubPreviewModal } from '../EpubPreviewModal';
+import { describeStoryStudioEpubPublication } from '../../storyStudio/production/storyStudioEpubPublication';
 
 export interface StoryStudioPageProps {
     readonly enabledModels: readonly string[];
@@ -146,7 +148,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
         <div className="h-full overflow-y-auto custom-scrollbar">
             <div className="mx-auto max-w-[1600px] space-y-6 p-4 pb-10 sm:p-6 lg:p-8">
                 {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.prepareContinuationRestore(file)} />}
-                {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onExportSetup={studio.exportActiveSetup} onBackupContinuation={studio.exportActiveContinuationBackup} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
+                {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onExportSetup={studio.exportActiveSetup} onBackupContinuation={studio.exportActiveContinuationBackup} onPublishEpub={studio.openCanonEpubPublication} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
                 <StoryStudioHeader project={viewModel.project} onExitDemo={() => studio.setShowDemo(false)} />
                 <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${viewModel.project.isDemo ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>
                     {viewModel.project.isDemo ? 'Dữ liệu minh họa — không gọi model, không lưu, không đổi Canon.' : 'Dự án thật / đã lưu cục bộ. Dự án V4 được lưu cục bộ trên trình duyệt này.'}
@@ -163,6 +165,15 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
             </div>
             <StoryStudioConfirmModal open={studio.makeCanonConfirmationOpen} title={`Make Canon chương ${proposal?.targetChapter ?? ''}?`} message={`Bạn đang xác nhận ${proposal?.review.totalChanges ?? 0} thay đổi. Canon sẽ tiến đúng một chương và chương này không còn được coi là bản nháp sau khi lưu thành công.`} confirmLabel="Xác nhận Make Canon" onCancel={() => studio.setMakeCanonConfirmationOpen(false)} onConfirm={() => void studio.confirmMakeCanon()} />
             <StoryStudioConfirmModal open={studio.deleteConfirmationOpen} title="Xóa dự án V4 khỏi máy?" message="Toàn bộ Canon, bộ nhớ và chương đã lưu của dự án V4 hiện tại sẽ bị xóa khỏi trình duyệt này. Các dự án Story Studio khác và dữ liệu Sáng Tác cũ không bị ảnh hưởng." confirmLabel="Xóa dự án V4" danger onCancel={() => studio.setDeleteConfirmationOpen(false)} onConfirm={() => void studio.deleteProject()} />
+            {studio.epubPublication && <EpubPreviewModal
+                isOpen
+                onClose={studio.cancelCanonEpubPublication}
+                onConfirm={studio.confirmCanonEpubPublication}
+                storyInfo={studio.epubPublication.storyInfo}
+                coverImage={null}
+                totalFiles={studio.epubPublication.canonicalChapterCount}
+                publicationNotice={describeStoryStudioEpubPublication(studio.epubPublication)}
+            />}
         </div>
     );
 };
