@@ -16,6 +16,7 @@ export type ModelAttemptOutcomeKind = typeof MODEL_ATTEMPT_OUTCOME_KINDS[number]
 
 export const SAFE_STORY_ENGINE_V4_MODEL_IDS = [
     'gemini-3.1-pro-preview',
+    'gemini-3.8-flash',
     'gemini-3.7-flash',
     'gemini-3.6-flash',
     'gemini-3.5-flash',

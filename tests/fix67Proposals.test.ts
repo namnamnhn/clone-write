@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import {
+    normalizeGeminiGenerateContentRequest,
     wrapAiClientWithTaggedKeyErrors,
 } from '../src/services/api/gemini';
 import { quotaManager } from '../src/utils/quotaManager';
@@ -70,6 +71,79 @@ describe('FIX67-1 — wrapAiClientWithTaggedKeyErrors', () => {
     it('không có keyId (bản Full) -> trả nguyên client, KHÔNG bọc Proxy', () => {
         const fakeAi: any = { models: {} };
         expect(wrapAiClientWithTaggedKeyErrors(fakeAi, undefined)).toBe(fakeAi);
+    });
+});
+
+describe('Gemini 3.8 Flash request compatibility', () => {
+    it('removes unsupported legacy sampling controls without mutating the caller request', () => {
+        const request = {
+            model: 'gemini-3.8-flash',
+            contents: 'Xin chào',
+            config: {
+                temperature: 0.7,
+                topP: 0.9,
+                topK: 40,
+                maxOutputTokens: 512,
+            },
+        };
+
+        const normalized = normalizeGeminiGenerateContentRequest(request);
+
+        expect(normalized).not.toBe(request);
+        expect(normalized.config).toEqual({ maxOutputTokens: 512 });
+        expect(request.config).toEqual({
+            temperature: 0.7,
+            topP: 0.9,
+            topK: 40,
+            maxOutputTokens: 512,
+        });
+    });
+
+    it('keeps Gemini 3.7 Flash and Gemini 3.1 Pro requests unchanged', () => {
+        for (const model of ['gemini-3.7-flash', 'gemini-3.1-pro-preview']) {
+            const request = {
+                model,
+                contents: 'Xin chào',
+                config: { temperature: 0.7, topP: 0.9, topK: 40 },
+            };
+            expect(normalizeGeminiGenerateContentRequest(request)).toBe(request);
+        }
+    });
+
+    it('normalizes both regular and streaming calls at the shared client boundary', async () => {
+        const received: unknown[] = [];
+        const fakeAi: any = {
+            models: {
+                generateContent: async (request: unknown) => {
+                    received.push(request);
+                    return { text: 'ok' };
+                },
+                generateContentStream: async (request: unknown) => {
+                    received.push(request);
+                    return {
+                        stream: {
+                            [Symbol.asyncIterator]: () => ({
+                                next: async () => ({ done: true, value: undefined }),
+                            }),
+                        },
+                    };
+                },
+            },
+        };
+        const wrapped = wrapAiClientWithTaggedKeyErrors(fakeAi, 'key-id');
+        const request = {
+            model: 'gemini-3.8-flash',
+            contents: 'Xin chào',
+            config: { temperature: 0.7, topP: 0.9, topK: 40, maxOutputTokens: 512 },
+        };
+
+        await wrapped.models.generateContent(request);
+        await wrapped.models.generateContentStream(request);
+
+        expect(received).toEqual([
+            { model: 'gemini-3.8-flash', contents: 'Xin chào', config: { maxOutputTokens: 512 } },
+            { model: 'gemini-3.8-flash', contents: 'Xin chào', config: { maxOutputTokens: 512 } },
+        ]);
     });
 });
 

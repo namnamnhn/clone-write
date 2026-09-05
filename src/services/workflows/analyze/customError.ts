@@ -7,8 +7,8 @@ export const analyzeCustomError = async (
     enabledModels?: string[],
     imageBase64?: string
 ): Promise<string> => {
-    const candidates = ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
-    if (candidates.length === 0) candidates.push('gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
+    const candidates = ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
+    if (candidates.length === 0) candidates.push('gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
 
     const systemInstruction = `Bạn là một Chuyên gia Biên tập và Sửa lỗi văn học.
 Nhiệm vụ của bạn là PHÂN TÍCH yêu cầu sửa lỗi của người dùng và đề xuất HƯỚNG GIẢI QUYẾT rõ ràng.

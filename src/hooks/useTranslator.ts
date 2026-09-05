@@ -779,7 +779,7 @@ export const useTranslator = (
                 // RPM 2/phút của 3.1 Pro: luồng đầu tiên luôn ưu tiên 3.1 Pro (priority thấp
                 // nhất = điểm cao nhất); ngay khi Pro vừa ghi nhận request và bước vào khoảng
                 // cách tối thiểu 30s (60000/rpmLimit=2), các lượt chọn kế tiếp tự tràn sang
-                // 3.7 Flash rồi 3.6 Flash (thứ tự priority 3.2 > 3.4) — đạt đủ 3 luồng chạy
+                // 3.8 Flash rồi 3.7/3.6 Flash theo priority — đạt đủ 3 luồng chạy
                 // đồng thời mà không có luồng nào phải chờ Pro hết spacing, Pro cũng không bị
                 // dồn cứng request gây rate-limit tạm thời.
                 maxConcurrentBatches = 3;

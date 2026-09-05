@@ -13,7 +13,7 @@ describe('lựa chọn model dịch theo tier', () => {
         const lastAllowed = allowed[allowed.length - 1];
         expect(sanitizeTranslationModelSelection(tier, [])).toEqual([allowed[0]]);
         expect(sanitizeTranslationModelSelection(tier, [lastAllowed, allowed[0]])).toEqual([allowed[0], lastAllowed]);
-        if (!IS_LITE) expect(allowed).toEqual(['gemini-3.1-pro-preview', 'gemini-3.7-flash']);
+        if (!IS_LITE) expect(allowed).toEqual(['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash']);
     });
     it('lưu và đọc lựa chọn riêng của chế độ', () => {
         const storage = makeStorage(); const allowed = getSelectableTranslationModels(tier);

@@ -47,8 +47,8 @@ FORMATTING RULES:
     const prompt = `[INPUT DATA]\n${inputs}`;
 
     // Use Flash models for speed and cost effectiveness
-    let candidates = ['gemini-3.7-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'].filter(id => enabledModels?.includes(id) ?? true);
-    if (candidates.length === 0) candidates = ['gemini-3.7-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']; // Fallback if none enabled
+    let candidates = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'].filter(id => enabledModels?.includes(id) ?? true);
+    if (candidates.length === 0) candidates = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']; // Fallback if none enabled
 
     return await smartExecution(candidates, async mid => {
         const ai = getAiClient();

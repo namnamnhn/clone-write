@@ -319,8 +319,8 @@ ${textContent}`,
         // FIX (yêu cầu người dùng): trước đây chỉ có đúng 1 model 'gemini-3.1-pro-preview', không
         // có model dự phòng — 3.1 Pro lỗi/quá tải là sáng tác fail thẳng, không tự chuyển sang
         // model khác như bên dịch (bên dịch đã có sẵn cơ chế fallback qua smartExecution). Nay
-        // thêm chuỗi dự phòng 3.1 Pro > 3.7 Flash > 3.6 Flash, đúng thứ tự người dùng yêu cầu.
-        addLog?.('Bắt đầu sáng tác liên hoàn (ưu tiên Gemini 3.1 Pro, dự phòng 3.7 Flash / 3.6 Flash, Max 65536 tokens)...', 'info');
+        // Giữ 3.1 Pro làm chính; Flash mới nhất chỉ đứng đầu chuỗi dự phòng.
+        addLog?.('Bắt đầu sáng tác liên hoàn (ưu tiên Gemini 3.1 Pro, dự phòng 3.8 / 3.7 / 3.6 Flash, Max 65536 tokens)...', 'info');
 
         const controller = new AbortController();
         abortControllerRef.current = controller;
@@ -381,7 +381,7 @@ Văn phong mượt mà, cuốn hút. Không tóm tắt nội dung để qua loa.
 Đừng quên thẻ <STORY_SUMMARY> bắt buộc ở cuối cùng như hướng dẫn.`;
 
             const res = await smartExecution(
-                ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash'],
+                ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'],
                 async (modelId) => {
                     const r = await ai.models.generateContent({
                         model: modelId,

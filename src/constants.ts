@@ -9,7 +9,7 @@ export * from './defaultDictionary';
 // EDITION FLAGS (fix59): 1 cây nguồn build ra 3 bản đóng gói —
 //   'full' : bản đầy đủ (6 Tháng / 1 Năm) — hành vi giữ nguyên 100% như trước.
 //   'lite' : bản rút gọn — chỉ có chế độ Flash + Lite (bỏ Normal/Pro/Full vì dính
-//            model Pro), thay mọi chức năng của 3.1 Pro bằng 3.7 Flash, khoá batch
+//            model Pro), thay mọi chức năng của 3.1 Pro bằng model Flash mới nhất, khoá batch
 //            config (3 tệp / latin 60k / raw 30k), ẩn prompt gốc, lấy mẫu phân tích
 //            cố định đầu/giữa/cuối tối đa 200k ký tự, BẮT BUỘC API key Gemini cá
 //            nhân (không dùng key nhúng), hạn sử dụng chỉ mở ngày 1-3 hàng tháng.
@@ -79,8 +79,10 @@ const BASE_MODEL_CONFIGS: ModelQuota[] = [
   { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (Siêu cấp)', rpmLimit: 2, rpdLimit: 100, priority: 1 , family: 'pro' },
   
   // FLASH TIER: High Speed
-  // Gemini 3.7 Flash: model Flash mới nhất (ra mắt 13/08/2026), ưu tiên cao hơn 3.6 Flash.
-  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash (Mới nhất)', rpmLimit: 10, rpdLimit: 500, priority: 3.2 , family: 'flash' },
+  // Google công bố giới hạn thực tế theo project/tier trong AI Studio. Giữ mức điều phối nội bộ
+  // bảo thủ giống 3.7 cho 3.8, không coi các giá trị này là cam kết Free Tier của nhà cung cấp.
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Mới nhất)', rpmLimit: 10, rpdLimit: 500, priority: 3 , family: 'flash' },
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', rpmLimit: 10, rpdLimit: 500, priority: 3.2 , family: 'flash' },
   { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash (Tối ưu)', rpmLimit: 10, rpdLimit: 500, priority: 3.4 , family: 'flash' },
   // Gemini 3.5 Flash: Giới hạn 500 RPD
   { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (Kế Tiếp)', rpmLimit: 10, rpdLimit: 500, priority: 4 , family: 'flash' },
@@ -119,12 +121,12 @@ export const MODEL_CONFIGS: ModelQuota[] = IS_LITE
 // Model FREE trên OpenRouter đã bị LOẠI BỎ HOÀN TOÀN khỏi hệ thống (fix44): vệ tinh cứu hộ
 // duy nhất còn lại là DeepSeek (trả phí) — xem services/api/deepseek.ts và rescueTarget.ts.
 
-// Bản Lite: mọi chức năng từng dùng 3.1 Pro chuyển sang 3.7 Flash (yêu cầu người dùng)
-const PRO_MODEL_ID = IS_LITE ? 'gemini-3.7-flash' : 'gemini-3.1-pro-preview';
+// Bản Lite: mọi chức năng từng dùng 3.1 Pro chuyển sang model Flash mới nhất.
+const PRO_MODEL_ID = IS_LITE ? 'gemini-3.8-flash' : 'gemini-3.1-pro-preview';
 
 export const TIER_MODELS = {
     PRO_POOL: [PRO_MODEL_ID],
-    FLASH_POOL: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemma-4-26b-a4b-it', 'gemma-4-31b-it'], // Dùng để dịch trong Flash & Auto-Fix
+    FLASH_POOL: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemma-4-26b-a4b-it', 'gemma-4-31b-it'], // Dùng để dịch trong Flash & Auto-Fix
 };
 
 export const CONCURRENCY_CONFIG = { 

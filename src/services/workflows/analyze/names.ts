@@ -15,9 +15,9 @@ export const analyzeNameBatch = async (
     // chia nhiều phần để phân tích.
     existingDictionary: string = ""
 ): Promise<string> => {
-    let candidates = forcedCandidates || (useSearch ? ['gemini-3.1-pro-preview'] : ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']);
+    let candidates = forcedCandidates || (useSearch ? ['gemini-3.1-pro-preview'] : ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']);
     candidates = candidates.filter(id => enabledModels?.includes(id) ?? true);
-    if (candidates.length === 0) candidates = forcedCandidates || ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
+    if (candidates.length === 0) candidates = forcedCandidates || ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
     const langs = storyInfo.languages.join(' ').toLowerCase();
     let sourceInstruction = "";
     

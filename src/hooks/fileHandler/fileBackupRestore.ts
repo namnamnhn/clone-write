@@ -95,7 +95,10 @@ export const useFileBackupRestore = (core: CoreApi, ui: UIApi) => {
                     if (!validModels.includes('gemini-3.6-flash')) {
                         validModels.push('gemini-3.6-flash');
                     }
-                    // Model mới Gemini 3.7 Flash: backup cũ chưa có id này -> tự bật mặc định.
+                    // Model mới Gemini 3.8 Flash: backup cũ chưa có id này -> tự bật mặc định.
+                    if (!validModels.includes('gemini-3.8-flash')) {
+                        validModels.push('gemini-3.8-flash');
+                    }
                     if (!validModels.includes('gemini-3.7-flash')) {
                         validModels.push('gemini-3.7-flash');
                     }

@@ -33,7 +33,7 @@ CRITICAL: You MUST return EXACTLY ONE LINE per ID. Do not use multiple lines for
     }
 
     const prompt = `[DICT]\n${dictionary}\n[ROLES]\n${relCtx}\n[RULES & PRONOUNS (MANDATORY)]\n${genreRules}\n[LINES]\n${entries.map((e,i) => `ID_${i}: ${e.originalLine}`).join('\n')}`;
-    // Auto Fix Raw thủ công cho người dùng khoá đúng 3.1 Pro hoặc 3.7 Flash. Pool cưỡng bức
+    // Auto Fix Raw thủ công cho người dùng khoá đúng 3.1 Pro hoặc model Flash mới nhất. Pool cưỡng bức
     // không đi qua mapping tier/auto_fix, nếu không lựa chọn Pro có thể bị lọc mất và âm thầm
     // đổi sang model khác.
     const candidates = forcedModels?.length ? [...forcedModels] : getEffectiveModelsForTier(tier, taskType, enabledModels);

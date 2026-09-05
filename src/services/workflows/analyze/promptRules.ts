@@ -130,8 +130,8 @@ export const optimizePrompt = async (
   rawSamples?: string[]
 ): Promise<string> => {
   // User requested 3.1 Pro. We keep 3.0 Pro as a high-quality backup, but remove 2.5 to ensure quality.
-  const candidates = ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
-  if (candidates.length === 0) candidates.push('gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
+  const candidates = ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
+  if (candidates.length === 0) candidates.push('gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
   const filledTemplate = replacePromptVariables(promptTemplate, storyInfo);
   const isGameOrWestern = storyInfo.genres.some(g => ['Light Novel', 'Isekai', 'Fantasy', 'Đồng Nhân', 'Võng Du', 'Game'].includes(g)) || storyInfo.worldSetting.some(s => ['Phương Tây/Magic', 'Võng Du/Game'].includes(s));
   
@@ -207,8 +207,8 @@ export const optimizePrompt = async (
           return await smartExecution(proModels, performTask, "Optimize Prompt (Pro)", undefined, proModels[0]);
       } catch (e) {
           console.warn("Pro model failed for optimizePrompt, falling back to Flash.", e);
-          const fallbackModels = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
-          if (fallbackModels.length === 0) fallbackModels.push('gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
+          const fallbackModels = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
+          if (fallbackModels.length === 0) fallbackModels.push('gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
           return await smartExecution(fallbackModels, performTask, "Optimize Prompt (Flash)", undefined, fallbackModels[0]);
       }
   } catch {
@@ -221,10 +221,10 @@ export const refineAdditionalRules = async (
     forcedCandidates?: string[], pronounOverride?: string,
     engine: AnalysisEngine = 'gemini', deepseekKey?: string, deepseekModel?: string
 ): Promise<string> => {
-    // UPDATED: "Quy Tắc Bổ Sung" chuyển giao cho 3.7 Flash phụ trách chính (không còn dùng 3.1 Pro
+    // "Quy Tắc Bổ Sung" dùng model Flash mới nhất làm chính (3.1 Pro vẫn dành cho optimizePrompt).
     // cho tác vụ này — 3.1 Pro chỉ còn giữ vai trò ở bước "Thiết Kế Prompt Tối Ưu" (optimizePrompt)).
-    const flashModels = (forcedCandidates || ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']).filter(id => !id.includes('pro') && (enabledModels?.includes(id) ?? true));
-    if (flashModels.length === 0) flashModels.push('gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
+    const flashModels = (forcedCandidates || ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']).filter(id => !id.includes('pro') && (enabledModels?.includes(id) ?? true));
+    if (flashModels.length === 0) flashModels.push('gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
 
     const hasExistingRules = additionalRules && additionalRules.trim().length > 0;
 
@@ -309,10 +309,10 @@ export const refineSummary = async (
     mergedContext: string, storyInfo: StoryInfo, enabledModels?: string[], forcedCandidates?: string[],
     engine: AnalysisEngine = 'gemini', deepseekKey?: string, deepseekModel?: string
 ): Promise<string> => {
-    // UPDATED: "Tóm Tắt Truyện" chuyển giao cho 3.7 Flash phụ trách chính (không còn dùng 3.1 Pro
+    // "Tóm Tắt Truyện" dùng model Flash mới nhất làm chính (3.1 Pro vẫn dành cho optimizePrompt).
     // cho tác vụ này — 3.1 Pro chỉ còn giữ vai trò ở bước "Thiết Kế Prompt Tối Ưu" (optimizePrompt)).
-    const flashModels = (forcedCandidates || ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']).filter(id => !id.includes('pro') && (enabledModels?.includes(id) ?? true));
-    if (flashModels.length === 0) flashModels.push('gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
+    const flashModels = (forcedCandidates || ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']).filter(id => !id.includes('pro') && (enabledModels?.includes(id) ?? true));
+    if (flashModels.length === 0) flashModels.push('gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
 
     const prompt = `Dựa trên toàn bộ [Ngữ cảnh chi tiết] sau đây, hãy viết một bản tóm tắt truyện thật chi tiết và đầy đủ. Vì đây là ngữ cảnh từ toàn bộ câu chuyện (đầu-giữa-cuối), bạn KHÔNG ĐƯỢC rút gọn. Hãy trình bày theo cấu trúc các mục sau, mỗi mục có thể viết nhiều đoạn nếu ngữ cảnh cho phép:
 

@@ -223,7 +223,7 @@ export const SinoVietnameseFixerPage: React.FC<SinoVietnameseFixerPageProps> = (
                     <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
                         <div>
                             <h2 className="text-base font-bold text-slate-800 dark:text-slate-100">1. Quét và tìm kiếm lỗi</h2>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Phân tích quy tắc → quét 3.7 Flash → lấy lỗi thô</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Phân tích quy tắc → quét 3.8 Flash → lấy lỗi thô</p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                             <button

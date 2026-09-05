@@ -8,7 +8,7 @@ import { sanitizeSafeModelAttemptOutcomes } from '../../storyEngine/modelAttempt
 import type { SafeModelAttemptOutcome } from '../../storyEngine/modelAttemptDiagnostics';
 
 export const STORY_SETUP_COMPILER_CANDIDATES = [
-    'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
+    'gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
 ] as const;
 
 export class GeminiStorySetupCompilerError extends Error {
