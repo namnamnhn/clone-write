@@ -196,7 +196,7 @@ describe('WORK 12 Story Engine model policy', () => {
 
     it('keeps all default candidates Gemini-only', () => {
         const policy = resolveStoryEngineModelRolePolicy(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY, [
-            'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'deepseek:chat',
+            'gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'deepseek:chat',
         ]);
         expect(Object.values(policy).flatMap(value => value.candidateModelIds).every(id => id.startsWith('gemini-'))).toBe(true);
     });
@@ -204,20 +204,20 @@ describe('WORK 12 Story Engine model policy', () => {
     it('keeps exact Planner, Writer, and Semantic Validator order with 3.5 Flash final', () => {
         expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.planner).toMatchObject({
             preferredModelId: 'gemini-3.1-pro-preview',
-            candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+            candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
         });
         expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.writer).toMatchObject({
             preferredModelId: 'gemini-3.1-pro-preview',
-            candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+            candidateModelIds: ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
         });
         expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.semanticValidator).toMatchObject({
-            preferredModelId: 'gemini-3.7-flash',
-            candidateModelIds: ['gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+            preferredModelId: 'gemini-3.8-flash',
+            candidateModelIds: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemini-3.6-flash', 'gemini-3.5-flash'],
         });
         expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.repair.candidateModelIds)
-            .toEqual(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
+            .toEqual(['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
         expect(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY.stateExtractor.candidateModelIds)
-            .toEqual(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
+            .toEqual(['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
         expect(JSON.stringify(DEFAULT_STORY_ENGINE_MODEL_ROLE_POLICY)).not.toMatch(/flash-lite|gemma/i);
     });
 

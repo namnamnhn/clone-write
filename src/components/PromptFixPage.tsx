@@ -93,7 +93,7 @@ export const PromptFixPage: React.FC<PromptFixPageProps> = (props) => {
                     </div>
                     <div>
                         <h2 className="font-bold text-base text-slate-800 dark:text-slate-100">AI Quét & Sửa Lỗi Hàng Loạt</h2>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">3.7 Flash quét lỗi thô → 3.1 Pro đề xuất quy tắc → Áp dụng tự động</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">3.8 Flash quét lỗi thô → 3.1 Pro đề xuất quy tắc → Áp dụng tự động</p>
                     </div>
                 </div>
                 <div className="flex items-center gap-2 relative">

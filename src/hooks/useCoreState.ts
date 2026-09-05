@@ -247,7 +247,8 @@ export const useCoreState = (addToast: (msg: string, type: 'success'|'error'|'in
                 if (data.enabledModels) {
                     const validModels = data.enabledModels.filter((id: string) => MODEL_CONFIGS.some(m => m.id === id));
                     if (!validModels.includes('gemini-3.6-flash')) validModels.push('gemini-3.6-flash');
-                    // Model mới Gemini 3.7 Flash: dữ liệu cũ chưa có id này -> tự bật mặc định.
+                    // Model mới Gemini 3.8 Flash: dữ liệu cũ chưa có id này -> tự bật mặc định.
+                    if (!validModels.includes('gemini-3.8-flash')) validModels.push('gemini-3.8-flash');
                     if (!validModels.includes('gemini-3.7-flash')) validModels.push('gemini-3.7-flash');
                     if (!validModels.includes('gemini-3.5-flash-lite')) validModels.push('gemini-3.5-flash-lite');
                     if (!validModels.includes('gemini-3.1-flash-lite')) validModels.push('gemini-3.1-flash-lite');

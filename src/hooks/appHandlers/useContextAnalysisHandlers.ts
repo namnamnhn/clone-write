@@ -144,10 +144,10 @@ export const useContextAnalysisHandlers = (core: CoreApi, ui: UIApi, automation:
                 return filtered.length > 0 ? filtered : list;
             };
 
-            // Chế độ Nhanh: ưu tiên hết quota 3.7 Flash > 3.5 Flash > 3.0 Flash preview
-            const QUICK_CHAIN = ['gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
-            // Chế độ Sâu, từ batch 4 trở đi: 3.7 Flash > 3.5 Flash > 3.0 Flash preview
-            const DEEP_LATE_CHAIN = ['gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
+            // Chế độ Nhanh: ưu tiên Flash mới nhất rồi mới rơi về các thế hệ trước.
+            const QUICK_CHAIN = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
+            // Chế độ Sâu, từ batch 4 trở đi: giữ cùng thứ tự Flash.
+            const DEEP_LATE_CHAIN = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
 
             const totalBatches = Math.ceil(chunks.length / CONCURRENCY);
             // FIX (fix55 - bug "phân tích chia 2 phần bị nửa nạc nửa mỡ so với phân tích 1 lần"):
@@ -193,10 +193,10 @@ export const useContextAnalysisHandlers = (core: CoreApi, ui: UIApi, automation:
                     let models: string[];
                     if (isDeep) {
                         models = batchNum <= 3
-                            ? filterEnabled(['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'])
+                            ? filterEnabled(['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'])
                             : filterEnabled(DEEP_LATE_CHAIN);
                     } else {
-                        // Chế độ Nhanh: 3.7 Flash > 3.5 Flash > 3.0 Flash preview
+                        // Chế độ Nhanh: dùng chuỗi Flash mới nhất trước.
                         models = filterEnabled(QUICK_CHAIN);
                     }
                     
@@ -208,7 +208,7 @@ export const useContextAnalysisHandlers = (core: CoreApi, ui: UIApi, automation:
                         }
                     } catch (e: any) {
                         console.warn(`Primary models failed for chunk ${i + idx}, falling back to Flash chain for raw analysis.`, e);
-                        const rescueModels = filterEnabled(['gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']);
+                        const rescueModels = filterEnabled(['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']);
                         try {
                             if (config.mode === 'deep_context') {
                                 const flashRes = await analyzeContextBatch(chunk, config.updatedStoryInfo, dictForThisBatch, config.useSearch, rescueModels, effectiveAdditionalRules + "\nLƯU Ý: ĐÂY LÀ BẢN PHÂN TÍCH THÔ DO HẾT QUOTA. CHỈ TRÍCH XUẤT NHANH CÁC DANH TỪ RIÊNG.", core.enabledModels);

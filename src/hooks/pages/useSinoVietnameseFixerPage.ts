@@ -141,7 +141,7 @@ CHỈ TRẢ VỀ CÁC DÒNG QUY TẮC, KHÔNG GIẢI THÍCH DÀI DÒNG.`
             });
 
             const res = await smartExecution(
-                ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+                ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
                 async (modelId) => {
                     const r = await ai.models.generateContent({
                         model: modelId,
@@ -209,7 +209,7 @@ KHÔNG bắt lỗi thuật ngữ/cảnh giới/pháp bảo tiên hiệp đặc t
 Văn bản:\n${chunk}`;
                     try {
                         return await smartExecution(
-                            ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+                            ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
                             async (modelId) => {
                                 const ai = getAiClient();
                                 const r = await ai.models.generateContent({
@@ -308,7 +308,7 @@ Chỉ trả về danh sách quy tắc dạng: cụm lỗi -> cụm đã sửa. M
 Danh sách (Phần ${i + bIdx + 1}/${errorChunks.length}):\n${chunkList}`;
 
                     return await smartExecution(
-                        ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+                        ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
                         async (modelId) => {
                             const ai = getAiClient();
                             const r = await ai.models.generateContent({
@@ -401,7 +401,7 @@ Danh sách (Phần ${i + bIdx + 1}/${errorChunks.length}):\n${chunkList}`;
 
                             try {
                                 const postCheckRes = await smartExecution(
-                                    ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+                                    ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
                                     async (modelId) => {
                                         const ai = getAiClient();
                                         const r = await ai.models.generateContent({

@@ -52,6 +52,7 @@ const textResponse = (text: string): GenerateContentResponse => ({
 
 describe('WORK14 Gemini transport selection', () => {
     it.each([
+        'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemma-4-31b-it',
         'gemma-4-26b-a4b-it',

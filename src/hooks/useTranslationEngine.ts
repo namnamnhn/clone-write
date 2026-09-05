@@ -106,7 +106,7 @@ export const useTranslationEngine = (core: CoreApi, ui: UIApi) => {
         handleManualAutoFixRaw: (mode: 'pro' | 'flash') => {
             const prepared = translatorFns.prepareModelsForRun(translationTier);
             if (!prepared) return false;
-            const forcedModel = mode === 'pro' ? 'gemini-3.1-pro-preview' : 'gemini-3.7-flash';
+            const forcedModel = mode === 'pro' ? 'gemini-3.1-pro-preview' : 'gemini-3.8-flash';
             const enabledModels = Array.from(new Set([...prepared.enabledModels, forcedModel]));
             core.setEnabledModels(enabledModels);
             return smartFixFns.handleFixRemainingRaw(false, enabledModels, 2, [forcedModel]);

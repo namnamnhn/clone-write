@@ -1,6 +1,7 @@
 
 import { logger } from "../../utils/logger";
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
+import type { GenerateContentParameters } from '@google/genai';
 import { quotaManager } from '../../utils/quotaManager';
 import { MODEL_CONFIGS, IS_LITE } from '../../constants';
 import type { LogContext } from '../../types';
@@ -205,6 +206,21 @@ const attachKeyToError = (e: any, keyId: string | undefined): any => {
     return e;
 };
 
+// Gemini 3.8 Flash rejects the legacy sampling controls that older Gemini models
+// still accept. Normalize at the shared client boundary so every direct and
+// hosted request follows the same official model contract without changing
+// existing behavior for Gemini 3.7 Flash or Gemini 3.1 Pro.
+export const normalizeGeminiGenerateContentRequest = (
+    request: GenerateContentParameters,
+): GenerateContentParameters => {
+    if (request.model !== 'gemini-3.8-flash' || !request.config) return request;
+    const supportedConfig = { ...request.config };
+    delete supportedConfig.temperature;
+    delete supportedConfig.topP;
+    delete supportedConfig.topK;
+    return { ...request, config: supportedConfig };
+};
+
 export const wrapAiClientWithTaggedKeyErrors = <T>(ai: T, apiKeyId: string | undefined): T => {
     const models = (ai as any)?.models;
     if (!apiKeyId || !models) return ai;
@@ -213,11 +229,18 @@ export const wrapAiClientWithTaggedKeyErrors = <T>(ai: T, apiKeyId: string | und
             const orig = target[prop];
             if (typeof orig !== 'function') return orig;
             return (...args: any[]) => {
+                const methodName = String(prop);
+                const callArgs = (
+                    (methodName === 'generateContent' || methodName === 'generateContentStream')
+                    && args[0]
+                )
+                    ? [normalizeGeminiGenerateContentRequest(args[0]), ...args.slice(1)]
+                    : args;
                 let out: any;
-                try { out = orig.apply(target, args); } catch (e) { throw attachKeyToError(e, apiKeyId); }
+                try { out = orig.apply(target, callArgs); } catch (e) { throw attachKeyToError(e, apiKeyId); }
                 const isPromise = out && typeof out.then === 'function';
                 if (!isPromise) return out;
-                if (String(prop) === 'generateContentStream') {
+                if (methodName === 'generateContentStream') {
                     return Promise.resolve(out).then((res: any) => {
                         if (!res || !res.stream || typeof res.stream[Symbol.asyncIterator] !== 'function') return res;
                         // Bảo toàn nguyên vẹn các property/getter của result (kể cả .response),

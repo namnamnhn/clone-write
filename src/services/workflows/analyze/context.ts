@@ -16,9 +16,9 @@ export const analyzeContextBatch = async (
     forcedCandidates?: string[], additionalRules: string = "", enabledModels?: string[],
     engine: AnalysisEngine = 'gemini', deepseekKey?: string, deepseekModel?: string
 ): Promise<string> => {
-    let candidates = forcedCandidates || ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
+    let candidates = forcedCandidates || ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
     candidates = candidates.filter(id => enabledModels?.includes(id) ?? true);
-    if (candidates.length === 0) candidates = forcedCandidates || ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
+    if (candidates.length === 0) candidates = forcedCandidates || ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
     const langs = storyInfo.languages.join(' ').toLowerCase();
     let sourceInstruction = "";
     
@@ -155,7 +155,7 @@ const callMergeModel = async (modelId: string, content: string): Promise<string>
 // Danh sách model theo TỪNG lượt hợp nhất (1 lượt = 1 chunk trong planMergeChunks), đúng 3 tầng
 // người dùng yêu cầu (FIX85):
 //   Tầng 1 — Pro (3.1 Pro): chất lượng đầy đủ, đúng nguyên vẹn MERGE_CONTEXT_PROMPT.
-//   Tầng 2 — 3.7 Flash / 3.6 Flash: THẾ HỆ MỚI, đủ khả năng hợp nhất ĐẦY ĐỦ ngang Pro (không phải
+//   Tầng 2 — 3.8 / 3.7 / 3.6 Flash: THẾ HỆ MỚI, đủ khả năng hợp nhất ĐẦY ĐỦ ngang Pro (không phải
 //            "thô") — chỉ là dự phòng khi Pro hết quota, dùng CHUNG prompt không rút gọn với Pro.
 //   Tầng 3 — 3.5 Flash / 3-flash-preview: "Hợp Nhất Thô" thật sự đầu tiên — vẫn gọi AI thật, vẫn
 //            dùng nguyên MERGE_CONTEXT_PROMPT, chỉ thêm 1 dòng chỉ thị ưu tiên tốc độ + giữ đúng
@@ -163,7 +163,7 @@ const callMergeModel = async (modelId: string, content: string): Promise<string>
 //            y hệt Pro/3.7/3.6 dễ ra kết quả tệ/thiếu.
 //   Tầng 4 — Local Raw Merge: KHÔNG gọi AI nữa, chỉ nối thẳng kèm ghi chú hệ thống.
 const MERGE_TIER_PRO = ['gemini-3.1-pro-preview'];
-const MERGE_TIER_FULL_FLASH = ['gemini-3.7-flash', 'gemini-3.6-flash'];
+const MERGE_TIER_FULL_FLASH = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
 const MERGE_TIER_ROUGH_FLASH = ['gemini-3.5-flash', 'gemini-3-flash-preview'];
 
 // Thực hiện ĐÚNG 1 lượt hợp nhất (accumulated + 1 mergeChunk mới) — chạy hết 4 tầng fallback rồi
@@ -270,8 +270,8 @@ export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInf
     const chunks = chunkTextByFileBoundary(cleanedFiles, CHUNK_SIZE);
 
     const results: string[] = [];
-    const targetModels = ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
-    if (targetModels.length === 0) targetModels.push('gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
+    const targetModels = ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'].filter(id => enabledModels?.includes(id) ?? true);
+    if (targetModels.length === 0) targetModels.push('gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview');
     
     // Tuần tự để rollingDictionary của chunk N được truyền ngay sang chunk N+1.
     const CONCURRENCY = 1;
@@ -297,15 +297,15 @@ export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInf
                 // "idx % 2 !== 0" phía dưới không bao giờ có cơ hội chạy. Giữ lại đúng 1 logic tầng
                 // model theo batchNum cho rõ ràng, hành vi thực tế không đổi.
                 const models: string[] = batchNum <= 3
-                    ? ['gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']
-                    : ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
+                    ? ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']
+                    : ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'];
                 
                 try {
                     return await analyzeContextBatch(chunk, storyInfo, dictForThisBatch, useSearch, models, additionalRules, enabledModels);
                 } catch (e: any) {
                     console.warn(`Primary models failed for chunk ${i + idx}, falling back to Flash for raw analysis.`, e);
                     try {
-                        const flashRes = await analyzeContextBatch(chunk, storyInfo, dictForThisBatch, useSearch, ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'], additionalRules + "\nLƯU Ý: ĐÂY LÀ BẢN PHÂN TÍCH THÔ DO HẾT QUOTA. CHỈ TRÍCH XUẤT NHANH CÁC DANH TỪ RIÊNG.", enabledModels);
+                        const flashRes = await analyzeContextBatch(chunk, storyInfo, dictForThisBatch, useSearch, ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview'], additionalRules + "\nLƯU Ý: ĐÂY LÀ BẢN PHÂN TÍCH THÔ DO HẾT QUOTA. CHỈ TRÍCH XUẤT NHANH CÁC DANH TỪ RIÊNG.", enabledModels);
                         progressNote = "\n\n[CẢNH BÁO: Quá trình phân tích bị gián đoạn do hết Quota/Lỗi mạng. Một số phần được lưu dưới dạng phân tích thô bằng Flash.]";
                         return flashRes + "\n[GHI CHÚ: BẢN PHÂN TÍCH THÔ BẰNG FLASH DO HẾT QUOTA]";
                     } catch (flashError: any) {

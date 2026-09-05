@@ -29,7 +29,7 @@ export const runApiHealthCheck = async (cfg: {
 
     // --- GEMINI ---
     {
-        const preferred = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.6-flash'];
+        const preferred = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
         const model = preferred.find(m => cfg.enabledModels.includes(m)) || cfg.enabledModels.find(m => m.startsWith('gemini')) || 'gemini-3.5-flash-lite';
         const t0 = Date.now();
         try {

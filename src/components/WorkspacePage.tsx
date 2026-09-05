@@ -114,7 +114,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = (props) => {
     const counts = useMemo(() => {
         let pending = 0, completed = 0, raw = 0, error = 0, english = 0, short = 0, processing = 0;
         let unchanged = 0, merged = 0, suspicious = 0, rescueLocked = 0, nonStory = 0;
-        let m31pro = 0, m37flash = 0, m36flash = 0, m35flash = 0, m3flash = 0, m35flashlite = 0, m31flashlite = 0, mDeepSeek = 0, mManual = 0, mOther = 0;
+        let m31pro = 0, m38flash = 0, m37flash = 0, m36flash = 0, m35flash = 0, m3flash = 0, m35flashlite = 0, m31flashlite = 0, mDeepSeek = 0, mManual = 0, mOther = 0;
         let lowRatio = 0;
         const needLowRatio = props.showFilterPanel;
 
@@ -161,6 +161,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = (props) => {
             const um = f.usedModel;
             if (um) {
                 if (um.includes('gemini-3.1-pro')) m31pro++;
+                if (um.includes('gemini-3.8-flash')) m38flash++;
                 if (um.includes('gemini-3.7-flash')) m37flash++;
                 if (um.includes('gemini-3.6-flash')) m36flash++;
                 if (um.includes('gemini-3.5-flash') && !um.includes('lite')) m35flash++;
@@ -170,14 +171,14 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = (props) => {
                 if (um.includes('deepseek:')) mDeepSeek++;
                 if (um.includes('Thủ công')) mManual++;
             }
-            if (st === FileStatus.COMPLETED && (!um || (!um.includes('gemini-3.1-pro') && !um.includes('gemini-3.7-flash') && !um.includes('gemini-3.6-flash') && !um.includes('gemini-3.5-flash') && !um.includes('gemini-3.1-flash') && !um.includes('gemini-3-flash') && !um.includes('deepseek:') && !um.includes('Thủ công')))) mOther++;
+            if (st === FileStatus.COMPLETED && (!um || (!um.includes('gemini-3.1-pro') && !um.includes('gemini-3.8-flash') && !um.includes('gemini-3.7-flash') && !um.includes('gemini-3.6-flash') && !um.includes('gemini-3.5-flash') && !um.includes('gemini-3.1-flash') && !um.includes('gemini-3-flash') && !um.includes('deepseek:') && !um.includes('Thủ công')))) mOther++;
         }
 
         return {
             selected: props.selectedFiles.size,
             pending, completed, raw, error, english, short, processing,
             unchanged, merged, lowRatio, suspicious, rescueLocked, nonStory,
-            m31pro, m37flash, m36flash, m35flash, m3flash, m35flashlite, m31flashlite, mDeepSeek, mManual, mOther,
+            m31pro, m38flash, m37flash, m36flash, m35flash, m3flash, m35flashlite, m31flashlite, mDeepSeek, mManual, mOther,
         };
     }, [props.files, props.selectedFiles.size, props.ratioLimits, props.storyInfo.languages, props.showFilterPanel]);
 
@@ -266,6 +267,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = (props) => {
                     const m = f.usedModel || ""; 
                     modelMatch = ( 
                         (props.filterModels.has('31pro') && m.includes('gemini-3.1-pro')) || 
+                        (props.filterModels.has('38flash') && m.includes('gemini-3.8-flash')) ||
                         (props.filterModels.has('37flash') && m.includes('gemini-3.7-flash')) || 
                         (props.filterModels.has('36flash') && m.includes('gemini-3.6-flash')) || 
                         (props.filterModels.has('35flash') && m.includes('gemini-3.5-flash') && !m.includes('lite')) || 
@@ -275,7 +277,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = (props) => {
                         (props.filterModels.has('deepseek') && m.includes('deepseek:')) ||
                         (props.filterModels.has('manual') && m.includes('Thủ công')) ||
 
-                        (props.filterModels.has('other') && f.status === FileStatus.COMPLETED && (!m || (!m.includes('gemini-3.1-pro') && !m.includes('gemini-3.7-flash') && !m.includes('gemini-3.6-flash') && !m.includes('gemini-3.5-flash') && !m.includes('gemini-3.1-flash') && !m.includes('gemini-3-flash') && !m.includes('deepseek:') && !m.includes('Thủ công'))))
+                        (props.filterModels.has('other') && f.status === FileStatus.COMPLETED && (!m || (!m.includes('gemini-3.1-pro') && !m.includes('gemini-3.8-flash') && !m.includes('gemini-3.7-flash') && !m.includes('gemini-3.6-flash') && !m.includes('gemini-3.5-flash') && !m.includes('gemini-3.1-flash') && !m.includes('gemini-3-flash') && !m.includes('deepseek:') && !m.includes('Thủ công'))))
                     ); 
                 }
                 return statusMatch && modelMatch;
@@ -442,6 +444,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = (props) => {
                             <div className="w-24 text-xs font-bold text-slate-400 uppercase mt-2">Model:</div>
                             <div className="flex flex-wrap gap-2 flex-1">
                                 {renderFilterBadge("3.1 Pro", counts.m31pro, props.filterModels.has('31pro'), () => props.toggleFilterModel('31pro'), 'bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800')}
+                                {renderFilterBadge("3.8 Flash", counts.m38flash, props.filterModels.has('38flash'), () => props.toggleFilterModel('38flash'), 'bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800')}
                                 {renderFilterBadge("3.7 Flash", counts.m37flash, props.filterModels.has('37flash'), () => props.toggleFilterModel('37flash'), 'bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800')}
                                 {renderFilterBadge("3.6 Flash", counts.m36flash, props.filterModels.has('36flash'), () => props.toggleFilterModel('36flash'), 'bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800')}
                                 {renderFilterBadge("3.5 Flash", counts.m35flash, props.filterModels.has('35flash'), () => props.toggleFilterModel('35flash'), 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800')}

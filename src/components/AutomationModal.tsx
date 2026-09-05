@@ -435,7 +435,7 @@ export const AutomationModal: React.FC<AutomationModalProps> = ({
                                 <p className="text-[10px] text-slate-500 mt-2 italic">
                                     {tier === 'lite'        && '* Chế độ Lite: ưu tiên Flash Lite, tốc độ cao.'}
                                     {tier === 'flash'       && '* Chế độ Flash: 3 luồng, ưu tiên 3.7 rồi 3.6 Flash.'}
-                                    {tier === 'normal'      && '* Chế độ Normal: chỉ 3.1 Pro và 3.7 Flash.'}
+                                    {tier === 'normal'      && '* Chế độ Normal: 3.1 Pro, sau đó 3.8 / 3.7 Flash.'}
                                     {tier === 'pro'         && '* Chế độ Pro: 2 luồng 3.1 Pro, chất lượng cao nhất.'}
                                     {tier === 'full'        && '* Chế độ Full: 3 luồng, ưu tiên Pro, tự chuyển Flash khi hết.'}
                                 </p>

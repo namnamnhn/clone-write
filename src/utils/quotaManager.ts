@@ -510,7 +510,7 @@ class QuotaManager {
           // hết cooldown hoặc cạn hẳn 50 lượt thử (MAX_ITERATIONS trong gemini.ts) rồi báo lỗi
           // "Vượt quá số lần thử tối đa" — dù các model dự phòng CÙNG POOL đang RẢNH HOÀN TOÀN
           // suốt thời gian đó (quan sát thực tế từ log: gemini-3.1-pro-preview dính 429 nhiều
-          // lượt liên tiếp trong khi gemini-3.7-flash/3.6-flash không hề được thử). Chỉ ép chờ
+          // lượt liên tiếp trong khi các model Flash dự phòng không hề được thử). Chỉ ép chờ
           // ĐÚNG preferred model khi cooldown còn NGẮN (<=15s — cùng ngưỡng với
           // hasReadyModels() đã dùng sẵn ở nơi khác trong file này); cooldown dài hơn thì rớt
           // xuống chọn 1 model dự phòng đang sẵn sàng ngay bên dưới, để không lãng phí lượt thử
