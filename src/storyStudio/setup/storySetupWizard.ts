@@ -388,7 +388,7 @@ export const STORY_SETUP_BLANK_TEMPLATE_MARKDOWN = [
     '[Sự kiện/hé lộ bị cấm, giới hạn nội dung và phong cách.]',
     '',
     '## BÍ MẬT CHỈ DÀNH CHO TÁC GIẢ',
-    '[AUTHOR_SECRET]: [Điền bí mật, twist, sự thật ẩn hoặc kế hoạch hé lộ. Giữ tiêu đề này ngay cả khi chưa có nội dung.]',
+    '- Giữ nguyên tiêu đề này. Khi có bí mật thật, hãy thêm một dòng riêng bắt đầu bằng cú pháp [AUTHOR_SECRET]: rồi viết nội dung thật sau dấu hai chấm. Không tạo dòng đó nếu chưa có bí mật.',
     '',
 ].join('\n');
 

@@ -160,6 +160,7 @@ describe('WORK15B human-friendly Story Setup wizard', () => {
         const markdown = renderStorySetupWizardMarkdown(completeDraft());
         expect(markdown).toContain('## BÍ MẬT CHỈ DÀNH CHO TÁC GIẢ');
         expect(markdown).toContain('[AUTHOR_SECRET]: ' + SECRET);
+        expect(auditAuthorSetupSource(markdown).authorSecretCount).toBe(1);
     });
 
     it('does not put draft card IDs into generated Setup', () => {
@@ -291,10 +292,35 @@ describe('WORK15B human-friendly Story Setup wizard', () => {
         expect(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN).toContain('không xóa phần bí mật');
     });
 
-    it('blank template contains placeholders but no real secret, API key or private value', () => {
-        expect(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN).toContain('[AUTHOR_SECRET]: [');
+    it('blank template explains secret syntax without declaring or inventing a secret', () => {
+        expect(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN).toContain('BÍ MẬT CHỈ DÀNH CHO TÁC GIẢ');
+        expect(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN).toContain('cú pháp [AUTHOR_SECRET]:');
+        expect(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN).toContain('Không tạo dòng đó nếu chưa có bí mật');
         expect(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN).not.toContain(SECRET);
         expect(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN).not.toMatch(/AIza|api[_ -]?key/i);
+    });
+
+    it('keeps every untouched blank-template audit signal neutral', () => {
+        expect(auditAuthorSetupSource(STORY_SETUP_BLANK_TEMPLATE_MARKDOWN)).toEqual({
+            arcRanges: [],
+            authorSecretCount: 0,
+            spoilerMarkerCount: 0,
+            recognizedV3CharacterTimings: [],
+        });
+    });
+
+    it('retains secret-underrun protection for a genuine declaration', async () => {
+        const documentWithoutSecrets = blueprintDocument();
+        const compiledWithoutSecrets: StoryBlueprintDocument = {
+            ...documentWithoutSecrets,
+            blueprint: { ...documentWithoutSecrets.blueprint, authorOnlySecrets: [] },
+        };
+        const prepared = await prepareAuthorTextStorySetupImport(
+            '# Truyện kiểm thử\n\n## BÍ MẬT CHỈ DÀNH CHO TÁC GIẢ\n[AUTHOR_SECRET]: bí mật thật do tác giả nhập',
+            'genuine-secret.md',
+            { compiler: async () => ({ value: compiledWithoutSecrets, selectedModelId: 'injected' }) },
+        );
+        expect(prepared.review.criticalIssues.map(issue => issue.code)).toContain('AUTHOR_SECRET_COUNT_UNDERRUN');
     });
 
     it('exports existing setup deterministically without mutating it or invoking a provider', () => {
