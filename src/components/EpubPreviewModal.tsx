@@ -115,6 +115,11 @@ export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({
         }
     };
 
+    const handleClose = () => {
+        if (isConfirming) return;
+        onClose();
+    };
+
     if (!isOpen) return null;
 
     const tabs: { id: EpubTab; label: string; icon: React.ReactNode }[] = [
@@ -188,7 +193,7 @@ export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({
                                 </p>
                                 {publicationNotice && <p className="mt-2 max-w-xl text-xs font-bold leading-relaxed text-rose-700 dark:text-rose-300">{publicationNotice}</p>}
                             </div>
-                            <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-400"><X className="w-5 h-5" /></button>
+                            <button onClick={handleClose} disabled={isConfirming} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-400 disabled:opacity-40"><X className="w-5 h-5" /></button>
                         </div>
                         <div className="flex gap-1 mt-4">
                             {tabs.map(t => (
@@ -471,7 +476,7 @@ export const EpubPreviewModal: React.FC<EpubPreviewModalProps> = ({
                     </div>
 
                     <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex justify-end gap-3 shrink-0">
-                        <button onClick={onClose} disabled={isConfirming} className="px-6 py-3 text-slate-500 dark:text-slate-400 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors text-sm disabled:opacity-40">
+                        <button onClick={handleClose} disabled={isConfirming} className="px-6 py-3 text-slate-500 dark:text-slate-400 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors text-sm disabled:opacity-40">
                             Hủy Bỏ
                         </button>
                         <button 
