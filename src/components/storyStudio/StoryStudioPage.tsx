@@ -15,6 +15,7 @@ import { StorySetupReviewPanel } from './StorySetupReviewPanel';
 import { StorySetupWizard } from './StorySetupWizard';
 import { StoryStudioActionBar } from './StoryStudioActionBar';
 import { StoryStudioConfirmModal } from './StoryStudioConfirmModal';
+import { StoryStudioContinuationRestoreReview } from './StoryStudioContinuationRestoreReview';
 import { StoryStudioHeader } from './StoryStudioHeader';
 import { StoryStudioOverview } from './StoryStudioOverview';
 import { StoryStudioProjectLibrary } from './StoryStudioProjectLibrary';
@@ -45,6 +46,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
         loadStatus: studio.loadStatus,
         hasValidProjectLibrary: studio.hasValidProjectLibrary,
         hasPreparedImport: studio.preparedImport !== undefined,
+        hasPreparedContinuationRestore: studio.preparedContinuationRestore !== undefined,
         preparedImportOrigin: studio.preparedImportOrigin,
         hasOpenWizard: studio.wizardOpen && studio.wizardDraft !== undefined,
         wizardOrigin: studio.wizardOrigin,
@@ -70,10 +72,21 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
         </div>
     );
 
+    if (pageView === 'continuation-restore-review' && studio.preparedContinuationRestore) return (
+        <div className="h-full overflow-y-auto p-4 sm:p-7">
+            <StoryStudioContinuationRestoreReview
+                preview={studio.preparedContinuationRestore.preview}
+                disabled={disabled}
+                onConfirm={() => void studio.confirmContinuationRestore()}
+                onCancel={studio.cancelContinuationRestore}
+            />
+        </div>
+    );
+
     if (pageView === 'core-corrupt') return (
         <div className="flex h-full overflow-y-auto p-5">
             <div className="m-auto w-full max-w-3xl space-y-4">
-                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.restoreContinuationBackup(file)} />}
+                {studio.projectLibrary.length > 0 && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.prepareContinuationRestore(file)} />}
                 <div className="rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm dark:border-rose-900 dark:bg-slate-900">
                     <AlertTriangle className="mx-auto h-10 w-10 text-rose-500" />
                     <h1 className="mt-4 text-xl font-black text-slate-900 dark:text-white">Không thể mở dự án V4 đã lưu</h1>
@@ -113,14 +126,14 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     if (pageView === 'no-active') return (
         <StoryStudioEmptyState
             projectLibrary={noActiveProjectView.showProjectLibrary
-                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.restoreContinuationBackup(file)} />
+                ? <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.prepareContinuationRestore(file)} />
                 : undefined}
             compiling={studio.operation === 'compiling-setup'}
             errorMessage={studio.errorMessage}
             onImport={file => void studio.importFile(file)}
             onNewStory={() => void studio.openWizard()}
             onDownloadTemplate={studio.downloadBlankTemplate}
-            onRestoreContinuation={file => void studio.restoreContinuationBackup(file)}
+            onRestoreContinuation={file => void studio.prepareContinuationRestore(file)}
             onDemo={() => studio.setShowDemo(true)}
             onSettings={studio.onOpenGeminiSettings}
         />
@@ -132,7 +145,7 @@ const StoryStudioContent: React.FC<StoryStudioPageProps> = (props) => {
     return (
         <div className="h-full overflow-y-auto custom-scrollbar">
             <div className="mx-auto max-w-[1600px] space-y-6 p-4 pb-10 sm:p-6 lg:p-8">
-                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.restoreContinuationBackup(file)} />}
+                {project && <StoryStudioProjectLibrary entries={studio.projectLibrary} activeProjectId={studio.activeProjectId} disabled={disabled} onSwitch={projectId => void studio.switchProject(projectId)} onRenameActive={name => void studio.renameActiveProject(name)} onDeleteActive={() => studio.setDeleteConfirmationOpen(true)} onImport={file => void studio.importFile(file)} onNewStory={() => void studio.openWizard()} onDownloadTemplate={studio.downloadBlankTemplate} onExportActive={studio.exportActiveSetup} onBackupActive={studio.exportActiveContinuationBackup} onRestoreContinuation={file => void studio.prepareContinuationRestore(file)} />}
                 {project && <StoryStudioActionBar project={project} batchSize={studio.batchSize} saveStatus={studio.saveStatus} operation={studio.operation} disabled={disabled} onBatchSize={studio.setBatchSize} onStart={() => void studio.startBatch()} onResume={() => void studio.resume()} onStop={studio.stop} onRewrite={() => void studio.rewriteFromSamePlan()} onReplan={() => void studio.replan()} onImport={file => void studio.importFile(file)} onOpenSettings={studio.onOpenGeminiSettings} onExportSetup={studio.exportActiveSetup} onBackupContinuation={studio.exportActiveContinuationBackup} onDelete={() => studio.setDeleteConfirmationOpen(true)} />}
                 <StoryStudioHeader project={viewModel.project} onExitDemo={() => studio.setShowDemo(false)} />
                 <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${viewModel.project.isDemo ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>

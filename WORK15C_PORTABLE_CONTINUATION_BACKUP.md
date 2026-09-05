@@ -22,13 +22,15 @@ No browser-local project ID, storage key, wizard ID, filename, or library index 
 
 ## Export
 
-Export is offline and reads the controller's last successfully persisted active project snapshot. It performs no save, timestamp mutation, model call, pause, or Canon operation. The UI requires explicit confirmation that the file contains private author data, including possible Author Secrets, spoilers, Canon, Memory, drafts, plans, and unpublished artifacts.
+Export is offline and reads the controller's last successfully persisted active project snapshot. It performs no save, timestamp mutation, model call, pause, or Canon operation. The UI requires explicit confirmation that the file contains private author data, including possible Author Secrets, spoilers, Canon, Memory, drafts, plans, and unpublished artifacts. The exact serialized UTF-8 export is checked against the same 64 MiB limit used by import before the browser download side effect; an oversized export downloads nothing and leaves the project untouched.
 
 The backup preserves private data because redaction would make exact continuation impossible. Its raw JSON is never logged or shown in ordinary UI diagnostics.
 
 ## Restore and isolation
 
 Restore is a separate offline file path. The browser checks a dedicated size bound before reading, then strictly parses the envelope and project. Only a verified library authority may accept restore; an invalid/untrusted index remains fail-closed.
+
+Successful parsing first creates an in-memory, secret-safe preview containing only the catalog name, current/planned chapter numbers, workflow stage, backup version, and exact-validation status. It shows no Setup, Canon, Memory, plan, draft, extraction, proposal, secret, or raw JSON content and performs no storage write. Cancel discards only this volatile prepared state. The repository/controller restore is called only after the author explicitly confirms that a new local clone will be created and activated without overwriting existing projects.
 
 After all validation succeeds, the repository generates a fresh local project ID and atomically commits:
 
@@ -51,7 +53,7 @@ A `ready-for-canon-review` restore remains approved but non-canonical. Restore d
 
 ## File-size bound
 
-Continuation files use a 64 MiB hard limit rather than the Setup importer’s 2 MiB limit. Existing C600 fixtures demonstrate hundreds of Canon/state ledger and memory records, and a checkpoint may additionally contain plan, prose, validation, and extraction artifacts. Sixty-four MiB gives substantial headroom for these long projects while bounding the current one-shot browser `File.text()` and `JSON.parse()` design. Files are rejected when empty or above the limit; streaming and encrypted archives are intentionally out of scope.
+Continuation files use a 64 MiB hard limit rather than the Setup importer’s 2 MiB limit. Existing C600 fixtures demonstrate hundreds of Canon/state ledger and memory records, and a checkpoint may additionally contain plan, prose, validation, and extraction artifacts. Sixty-four MiB gives substantial headroom for these long projects while bounding the current one-shot browser `File.text()` and `JSON.parse()` design. The limit is enforced by actual UTF-8 bytes for both generated exports and imported/restored files. Files are rejected when empty or above the limit; streaming and encrypted archives are intentionally out of scope.
 
 ## Compatibility and privacy
 

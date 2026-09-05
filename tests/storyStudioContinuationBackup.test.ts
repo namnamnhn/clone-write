@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { GeminiStoryEngineGenerationRuntime } from '../src/services/storyEngine';
 import { createGeminiStoryEngineAdapters } from '../src/services/storyEngine';
 import {
@@ -8,15 +8,21 @@ import type { StoryBlueprintDocument } from '../src/storyEngine';
 import {
     canRestoreStoryStudioContinuationBackup,
     getStoryStudioSafeMessage,
+    getStoryStudioPageView,
+    reduceStoryStudioContinuationRestoreUiState,
 } from '../src/hooks/pages/useStoryStudio';
 import {
     assertStoryStudioContinuationBackupFileSize,
+    assertStoryStudioContinuationBackupSourceSize,
     createStoryStudioContinuationBackup,
+    exportStoryStudioContinuationBackup,
     parseStoryStudioContinuationBackup,
     parseStoryStudioContinuationBackupJson,
+    prepareStoryStudioContinuationRestore,
     sanitizeStoryStudioContinuationBackupFilename,
     serializeStoryStudioContinuationBackup,
     STORY_STUDIO_CONTINUATION_BACKUP_MAX_BYTES,
+    storyStudioContinuationBackupUtf8ByteLength,
     StoryStudioContinuationBackupError,
 } from '../src/storyStudio/production/storyStudioContinuationBackup';
 import { StoryStudioProjectController } from '../src/storyStudio/production/storyStudioProjectController';
@@ -131,17 +137,21 @@ const environment = (idValues = ['project-a', 'project-b', 'project-c', 'project
 
 const createProjectAtStage = async (
     stage: StoryStudioRuntimeProject['workflow']['stage'],
-): Promise<{ controller: StoryStudioProjectController; adapter: InMemoryStoryStudioStorageAdapter }> => {
-    const { controller, adapter } = environment();
+): Promise<{
+    controller: StoryStudioProjectController;
+    adapter: InMemoryStoryStudioStorageAdapter;
+    repository: StoryStudioProjectRepository;
+}> => {
+    const { controller, adapter, repository } = environment();
     await controller.load();
     await controller.createProject(blueprint(`stage-${stage}`), `Stage ${stage}`);
-    if (stage === 'idle') return { controller, adapter };
+    if (stage === 'idle') return { controller, adapter, repository };
     await controller.startBatch(2);
     const runtime = productionRuntime(stage === 'rejected');
     while (controller.currentProject?.workflow.stage !== stage) {
         await controller.runNextStage(runtime);
     }
-    return { controller, adapter };
+    return { controller, adapter, repository };
 };
 
 const exportFrom = (controller: StoryStudioProjectController) => {
@@ -182,6 +192,49 @@ describe('WORK15C continuation backup format', () => {
             .toThrowError(/CONTINUATION_BACKUP_TOO_LARGE/);
     });
 
+    it('applies the same exact byte boundary to UTF-8 export content', () => {
+        expect(() => assertStoryStudioContinuationBackupFileSize(STORY_STUDIO_CONTINUATION_BACKUP_MAX_BYTES))
+            .not.toThrow();
+        expect(() => assertStoryStudioContinuationBackupFileSize(STORY_STUDIO_CONTINUATION_BACKUP_MAX_BYTES + 1))
+            .toThrowError(/CONTINUATION_BACKUP_TOO_LARGE/);
+        expect('Tiếng Việt'.length).toBe(10);
+        expect(storyStudioContinuationBackupUtf8ByteLength('Tiếng Việt')).toBe(14);
+        expect(() => assertStoryStudioContinuationBackupSourceSize('éé', 4)).not.toThrow();
+        expect(() => assertStoryStudioContinuationBackupSourceSize('ééa', 4))
+            .toThrowError(/CONTINUATION_BACKUP_TOO_LARGE/);
+    });
+
+    it('checks the exact serialized export before invoking download and preserves project state on rejection', async () => {
+        const { controller } = await createProjectAtStage('drafted');
+        const before = structuredClone(withoutRuntimeControl(controller.currentProject!));
+        const backup = controller.createContinuationBackup();
+        const source = serializeStoryStudioContinuationBackup(backup);
+        const downloader = vi.fn();
+
+        expect(() => exportStoryStudioContinuationBackup(
+            backup,
+            'oversize.json',
+            downloader,
+            storyStudioContinuationBackupUtf8ByteLength(source) - 1,
+        )).toThrowError(/CONTINUATION_BACKUP_TOO_LARGE/);
+        expect(downloader).not.toHaveBeenCalled();
+        expect(withoutRuntimeControl(controller.currentProject!)).toEqual(before);
+    });
+
+    it('downloads a normal export only after the same import size contract accepts it', async () => {
+        const { controller } = await createProjectAtStage('validated');
+        const backup = controller.createContinuationBackup();
+        const downloader = vi.fn();
+        const source = exportStoryStudioContinuationBackup(backup, 'portable.json', downloader);
+
+        expect(downloader).toHaveBeenCalledOnce();
+        expect(downloader).toHaveBeenCalledWith('portable.json', source);
+        expect(parseStoryStudioContinuationBackupJson(
+            source,
+            storyStudioContinuationBackupUtf8ByteLength(source),
+        ).backup).toEqual(backup);
+    });
+
     it('rejects StoryControl, core, and Narrative Memory identity mismatches', async () => {
         const { controller } = await createProjectAtStage('idle');
         const backup = controller.createContinuationBackup();
@@ -209,12 +262,44 @@ describe('WORK15C continuation backup format', () => {
 describe('WORK15C exact workflow checkpoints', () => {
     it.each([
         'idle', 'planned', 'drafted', 'validated', 'rejected', 'extracted', 'ready-for-canon-review',
-    ] as const)('round-trips the valid %s checkpoint without recovery', async (stage) => {
-        const { controller } = await createProjectAtStage(stage);
+    ] as const)('fully restores, reloads, and switches the valid %s checkpoint without recovery', async (stage) => {
+        const { controller, repository } = await createProjectAtStage(stage);
+        const sourceId = controller.activeProjectId!;
         const before = withoutRuntimeControl(controller.currentProject!);
         const parsed = parseStoryStudioContinuationBackupJson(exportFrom(controller).source);
-        expect(parsed.project.workflow.stage).toBe(stage);
-        expect(withoutRuntimeControl(parsed.project)).toEqual(before);
+
+        const restored = await controller.restoreContinuationBackup(parsed);
+        const restoredId = controller.activeProjectId!;
+        const restoredDocument = withoutRuntimeControl(restored);
+        expect(restoredId).not.toBe(sourceId);
+        expect(restoredDocument).toEqual(before);
+        expect(restoredDocument).toMatchObject({
+            setupDocument: before.setupDocument,
+            storyControlIdentity: before.storyControlIdentity,
+            state: before.state,
+            memory: before.memory,
+            chapterMetadata: before.chapterMetadata,
+            workflow: before.workflow,
+            batchQueue: before.batchQueue,
+            coreIdentity: before.coreIdentity,
+            workflowIdentity: before.workflowIdentity,
+            createdAt: before.createdAt,
+            updatedAt: before.updatedAt,
+        });
+        expect(controller.projectLibrary.find(entry => entry.projectId === restoredId)?.displayName)
+            .toBe(`Stage ${stage}`);
+
+        const reloadedController = new StoryStudioProjectController(repository, () => START);
+        const reloaded = await reloadedController.load();
+        expect(reloaded.status).toBe('loaded');
+        expect(reloaded).not.toMatchObject({ status: 'workflow-recovered' });
+        expect(reloadedController.activeProjectId).toBe(restoredId);
+        expect(withoutRuntimeControl(reloadedController.currentProject!)).toEqual(before);
+
+        expect((await reloadedController.switchProject(sourceId)).workflowRecovered).toBe(false);
+        expect((await reloadedController.switchProject(restoredId)).workflowRecovered).toBe(false);
+        expect(withoutRuntimeControl(reloadedController.currentProject!)).toEqual(before);
+        expect(reloadedController.currentProject?.workflow.stage).toBe(stage);
     });
 
     it('rejects a stale workflow that ordinary local loading would recover to idle', async () => {
@@ -243,6 +328,92 @@ describe('WORK15C exact workflow checkpoints', () => {
 
         await recoveredController.replanCurrentChapter();
         expect(() => recoveredController.createContinuationBackup()).not.toThrow();
+    });
+});
+
+describe('WORK15C prepared restore preview', () => {
+    it('produces only safe metadata and writes nothing before confirmation', async () => {
+        const { controller, adapter } = await createProjectAtStage('drafted');
+        const beforeStorage = structuredClone([...adapter.values.entries()]);
+        const beforeId = controller.activeProjectId;
+        const prepared = prepareStoryStudioContinuationRestore(exportFrom(controller).source);
+        const serializedPreview = JSON.stringify(prepared.preview);
+
+        expect(prepared.preview).toEqual({
+            kind: 'story-studio-continuation-restore-preview',
+            formatVersion: 1,
+            catalogDisplayName: 'Stage drafted',
+            currentChapter: 0,
+            plannedChapterCount: 4,
+            workflowStage: 'drafted',
+            validationStatus: 'valid-exact-continuation',
+        });
+        expect(Object.keys(prepared.preview).sort()).toEqual([
+            'catalogDisplayName', 'currentChapter', 'formatVersion', 'kind',
+            'plannedChapterCount', 'validationStatus', 'workflowStage',
+        ]);
+        expect(serializedPreview).not.toContain(SECRET);
+        expect(serializedPreview).not.toContain('Durable chapter');
+        expect(serializedPreview).not.toContain('Continuity remains exact');
+        expect(serializedPreview).not.toContain('setupDocument');
+        expect(serializedPreview).not.toContain('memory');
+        expect([...adapter.values.entries()]).toEqual(beforeStorage);
+        expect(controller.activeProjectId).toBe(beforeId);
+    });
+
+    it('redacts a tampered catalog label that contains an Author Secret from preview', async () => {
+        const { controller } = await createProjectAtStage('idle');
+        const backup = controller.createContinuationBackup();
+        const source = serializeStoryStudioContinuationBackup({
+            ...backup,
+            catalogDisplayName: `Spoiler ${SECRET}`,
+        });
+        const prepared = prepareStoryStudioContinuationRestore(source);
+        expect(prepared.preview.catalogDisplayName).toBe('Dự án Story Studio');
+        expect(JSON.stringify(prepared.preview)).not.toContain(SECRET);
+    });
+
+    it('cancel clears only volatile prepared state and preserves every durable record and active project', async () => {
+        const { controller, adapter } = await createProjectAtStage('planned');
+        const beforeStorage = structuredClone([...adapter.values.entries()]);
+        const beforeProject = structuredClone(withoutRuntimeControl(controller.currentProject!));
+        const beforeId = controller.activeProjectId;
+        const prepared = prepareStoryStudioContinuationRestore(exportFrom(controller).source);
+        const preparedUi = reduceStoryStudioContinuationRestoreUiState({}, { type: 'prepared', prepared });
+        const cancelledUi = reduceStoryStudioContinuationRestoreUiState(preparedUi, { type: 'cancelled' });
+
+        expect(preparedUi.prepared?.preview.workflowStage).toBe('planned');
+        expect(cancelledUi).toEqual({});
+        expect([...adapter.values.entries()]).toEqual(beforeStorage);
+        expect(controller.activeProjectId).toBe(beforeId);
+        expect(withoutRuntimeControl(controller.currentProject!)).toEqual(beforeProject);
+    });
+
+    it('confirmation uses the atomic controller restore and activates a fresh clone', async () => {
+        const { controller } = await createProjectAtStage('extracted');
+        const sourceId = controller.activeProjectId!;
+        const before = withoutRuntimeControl(controller.currentProject!);
+        const prepared = prepareStoryStudioContinuationRestore(exportFrom(controller).source);
+        const restored = await controller.restoreContinuationBackup(prepared.parsed);
+
+        expect(controller.activeProjectId).not.toBe(sourceId);
+        expect(controller.projectLibrary).toHaveLength(2);
+        expect(withoutRuntimeControl(restored)).toEqual(before);
+    });
+
+    it('allows preview precedence only for a verified library authority', async () => {
+        const { controller } = await createProjectAtStage('idle');
+        const prepared = prepareStoryStudioContinuationRestore(exportFrom(controller).source);
+        expect(getStoryStudioPageView({
+            loadStatus: 'core-corrupt', hasValidProjectLibrary: true,
+            hasPreparedImport: false, hasPreparedContinuationRestore: Boolean(prepared),
+            hasProject: false, showDemo: false,
+        })).toBe('continuation-restore-review');
+        expect(getStoryStudioPageView({
+            loadStatus: 'core-corrupt', hasValidProjectLibrary: false,
+            hasPreparedImport: false, hasPreparedContinuationRestore: true,
+            hasProject: false, showDemo: false,
+        })).toBe('core-corrupt');
     });
 });
 
@@ -293,6 +464,41 @@ describe('WORK15C restore and isolation', () => {
         expect(controller.currentProject?.state.revision).toBe(2);
         expect(controller.currentProject?.memory.records).toHaveLength(2);
         expect(controller.currentProject?.chapterMetadata).toHaveLength(2);
+    });
+
+    it('restores a multi-Canon project exactly through reload and switch isolation', async () => {
+        const { controller, repository } = environment();
+        await controller.load();
+        await controller.createProject(blueprint('multi-canon-roundtrip'), 'Multi Canon');
+        const sourceId = controller.activeProjectId!;
+        await controller.startBatch(2);
+        for (let chapter = 1; chapter <= 2; chapter += 1) {
+            while (controller.currentProject?.workflow.stage !== 'ready-for-canon-review') {
+                await controller.runNextStage(productionRuntime());
+            }
+            await controller.makeCanonDurably(controller.createConfirmation());
+        }
+        const before = withoutRuntimeControl(controller.currentProject!);
+        expect(before.state.currentChapter).toBe(2);
+        expect(before.state.revision).toBe(2);
+        expect(before.memory.records).toHaveLength(2);
+        expect(before.chapterMetadata).toHaveLength(2);
+
+        const prepared = prepareStoryStudioContinuationRestore(exportFrom(controller).source);
+        await controller.restoreContinuationBackup(prepared.parsed);
+        const restoredId = controller.activeProjectId!;
+        expect(restoredId).not.toBe(sourceId);
+        expect(withoutRuntimeControl(controller.currentProject!)).toEqual(before);
+
+        const reloadedController = new StoryStudioProjectController(repository, () => START);
+        expect(await reloadedController.load()).toMatchObject({ status: 'loaded', projectId: restoredId });
+        expect(withoutRuntimeControl(reloadedController.currentProject!)).toEqual(before);
+        await reloadedController.switchProject(sourceId);
+        await reloadedController.switchProject(restoredId);
+        expect(withoutRuntimeControl(reloadedController.currentProject!)).toEqual(before);
+        expect(reloadedController.currentProject?.state.currentChapter).toBe(2);
+        expect(reloadedController.currentProject?.memory.records).toHaveLength(2);
+        expect(reloadedController.currentProject?.chapterMetadata).toHaveLength(2);
     });
 
     it('restores the same backup twice as independent projects and reloads/switches/deletes safely', async () => {

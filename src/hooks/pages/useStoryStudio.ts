@@ -32,17 +32,18 @@ import {
 import type { StorySetupWizardDraftV1 } from '../../storyStudio/setup/storySetupWizard';
 import {
     assertStoryStudioContinuationBackupFileSize,
-    downloadStoryStudioContinuationBackup,
-    parseStoryStudioContinuationBackupJson,
+    exportStoryStudioContinuationBackup,
+    prepareStoryStudioContinuationRestore,
     sanitizeStoryStudioContinuationBackupFilename,
-    serializeStoryStudioContinuationBackup,
     StoryStudioContinuationBackupError,
 } from '../../storyStudio/production/storyStudioContinuationBackup';
+import type { PreparedStoryStudioContinuationRestore } from '../../storyStudio/production/storyStudioContinuationBackup';
 
 export type StoryStudioSaveStatus = 'saved' | 'saving' | 'error';
 export type StoryStudioLoadStatus = 'loading' | 'empty' | 'connected' | 'core-corrupt';
 export type StoryStudioOperation =
-    | 'compiling-setup' | 'restoring-continuation' | 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review' | 'stopping';
+    | 'compiling-setup' | 'preparing-continuation' | 'restoring-continuation'
+    | 'planning' | 'writing' | 'validation' | 'extraction' | 'canon-review' | 'stopping';
 
 export interface UseStoryStudioProps {
     readonly enabledModels: readonly string[];
@@ -52,7 +53,8 @@ export interface UseStoryStudioProps {
 
 export type StoryStudioExplicitAttempt = 'startBatch' | 'resume' | 'rewriteFromSamePlan' | 'replan';
 export type StoryStudioPreparedImportOrigin = 'normal' | 'verified-core-corrupt-library';
-export type StoryStudioPageView = 'loading' | 'wizard' | 'setup-review' | 'core-corrupt' | 'no-active' | 'studio';
+export type StoryStudioPageView = 'loading' | 'wizard' | 'setup-review' | 'continuation-restore-review'
+    | 'core-corrupt' | 'no-active' | 'studio';
 
 export interface StoryStudioRecoveryUiState {
     readonly recoveryTarget?: StoryStudioProjectRecoveryTarget;
@@ -64,6 +66,23 @@ export type StoryStudioRecoveryUiAction =
     | { readonly type: 'connected' }
     | { readonly type: 'clear-error' }
     | { readonly type: 'operation-error'; readonly errorMessage: string };
+
+export interface StoryStudioContinuationRestoreUiState {
+    readonly prepared?: PreparedStoryStudioContinuationRestore;
+}
+
+export type StoryStudioContinuationRestoreUiAction =
+    | { readonly type: 'prepared'; readonly prepared: PreparedStoryStudioContinuationRestore }
+    | { readonly type: 'cancelled' }
+    | { readonly type: 'restored' };
+
+/** Prepared private data exists only in memory and cancellation cannot reach persistence. */
+export const reduceStoryStudioContinuationRestoreUiState = (
+    _state: StoryStudioContinuationRestoreUiState,
+    action: StoryStudioContinuationRestoreUiAction,
+): StoryStudioContinuationRestoreUiState => action.type === 'prepared'
+    ? { prepared: action.prepared }
+    : {};
 
 /** Keeps corrupt-load deletion authority coupled to the UI state that granted it. */
 export const reduceStoryStudioRecoveryUiState = (
@@ -107,6 +126,7 @@ export const getStoryStudioPageView = (input: {
     readonly loadStatus: StoryStudioLoadStatus;
     readonly hasValidProjectLibrary: boolean;
     readonly hasPreparedImport: boolean;
+    readonly hasPreparedContinuationRestore?: boolean;
     readonly preparedImportOrigin?: StoryStudioPreparedImportOrigin;
     readonly hasOpenWizard?: boolean;
     readonly wizardOrigin?: StoryStudioPreparedImportOrigin;
@@ -114,6 +134,9 @@ export const getStoryStudioPageView = (input: {
     readonly showDemo: boolean;
 }): StoryStudioPageView => {
     if (input.loadStatus === 'loading') return 'loading';
+    if (input.hasPreparedContinuationRestore && input.hasValidProjectLibrary) {
+        return 'continuation-restore-review';
+    }
     const reviewAllowed = input.hasPreparedImport && (
         input.loadStatus !== 'core-corrupt'
         || (input.hasValidProjectLibrary && input.preparedImportOrigin === 'verified-core-corrupt-library')
@@ -216,6 +239,11 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         dispatchRecoveryUi({ type: 'clear-error' });
     }, []);
     const [preparedImport, setPreparedImport] = useState<PreparedStorySetupImport>();
+    const [continuationRestoreUi, dispatchContinuationRestoreUi] = useReducer(
+        reduceStoryStudioContinuationRestoreUiState,
+        {},
+    );
+    const preparedContinuationRestore = continuationRestoreUi.prepared;
     const [preparedImportFromWizard, setPreparedImportFromWizard] = useState(false);
     const [preparedImportOrigin, setPreparedImportOrigin] = useState<StoryStudioPreparedImportOrigin>();
     const [importDisplayName, setImportDisplayName] = useState('');
@@ -644,39 +672,52 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         if (!confirmed) return;
         try {
             const backup = controller.createContinuationBackup();
-            downloadStoryStudioContinuationBackup(
+            exportStoryStudioContinuationBackup(
+                backup,
                 sanitizeStoryStudioContinuationBackupFilename(backup.catalogDisplayName),
-                serializeStoryStudioContinuationBackup(backup),
             );
         } catch (error) {
             handleError(error);
         }
     }, [controller, handleError, operation, saveStatus]);
 
-    const restoreContinuationBackup = useCallback(async (file: File) => {
+    const prepareContinuationRestore = useCallback(async (file: File) => {
         if (abortRef.current || operation) return;
         if (!canRestoreStoryStudioContinuationBackup(loadStatus, hasValidProjectLibrary)) {
             handleError(new StoryStudioContinuationBackupError('CONTINUATION_RESTORE_NOT_ALLOWED'));
             return;
         }
-        setOperation('restoring-continuation');
-        setSaveStatus('saving');
+        setOperation('preparing-continuation');
         try {
             // Reject by browser-provided byte size before allocating the file contents.
             assertStoryStudioContinuationBackupFileSize(file.size);
-            const prepared = parseStoryStudioContinuationBackupJson(await file.text(), file.size);
-            const next = await controller.restoreContinuationBackup(prepared);
+            const prepared = prepareStoryStudioContinuationRestore(await file.text(), file.size);
+            dispatchContinuationRestoreUi({ type: 'prepared', prepared });
+        } catch (error) {
+            handleError(error);
+        } finally {
+            if (mountedRef.current) setOperation(undefined);
+        }
+    }, [handleError, hasValidProjectLibrary, loadStatus, operation]);
+
+    const confirmContinuationRestore = useCallback(async () => {
+        if (!preparedContinuationRestore || abortRef.current || operation) return;
+        setOperation('restoring-continuation');
+        setSaveStatus('saving');
+        try {
+            const next = await controller.restoreContinuationBackup(preparedContinuationRestore.parsed);
             publish(next);
             setBatchSizeState(next.batchQueue.requestedSize);
             setRecoveryWarning(false);
             setShowDemo(false);
+            dispatchContinuationRestoreUi({ type: 'restored' });
             addToast('Đã khôi phục bản sao thành một dự án mới và mở đúng điểm tiếp tục đã lưu.', 'success');
         } catch (error) {
             handleError(error);
         } finally {
             if (mountedRef.current) setOperation(undefined);
         }
-    }, [addToast, controller, handleError, hasValidProjectLibrary, loadStatus, operation, publish]);
+    }, [addToast, controller, handleError, operation, preparedContinuationRestore, publish]);
 
     return {
         loadStatus, project, projectLibrary, activeProjectId, showDemo, setShowDemo, viewModel, saveStatus, operation,
@@ -691,7 +732,11 @@ export const useStoryStudio = ({ enabledModels, addToast, onOpenGeminiSettings }
         wizardDraft, wizardOpen, wizardOrigin, wizardDraftLoadStatus, wizardDraftSaveStatus,
         openWizard, updateWizardDraft, closeWizard: () => setWizardOpen(false), discardWizardDraft, compileWizardDraft,
         downloadBlankTemplate, downloadWizardMarkdown, exportActiveSetup,
-        exportActiveContinuationBackup, restoreContinuationBackup,
+        exportActiveContinuationBackup,
+        preparedContinuationRestore,
+        prepareContinuationRestore,
+        cancelContinuationRestore: () => dispatchContinuationRestoreUi({ type: 'cancelled' }),
+        confirmContinuationRestore,
         finishCreate, switchProject, renameActiveProject,
         batchSize, setBatchSize, startBatch, resume, stop, rewriteFromSamePlan, replan,
         makeCanonConfirmationOpen, setMakeCanonConfirmationOpen, confirmMakeCanon,

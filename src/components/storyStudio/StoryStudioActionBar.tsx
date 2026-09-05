@@ -5,6 +5,7 @@ import type { StoryStudioOperation, StoryStudioSaveStatus } from '../../hooks/pa
 
 const operationLabels: Readonly<Record<StoryStudioOperation, string>> = {
     'compiling-setup': 'Đang biên dịch setup bằng Gemini…',
+    'preparing-continuation': 'Đang kiểm tra bản sao tiếp tục…',
     'restoring-continuation': 'Đang kiểm tra và lưu bản sao tiếp tục…',
     planning: 'Planner đang chạy', writing: 'Writer đang chạy', validation: 'Validator đang kiểm tra / Repair đang sửa',
     extraction: 'Extractor đang cập nhật đề xuất Canon', 'canon-review': 'Đang chuẩn bị Review Canon',

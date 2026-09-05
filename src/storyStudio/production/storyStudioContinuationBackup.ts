@@ -29,6 +29,21 @@ export interface ParsedStoryStudioContinuationBackup {
     readonly project: StoryStudioRuntimeProject;
 }
 
+export interface StoryStudioContinuationRestorePreview {
+    readonly kind: 'story-studio-continuation-restore-preview';
+    readonly formatVersion: 1;
+    readonly catalogDisplayName: string;
+    readonly currentChapter: number;
+    readonly plannedChapterCount: number;
+    readonly workflowStage: StoryStudioRuntimeProject['workflow']['stage'];
+    readonly validationStatus: 'valid-exact-continuation';
+}
+
+export interface PreparedStoryStudioContinuationRestore {
+    readonly preview: StoryStudioContinuationRestorePreview;
+    readonly parsed: ParsedStoryStudioContinuationBackup;
+}
+
 export type StoryStudioContinuationBackupErrorCode =
     | 'CONTINUATION_BACKUP_EMPTY'
     | 'CONTINUATION_BACKUP_TOO_LARGE'
@@ -80,6 +95,23 @@ export const assertStoryStudioContinuationBackupFileSize = (size: number): void 
         throw new StoryStudioContinuationBackupError('CONTINUATION_BACKUP_EMPTY');
     }
     if (size > STORY_STUDIO_CONTINUATION_BACKUP_MAX_BYTES) {
+        throw new StoryStudioContinuationBackupError('CONTINUATION_BACKUP_TOO_LARGE');
+    }
+};
+
+export const storyStudioContinuationBackupUtf8ByteLength = (source: string): number =>
+    new TextEncoder().encode(source).byteLength;
+
+export const assertStoryStudioContinuationBackupSourceSize = (
+    source: string,
+    maximumBytes = STORY_STUDIO_CONTINUATION_BACKUP_MAX_BYTES,
+): void => {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+        throw new StoryStudioContinuationBackupError('CONTINUATION_BACKUP_TOO_LARGE');
+    }
+    const size = storyStudioContinuationBackupUtf8ByteLength(source);
+    if (size <= 0) throw new StoryStudioContinuationBackupError('CONTINUATION_BACKUP_EMPTY');
+    if (size > maximumBytes) {
         throw new StoryStudioContinuationBackupError('CONTINUATION_BACKUP_TOO_LARGE');
     }
 };
@@ -139,10 +171,10 @@ export const serializeStoryStudioContinuationBackup = (
 
 export const parseStoryStudioContinuationBackupJson = (
     source: string,
-    declaredByteSize = new TextEncoder().encode(source).byteLength,
+    declaredByteSize = storyStudioContinuationBackupUtf8ByteLength(source),
 ): ParsedStoryStudioContinuationBackup => {
     assertStoryStudioContinuationBackupFileSize(declaredByteSize);
-    assertStoryStudioContinuationBackupFileSize(new TextEncoder().encode(source).byteLength);
+    assertStoryStudioContinuationBackupSourceSize(source);
     let value: unknown;
     try {
         value = JSON.parse(source);
@@ -150,6 +182,29 @@ export const parseStoryStudioContinuationBackupJson = (
         throw new StoryStudioContinuationBackupError('CONTINUATION_BACKUP_MALFORMED_JSON');
     }
     return parseStoryStudioContinuationBackup(value);
+};
+
+export const prepareStoryStudioContinuationRestore = (
+    source: string,
+    declaredByteSize = storyStudioContinuationBackupUtf8ByteLength(source),
+): PreparedStoryStudioContinuationRestore => {
+    const parsed = parseStoryStudioContinuationBackupJson(source, declaredByteSize);
+    const catalogDisplayName = parsed.project.control.authorOnlySecrets
+        .some(secret => parsed.backup.catalogDisplayName.includes(secret.value))
+        ? 'Dự án Story Studio'
+        : parsed.backup.catalogDisplayName;
+    return {
+        preview: {
+            kind: 'story-studio-continuation-restore-preview',
+            formatVersion: parsed.backup.formatVersion,
+            catalogDisplayName,
+            currentChapter: parsed.project.state.currentChapter,
+            plannedChapterCount: parsed.project.control.engine.plannedChapterCount,
+            workflowStage: parsed.project.workflow.stage,
+            validationStatus: 'valid-exact-continuation',
+        },
+        parsed,
+    };
 };
 
 export const sanitizeStoryStudioContinuationBackupFilename = (displayName: string): string => {
@@ -166,7 +221,7 @@ export const sanitizeStoryStudioContinuationBackupFilename = (displayName: strin
     return `${stem}-continuation-backup-v1.json`;
 };
 
-export const downloadStoryStudioContinuationBackup = (filename: string, source: string): void => {
+const downloadStoryStudioContinuationBackup = (filename: string, source: string): void => {
     const blob = new Blob([source], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -174,4 +229,19 @@ export const downloadStoryStudioContinuationBackup = (filename: string, source: 
     anchor.download = filename;
     anchor.click();
     URL.revokeObjectURL(url);
+};
+
+export type StoryStudioContinuationBackupDownloader = (filename: string, source: string) => void;
+
+/** The exact serialized bytes are validated before the browser download side effect is invoked. */
+export const exportStoryStudioContinuationBackup = (
+    backup: StoryStudioContinuationBackupV1,
+    filename: string,
+    downloader: StoryStudioContinuationBackupDownloader = downloadStoryStudioContinuationBackup,
+    maximumBytes = STORY_STUDIO_CONTINUATION_BACKUP_MAX_BYTES,
+): string => {
+    const source = serializeStoryStudioContinuationBackup(backup);
+    assertStoryStudioContinuationBackupSourceSize(source, maximumBytes);
+    downloader(filename, source);
+    return source;
 };
