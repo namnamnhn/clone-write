@@ -12,6 +12,7 @@ import type { FactProvenance, StoryStateDeltaV2 } from './storyStateTypes';
 import type { FullStoryControl, StoryState } from './types';
 import type { ValidatedChapterSource, ValidationApprovedCandidate } from './validationTypes';
 import { createCanonicalizationSourceIdentity, createStoryControlIdentity } from './canonicalIdentity';
+import { StoryEngineModelRuntimeError } from './productionRuntimeTypes';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -254,6 +255,7 @@ export const extractState = async (request: ExtractStateRequest): Promise<StateE
         output = await request.model.extract(modelRequest);
     } catch (error) {
         if (error instanceof Error && (error.message === 'ABORTED' || error.name === 'AbortError')) throw error;
+        if (error instanceof StoryEngineModelRuntimeError) throw error;
         return { status: 'blocked', issues: [issue('EXTRACTOR_PROTOCOL_FAILURE', 'model.extract')] };
     }
     if (!isRecord(output) || output.kind !== 'story-state-delta') {

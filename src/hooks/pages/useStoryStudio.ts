@@ -188,6 +188,11 @@ export const runStoryStudioProductionAttempt = async <T>(
 
 export const getStoryStudioSafeMessage = (error: unknown): string => {
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+    const stage = typeof error === 'object' && error !== null && 'stage' in error ? String(error.stage) : '';
+    const role = typeof error === 'object' && error !== null && 'role' in error ? String(error.role) : '';
+    if (code === 'MODEL_RUNTIME_FAILURE' && stage === 'extraction' && role === 'stateExtractor') {
+        return 'Gemini tạm thời không xử lý được bước tạo đề xuất Canon (có thể do giới hạn lượt gọi hoặc dịch vụ đang bận). Canon chưa thay đổi. Hãy thử lại bước hiện tại sau.';
+    }
     const messages: Readonly<Record<string, string>> = {
         NO_MODEL_AVAILABLE: 'Không có model Gemini văn bản đang bật. Hãy mở Cài đặt Gemini và bật một model phù hợp.',
         INVALID_PROJECT: 'Dự án V4 không hợp lệ hoặc không khớp Canon hiện tại.',
