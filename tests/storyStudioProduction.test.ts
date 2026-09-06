@@ -9,6 +9,7 @@ import {
     isPovAllowed,
     parseStoryBlueprintDocument,
     StoryControlValidationError,
+    StoryEngineModelRuntimeError,
     STORY_BLUEPRINT_DOCUMENT_RESPONSE_JSON_SCHEMA,
 } from '../src/storyEngine';
 import type { StoryBlueprintDocument } from '../src/storyEngine';
@@ -259,6 +260,21 @@ describe('WORK 13 Story Studio production persistence', () => {
         expect(message).toBe('Chương hiện tại không có nhân vật POV hợp lệ. Canon và dự án vẫn được giữ nguyên.');
         expect(message).not.toContain('LOCKED_CHARACTER_SENTINEL');
         expect(message).not.toContain('AUTHOR_SECRET_SENTINEL');
+    });
+
+    it('distinguishes State Extractor runtime failure from extraction-contract failure without leaking details', () => {
+        const runtimeMessage = getStoryStudioSafeMessage({
+            code: 'MODEL_RUNTIME_FAILURE', stage: 'extraction', role: 'stateExtractor',
+            prompt: 'PRIVATE_PROMPT', prose: 'PRIVATE_STORY_PROSE', apiKey: 'PRIVATE_API_KEY',
+            rawProviderError: 'HTTP 429 RESOURCE_EXHAUSTED then HTTP 503 UNAVAILABLE',
+        });
+        const contractMessage = getStoryStudioSafeMessage({
+            code: 'EXTRACTION_BLOCKED', stage: 'extraction', role: 'stateExtractor',
+        });
+        expect(runtimeMessage).toBe('Gemini tạm thời không xử lý được bước tạo đề xuất Canon (có thể do giới hạn lượt gọi hoặc dịch vụ đang bận). Canon chưa thay đổi. Hãy thử lại bước hiện tại sau.');
+        expect(runtimeMessage).not.toBe(contractMessage);
+        ['PRIVATE_PROMPT', 'PRIVATE_STORY_PROSE', 'PRIVATE_API_KEY', 'RESOURCE_EXHAUSTED', 'UNAVAILABLE']
+            .forEach(value => expect(runtimeMessage).not.toContain(value));
     });
 
     it.each(['startBatch', 'resume', 'rewriteFromSamePlan', 'replan'] as const)(
@@ -650,6 +666,66 @@ describe('WORK 13 Story Studio production persistence', () => {
         await controller.replanCurrentChapter();
         expect(controller.currentProject?.workflow).toEqual({ stage: 'idle' });
         expect(controller.currentProject?.state.currentChapter).toBe(0);
+    });
+
+    it('keeps durable Canon C19 and validated C20 retryable after a typed State Extractor runtime failure', async () => {
+        const adapter = new InMemoryStoryStudioStorageAdapter();
+        const repository = new StoryStudioProjectRepository(adapter);
+        let tick = 0;
+        const now = () => new Date(Date.UTC(2026, 8, 3, 0, 0, tick++)).toISOString();
+        const controller = new StoryStudioProjectController(repository, now);
+        const base = document('c20-runtime-recovery');
+        const twentyChapterDocument: StoryBlueprintDocument = {
+            ...base,
+            blueprint: {
+                ...base.blueprint,
+                engine: { plannedChapterCount: 20 },
+                arcs: [base.blueprint.arcs![0], { ...base.blueprint.arcs![1], endChapter: 20 }],
+            },
+        };
+        const productionRuntime = runtime();
+        await controller.load();
+        await controller.createProject(twentyChapterDocument, 'C20 runtime recovery');
+        for (let chapter = 1; chapter <= 19; chapter += 1) {
+            await controller.startBatch(1);
+            await advanceToReview(controller, productionRuntime);
+            await controller.makeCanonDurably(controller.createConfirmation());
+        }
+        expect(controller.currentProject?.state).toMatchObject({ currentChapter: 19, revision: 19 });
+        expect(controller.currentProject?.memory.records).toHaveLength(19);
+
+        await controller.startBatch(1);
+        await controller.runNextStage(productionRuntime);
+        await controller.runNextStage(productionRuntime);
+        await controller.runNextStage(productionRuntime);
+        expect(controller.currentProject?.workflow.stage).toBe('validated');
+        const beforeFailure = structuredClone(controller.currentProject!);
+        const attempts = [{
+            modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX' as const,
+            httpStatus: 503, apiStatus: 'UNAVAILABLE' as const, elapsedMs: 1250, attemptCount: 3,
+        }];
+        const failingRuntime = createProductionStoryRuntime({
+            models: createGeminiStoryEngineAdapters({
+                async run(request) { throw new StoryEngineModelRuntimeError(request.role, attempts); },
+            }),
+        });
+
+        await expect(controller.runNextStage(failingRuntime)).rejects.toMatchObject({
+            code: 'MODEL_RUNTIME_FAILURE', stage: 'extraction', role: 'stateExtractor', modelAttempts: attempts,
+        });
+        expect(controller.currentProject).toEqual(beforeFailure);
+
+        const reloaded = new StoryStudioProjectController(repository, now);
+        expect((await reloaded.load()).status).toBe('loaded');
+        expect(reloaded.currentProject).toEqual(beforeFailure);
+        expect(reloaded.currentProject?.state).toMatchObject({ currentChapter: 19, revision: 19 });
+        expect(reloaded.currentProject?.memory.records).toHaveLength(19);
+        expect(reloaded.currentProject?.workflow.stage).toBe('validated');
+
+        await reloaded.runNextStage(productionRuntime);
+        expect(reloaded.currentProject?.workflow.stage).toBe('extracted');
+        expect(reloaded.currentProject?.state).toEqual(beforeFailure.state);
+        expect(reloaded.currentProject?.memory).toEqual(beforeFailure.memory);
     });
 
     it('keeps extracted work recoverable when Canon review preparation blocks', async () => {

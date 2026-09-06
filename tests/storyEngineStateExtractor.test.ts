@@ -22,6 +22,7 @@ import {
     STORY_STATE_TRANSITION_ISSUE_CODES,
     sanitizeStateDeltaParsePathFamily,
     StoryStateTransitionError,
+    StoryEngineModelRuntimeError,
     summarizeStateDeltaParseFailure,
     type CanonCommitProposal,
     type FullStoryControl,
@@ -326,6 +327,18 @@ describe('WORK 11 untrusted V2 extractor protocol', () => {
         const result = await extractState({ approved, state: baseState(), control, model: { extract } });
         expect(result).toMatchObject({ status: 'blocked', issues: [{ code: 'EXTRACTOR_PROTOCOL_FAILURE' }] });
         expect(extract).toHaveBeenCalledTimes(1);
+    });
+
+    it('rethrows a typed model runtime failure unchanged', async () => {
+        const runtimeError = new StoryEngineModelRuntimeError('stateExtractor', [{
+            modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX', httpStatus: 503,
+            apiStatus: 'UNAVAILABLE', elapsedMs: 1250, attemptCount: 3,
+        }]);
+        const request = extractState({
+            approved: await approve(), state: baseState(), control,
+            model: { extract: vi.fn(async () => { throw runtimeError; }) },
+        });
+        await expect(request).rejects.toBe(runtimeError);
     });
 
     it.each([

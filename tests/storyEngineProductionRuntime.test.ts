@@ -481,6 +481,7 @@ describe('WORK 12 production staged runtime', () => {
     it.each([
         ['planner', 'planning'],
         ['writer', 'writing'],
+        ['stateExtractor', 'extraction'],
     ] as const)('maps typed %s infrastructure failure to MODEL_RUNTIME_FAILURE with the correct stage and role', async (role, stage) => {
         const attempts = [{
             modelId: 'gemini-3.7-flash', outcomeKind: 'SERVER_5XX' as const,
@@ -496,6 +497,40 @@ describe('WORK 12 production staged runtime', () => {
         expect(JSON.stringify(result)).not.toContain('provider failed');
         expect(seed.state).toEqual(stateBefore);
         expect(seed.memory).toEqual(memoryBefore);
+    });
+
+    it('preserves sanitized State Extractor attempt telemetry through the production diagnostic', async () => {
+        const attempts = [
+            {
+                modelId: 'gemini-3.7-flash', outcomeKind: 'RATE_LIMIT_429' as const,
+                httpStatus: 429, apiStatus: 'RESOURCE_EXHAUSTED' as const, elapsedMs: 700, attemptCount: 1,
+            },
+            {
+                modelId: 'gemini-3.6-flash', outcomeKind: 'SERVER_5XX' as const,
+                httpStatus: 503, apiStatus: 'UNAVAILABLE' as const, elapsedMs: 1250, attemptCount: 3,
+            },
+        ];
+        const { seed, runtime } = harness({ runtimeFailRole: 'stateExtractor', runtimeFailAttempts: attempts });
+        const plan = await runtime.planProductionChapter({ control: seed.control, state: seed.state, memoryState: seed.memory });
+        const draft = await runtime.writeProductionChapter({ control: seed.control, state: seed.state, memoryState: seed.memory, plan });
+        const validation = await runtime.validateProductionChapter({
+            control: seed.control, state: seed.state, memoryState: seed.memory, plan, draft,
+        });
+        let caught: unknown;
+        try {
+            await runtime.extractProductionChapter({
+                control: seed.control, state: seed.state, memoryState: seed.memory, plan, draft, validation,
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toMatchObject({
+            name: 'ProductionRuntimeError', code: 'MODEL_RUNTIME_FAILURE', stage: 'extraction',
+            role: 'stateExtractor', modelAttempts: attempts,
+        });
+        expect(getSafeStoryStudioRuntimeDiagnostic(caught)).toEqual({
+            code: 'MODEL_RUNTIME_FAILURE', stage: 'extraction', role: 'stateExtractor', modelAttempts: attempts,
+        });
     });
 
     it.each(['EMPTY_RESPONSE', 'MALFORMED_JSON'] as const)(
