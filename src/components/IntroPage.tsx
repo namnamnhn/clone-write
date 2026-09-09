@@ -42,7 +42,7 @@ export const IntroPage: React.FC<{ onEnter: () => void }> = ({ onEnter }) => {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-2 mt-4 text-zinc-400 font-medium">
             <span className="text-xs sm:text-sm bg-zinc-800/50 px-3 py-1.5 rounded-full border border-zinc-800">Công cụ được thiết kế bởi AI</span>
-            <span className="text-xs sm:text-sm bg-zinc-800/50 px-3 py-1.5 rounded-full border border-zinc-800">Ý tưởng: Nguyễn Trí Hiếu</span>
+            <span className="text-xs sm:text-sm bg-zinc-800/50 px-3 py-1.5 rounded-full border border-zinc-800">Chủ sở hữu: Nguyễn Hoàng Nam</span>
           </div>
         </div>
 
@@ -65,8 +65,7 @@ export const IntroPage: React.FC<{ onEnter: () => void }> = ({ onEnter }) => {
                 <p className="text-rose-400 font-bold mb-3">Phiên bản hiện tại đã hết hạn sử dụng.</p>
                 <p>Vui lòng liên hệ:</p>
                 <div className="space-y-1">
-                  <p>Telegram cá nhân: <a href="https://t.me/trihieu259" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300 hover:underline">t.me/trihieu259</a></p>
-                  <p>Hoặc Group hóng chuyện: <br/><a href="https://t.me/+3LW9SPLc9zMwNDdl" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300 hover:underline">t.me/+3LW9SPLc9zMwNDdl</a></p>
+                  <p>Telegram cá nhân: <a href="https://t.me/neilnguyen091" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300 hover:underline">t.me/neilnguyen091</a></p>
                 </div>
               </div>
             )}
@@ -96,22 +95,19 @@ export const IntroPage: React.FC<{ onEnter: () => void }> = ({ onEnter }) => {
           
           <div className="flex flex-col items-center gap-6 py-6 bg-zinc-950/50 rounded-2xl border border-zinc-800/50 shadow-inner">
             <div className="text-center space-y-1.5">
-              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Ngân Hàng Vietcombank</p>
-              <p className="text-lg font-bold text-zinc-100 uppercase tracking-tight">NGUYEN TRI HIEU</p>
+              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Ngân Hàng Techcombank</p>
+              <p className="text-lg font-bold text-zinc-100 uppercase tracking-tight">NGUYEN HOANG NAM</p>
               <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-500/10 rounded-full border border-emerald-500/20 mt-1">
-                <span className="text-lg font-mono text-emerald-400 font-bold tracking-wider">1024391585</span>
+                <span className="text-lg font-mono text-emerald-400 font-bold tracking-wider">19027743781021</span>
               </div>
             </div>
 
             <div className="bg-white p-4 rounded-3xl shadow-2xl shadow-emerald-500/10 transform transition hover:scale-[1.02] duration-300">
               <div className="relative group">
                 <img 
-                  src="https://img.vietqr.io/image/970436-1024391585-compact2.png" 
-                  alt="VietQR Donate" 
-                  className="w-56 h-56 object-contain rounded-xl"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = 'https://img.vietqr.io/image/vietcombank-1024391585-compact2.png';
-                  }}
+                  src="/techcombank-qr.jpg"
+                  alt="VietQR Techcombank - Nguyễn Hoàng Nam"
+                  className="w-56 h-56 object-cover object-top rounded-xl"
                 />
                 <div className="absolute inset-0 border-4 border-white rounded-xl pointer-events-none"></div>
               </div>
@@ -126,8 +122,7 @@ export const IntroPage: React.FC<{ onEnter: () => void }> = ({ onEnter }) => {
               </p>
               <p className="text-sm text-zinc-400 mt-1">Vui lòng liên hệ:</p>
               <div className="space-y-1">
-                <p className="text-sm text-zinc-300">Telegram cá nhân: <a href="https://t.me/trihieu259" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300 hover:underline">t.me/trihieu259</a></p>
-                <p className="text-sm text-zinc-300">Group hóng chuyện: <br/><a href="https://t.me/+3LW9SPLc9zMwNDdl" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300 hover:underline">t.me/+3LW9SPLc9zMwNDdl</a></p>
+                <p className="text-sm text-zinc-300">Telegram cá nhân: <a href="https://t.me/neilnguyen091" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300 hover:underline">t.me/neilnguyen091</a></p>
               </div>
             </div>
           </div>

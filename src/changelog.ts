@@ -4,7 +4,7 @@ import changelogEntries from './changelog.json';
 // The version history itself lives in ./changelog.json — a plain JSON file,
 // so adding a new release is just adding one object to that array, no script
 // runs, and nothing here can go out of sync with what's actually shipped.
-export const APP_AUTHOR = "Nguyễn Trí Hiếu";
+export const APP_AUTHOR = "Nguyễn Hoàng Nam";
 export const APP_NAME = "Dịch & Biên Tập Truyện";
 
 export interface ChangelogChange {
